@@ -587,7 +587,7 @@ The behavioral MVP is accepted when automated and manual tests demonstrate:
 - reliable hybrid OpenCode ingestion;
 - analytics and Bayesian baseline prediction;
 - export, purge, config, diagnostics, privacy, integrity, and performance gates;
-- Linux, macOS, and WSL on Node 22;
+- Linux, macOS, and WSL on Node 24;
 - zero open P0/P1 defects;
 - npm provenance, licensing, security documentation, and supported-client matrix.
 
@@ -597,7 +597,7 @@ No external pilot, user count, adoption target, or observed real restriction is 
 
 ### 17.3 Stable 1.0 Boundary
 
-`1.0.0` requires OpenCode and Claude Code feature parity across all eight command groups, Node 22 + 24, Linux/macOS/WSL, latest + one previous validated schema family per client, direct published-artifact migration from `0.6.0 -> 1.0.0`, and representative adjacent/intermediate chains including `0.6 -> 0.9 -> 1.0`.
+`1.0.0` requires OpenCode and Claude Code feature parity across all eight command groups, Node 24, Linux/macOS/WSL, latest + one previous validated schema family per client, direct published-artifact migration from `0.6.0 -> 1.0.0`, and representative adjacent/intermediate chains including `0.6 -> 0.9 -> 1.0`.
 
 The following become public stable contracts:
 

@@ -1,0 +1,40 @@
+name: Publish technical preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type publish-0.1.0 after reviewing the release evidence
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: inputs.confirmation == 'publish-0.1.0' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.1
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.16.0
+      - name: Verify CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run:
+          test "$(gh run list --workflow CI --branch main --commit "$GITHUB_SHA" --status completed
+          --limit 1 --json conclusion --jq '.[0].conclusion')" = success
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run check
+      - run: npm run pack:smoke
+      - run: npm run release:check
+      - run: npm publish --workspace @snack-ai/cli --tag next --access public --provenance

@@ -1,0 +1,36 @@
+{
+  "name": "@snack-ai/cli",
+  "version": "0.1.0",
+  "description": "Local-first AI usage metadata and next-prompt assessment CLI",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "snack": "src/cli.js"
+  },
+  "files": [
+    "migrations",
+    "schemas",
+    "src",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "tag": "next"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "better-sqlite3": "^13.0.2",
+    "commander": "^15.0.0",
+    "jsonc-parser": "^3.3.1",
+    "proper-lockfile": "^4.1.2"
+  }
+}

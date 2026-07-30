@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+graphify-out/
+package-lock.json
+AGENTS.md
+CONTEXT.md
+PLAN.md
+docs/

@@ -14,6 +14,7 @@ SNACK is a local-first command-line application that describes observed AI-tool 
 - [ADR-0001](./docs/adr/0001-nodejs-modular-monolith.md): Node.js modular monolith and optional Python boundary.
 - [ADR-0002](./docs/adr/0002-local-metadata-without-content.md): local-only metadata and no retained content.
 - [ADR-0003](./docs/adr/0003-hybrid-opencode-ingestion.md): hybrid OpenCode ingestion.
+- [ADR-0004](./docs/adr/0004-nodejs-24-baseline.md): Node.js 24 baseline.
 
 ## Product Thesis
 
@@ -153,7 +154,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Dependencies**
 
 - accepted product/domain/architecture documents;
-- Node.js 22 LTS development environment;
+- Node.js 24 LTS development environment;
 - access to npm organization registration and release credentials.
 
 **Wave 1: Identity and release feasibility**
@@ -167,7 +168,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Wave 2: Workspace, contracts, and storage**
 
 - initialize npm workspaces and `@snack-ai/cli`;
-- establish Node 22 ESM JavaScript, JSDoc/checkJs, Commander.js, Ajv, and JSON Schema assets;
+- establish Node 24 ESM JavaScript, JSDoc/checkJs, Commander.js, Ajv, and JSON Schema assets;
 - implement XDG/platform paths, private permissions, JSONC config, atomic replacement, and schema validation;
 - implement separate SNACK SQLite storage, explicit migrations, backups, foreign keys, and integrity checks;
 - expose `snack`, `snack config get|set|path`, and structural `snack doctor` behavior.
@@ -175,7 +176,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Wave 3: Quality and technical-preview release**
 
 - add `node:test`, fast-check, ESLint/JSDoc, Prettier, fixture conventions, and privacy canaries;
-- create Linux/macOS/WSL-oriented CI and Node 22 matrix;
+- create Linux/macOS/WSL-oriented CI and Node 24 matrix;
 - add Changesets, protected npm OIDC/provenance publishing, package-content inspection, and smoke install;
 - publish `@snack-ai/cli@0.1.0` to `next`.
 
@@ -196,7 +197,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Exit criteria**
 
 - clean npm installation on Linux, macOS, and WSL test environments;
-- Node 22 checks pass with no P0/P1;
+- Node 24 checks pass with no P0/P1;
 - migrations are transactional, repeatable, backed up, and integrity-tested;
 - invalid JSONC/config/schema input fails before mutation;
 - file permissions meet the documented threat model;
@@ -281,7 +282,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 - tokens/cost remain per dimension/model and never become a quota percentage;
 - unknown source fingerprints produce no canonical writes;
 - content canaries never enter SNACK storage, logs, output, or fixtures;
-- all `0.2` commands pass Node 22/platform CI with zero P0/P1.
+- all `0.2` commands pass Node 24/platform CI with zero P0/P1.
 
 **Excluded**
 
@@ -540,7 +541,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 **Wave 3: Platform and performance hardening**
 
-- validate Linux, macOS, and WSL installations on Node 22;
+- validate Linux, macOS, and WSL installations on Node 24;
 - meet status/sync/backfill/memory budgets at and beyond 100,000 prompts;
 - inspect native SQLite package distribution and npm package contents;
 - complete English technical docs, bilingual README, threat model, Apache-2.0/NOTICE, and security reporting process.
@@ -569,7 +570,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Exit criteria**
 
 - all eight command groups behave as specified in human/JSON modes;
-- Linux/macOS/WSL Node 22 CI and smoke tests pass;
+- Linux/macOS/WSL Node 24 CI and smoke tests pass;
 - performance budgets pass or the MVP is blocked;
 - no P0/P1, no known content/credential leak, and no unresolved corruption path;
 - upgrade from the final `0.5.x` candidate succeeds for tested data, while `0.6.0` becomes the first guaranteed future migration baseline;
@@ -578,7 +579,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Excluded**
 
 - external-user pilot as a release gate;
-- Claude Code, Node 24, Codex, TUI, public plugins, ML, and encryption.
+- Claude Code, Codex, TUI, public plugins, ML, and encryption.
 
 **Primary risks**
 
@@ -600,13 +601,13 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 - **Release:** `0.7.0` on npm `next`
 - **Effort:** 5 AI-assisted waves
-**Purpose:** Validate the client-neutral architecture with a second real client and add Node 24 support.
+**Purpose:** Validate the client-neutral architecture with a second real client and revalidate the Node 24 runtime across both clients.
 
 **Dependencies**
 
 - MVP migration baseline and stable internal observation model;
 - Claude Code local JSONL histories and official hook documentation;
-- Node 24 CI/native dependency availability.
+- Node 24 CI/native dependency availability for both client integrations.
 
 **Validated starting facts**
 
@@ -643,9 +644,9 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 - apply the same prediction/calibration model without client-specific branches;
 - publish compatibility/migration matrix.
 
-**Wave 5: Node 24 and release validation**
+**Wave 5: Runtime and release validation**
 
-- add Node 24 alongside Node 22 across CI, native SQLite, package smoke tests, and both clients;
+- revalidate Node 24 across CI, native SQLite, package smoke tests, and both clients;
 - run independent architecture/privacy review;
 - publish `0.7.0` on `next` while `0.6.0` remains `latest`.
 
@@ -653,7 +654,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 - Claude Code backfill and live hooks with MVP feature parity;
 - second-client proof of the internal adapter seam;
-- Node 22 + 24 runtime matrix.
+- Node 24 runtime validation across both clients.
 
 **Pending items resolved**
 
@@ -668,7 +669,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 - OpenCode and Claude can map to one capacity source without duplicate/incorrect outcomes;
 - unknown Claude schemas/hooks fail closed while Claude execution remains fail-open;
 - no migration/data loss from `0.6`;
-- Node 22/24 and all supported platforms pass with zero P0/P1.
+- Node 24 and all supported platforms pass with zero P0/P1.
 
 **Excluded**
 
@@ -690,7 +691,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 **Dependencies**
 
-- Stage 7 parity and Node 22/24 support;
+- Stage 7 parity and Node 24 runtime revalidation;
 - representative generated/sanitized histories for each client and shared-source scenarios.
 
 **Wave 1: Shared-capacity behavior**
@@ -830,7 +831,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 **Wave 1: Stable gate audit**
 
 - verify OpenCode and Claude Code feature parity and latest + one previous validated family for each;
-- verify Node 22 + 24 across Linux/macOS/WSL;
+- verify Node 24 across Linux/macOS/WSL;
 - rehearse direct `0.6.0 -> 1.0.0` and representative adjacent/intermediate chains against RC/final-candidate builds, including backup/restore, integrity, and unknown-schema behavior; the exact published final artifact is gated in Wave 3;
 - confirm the Stage 9 freeze for public v1 commands/flags, exit codes, JSON, config, export, and spool contracts; Stage 10 cannot redefine it without resetting Stage 9;
 - verify privacy canaries, threat model, SBOM, npm provenance, Apache-2.0/NOTICE, security policy, docs, and budgets;
@@ -870,7 +871,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 - zero P0/P1 and all technical stable gates pass;
 - OpenCode/Claude latest + previous family fixtures/live smoke pass;
-- Node 22/24 Linux/macOS/WSL matrix passes;
+- Node 24 Linux/macOS/WSL matrix passes;
 - direct `0.6.0 -> 1.0.0` and representative adjacent/intermediate migration chains preserve all supported data/config;
 - public v1 schemas and compatibility tests are published;
 - seven-day RC soak passes;
@@ -932,9 +933,9 @@ Strict SemVer applies:
 
 ### Runtime Support
 
-- MVP supports Node 22 LTS.
-- Stage 7 adds Node 24 alongside Node 22.
-- 1.0 supports both Node 22 and Node 24; removal follows a documented future major/runtime-support policy.
+- MVP supports Node 24 LTS.
+- Stage 7 revalidates Node 24 with both supported clients.
+- 1.0 supports Node 24; removal follows a documented future major/runtime-support policy.
 
 ## npm Channel Policy
 

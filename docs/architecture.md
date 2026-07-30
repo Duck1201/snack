@@ -32,7 +32,7 @@ Shared JSON Schemas, plan profiles, migrations, and sanitized fixtures are repos
 
 ### 3.1 Runtime and Language
 
-- Node.js 22 LTS is the MVP baseline runtime. Stage 7 adds Node.js 24; 1.0 supports and tests both Node 22 and Node 24.
+- Node.js 24 LTS is the baseline runtime from the MVP through 1.0. Stage 7 revalidates it across both supported client integrations.
 - ECMAScript modules are used throughout.
 - Source is JavaScript, not TypeScript.
 - Public/internal contracts use JSDoc and `tsc --noEmit` with `checkJs`.
@@ -739,7 +739,7 @@ Canary prompt, response, path, token, and credential-like strings are inserted i
 
 ### 17.5 CI Matrix
 
-- Node.js 22 LTS for the MVP; Node.js 22 + 24 from Stage 7 through 1.0;
+- Node.js 24 LTS from the MVP through 1.0;
 - Linux and macOS runners;
 - Windows behavior exercised through a WSL-oriented job or documented equivalent test environment;
 - clean global-style install smoke test for the provisional scoped CLI package;
@@ -841,7 +841,7 @@ Before implementation is called 1.0-stable:
 
 1. OpenCode and Claude Code provide equivalent application behavior through the same client-neutral domain/prediction core.
 2. Latest + one previous validated schema family for each client has fixtures, live smoke evidence, and a published support matrix.
-3. Node 22 + 24 pass Linux, macOS, and WSL installation, native SQLite, unit/property/integration/privacy, and package tests.
+3. Node 24 passes Linux, macOS, and WSL installation, native SQLite, unit/property/integration/privacy, and package tests.
 4. Direct published-artifact migration from `0.6.0` to `1.0.0` and representative adjacent/intermediate chains preserve all supported data/config.
 5. Public command/flag, exit-code, JSON, config, export, and spool schemas have compatibility tests and strict SemVer documentation.
 6. No P0/P1 remains; privacy canaries, integrity/fault tests, budgets, SBOM, provenance, licensing, security docs, and operational runbooks pass.

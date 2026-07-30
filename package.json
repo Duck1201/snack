@@ -1,0 +1,43 @@
+{
+  "name": "snack-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Statistical Next-prompt Assessment & Calibration Kit",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "npm@11.16.0",
+  "scripts": {
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "pack:check": "npm pack --workspace @snack-ai/cli --dry-run",
+    "pack:smoke": "node scripts/package-smoke.mjs",
+    "release:check": "node scripts/check-release-readiness.mjs",
+    "release:publish": "changeset publish --tag next",
+    "release:version": "changeset version",
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "tsc --project jsconfig.json"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.1",
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.13.3",
+    "@types/proper-lockfile": "^4.1.4",
+    "eslint": "^10.8.0",
+    "eslint-plugin-jsdoc": "^63.3.2",
+    "fast-check": "^4.9.0",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.2": true
+  }
+}
