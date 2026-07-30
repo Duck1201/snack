@@ -88,7 +88,7 @@ try {
 async function packWorkspace(cwd, destination, manifestFile) {
   const manifest = await open(manifestFile, "w", 0o600);
   try {
-    const output = await new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       const child = spawn(
         "npm",
         ["pack", "--workspace", "@snack-ai/cli", "--json", "--pack-destination", destination],
@@ -104,11 +104,12 @@ async function packWorkspace(cwd, destination, manifestFile) {
       });
       child.once("error", reject);
       child.once("close", (code) => {
-        if (code === 0) resolve(stderr);
+        // npm may write non-fatal notices (such as update notifications) to stderr.
+        // The exit code is authoritative; retain stderr for failure diagnostics only.
+        if (code === 0) resolve();
         else reject(new Error(`npm pack failed with exit code ${code}: ${stderr}`));
       });
     });
-    if (output) throw new Error(`npm pack wrote to stderr: ${output}`);
   } finally {
     await manifest.close();
   }
