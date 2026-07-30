@@ -1,5 +1,7 @@
 import { homedir as systemHomedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { posix as path } from "node:path";
+
+const { isAbsolute, join } = path;
 
 /**
  * @typedef {object} SnackPaths
