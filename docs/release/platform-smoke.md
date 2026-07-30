@@ -13,4 +13,11 @@ npm run check
 npm run pack:smoke
 ```
 
-WSL gate: pending
+WSL gate: passed
+
+- Run: [CI 30515109271](https://github.com/Duck1201/snack/actions/runs/30515109271)
+- Date: 2026-07-30
+- Commit: `9c3d86549bb10d573179c5962751ddc9d92579c3`
+- Environment: Debian 13 on WSL2, AMD64
+- Toolchain: Node.js `24.18.1`, npm `11.16.0`
+- Result: `npm ci`, zero-high-vulnerability audit, all 28 tests, and package smoke passed
