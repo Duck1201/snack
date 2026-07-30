@@ -8,6 +8,8 @@ import Database from "better-sqlite3";
 import fc from "fast-check";
 
 import {
+  ANALYTICS_POLICY,
+  computeUsagePressure,
   effectiveSampleSize,
   horizonWindow,
   parseHorizon,
@@ -533,4 +535,329 @@ test("a late-arriving prompt yields the same profile as in-order ingestion", asy
     ),
     { numRuns: 12 },
   );
+});
+
+test("computeUsagePressure ranks each dimension against its own local baseline", () => {
+  // percentile rank = (below + ties / 2) / n, the mean convention.
+  // prompts: baseline [10, 20, 30, 40], observed 30 -> (2 + 0.5) / 4 = 0.625
+  // input_tokens: baseline [100, 200], observed 50 -> (0 + 0) / 2 = 0
+  const pressure = computeUsagePressure({
+    current: { prompts: 30, input_tokens: 50 },
+    baselines: { prompts: [10, 20, 30, 40], input_tokens: [100, 200] },
+    profileWeights: { prompts: 1, input_tokens: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  assert.deepEqual(
+    pressure.contributors.map(({ dimension, percentile, baseline_sample }) => ({
+      dimension,
+      percentile,
+      baseline_sample,
+    })),
+    [
+      { dimension: "prompts", percentile: 0.625, baseline_sample: 4 },
+      { dimension: "input_tokens", percentile: 0, baseline_sample: 2 },
+    ],
+  );
+});
+
+test("plan profile weights blend toward neutral as local evidence grows", () => {
+  // Normalized profile weights are 0.75 / 0.25; the neutral vector is 0.5 / 0.5.
+  // t = ess / (ess + k) with k = 10, so ess 0 -> t 0 and ess 10 -> t 0.5.
+  const input = {
+    current: { prompts: 1, input_tokens: 1 },
+    baselines: { prompts: [0], input_tokens: [0] },
+    profileWeights: { prompts: 3, input_tokens: 1 },
+  };
+
+  const withoutEvidence = computeUsagePressure({ ...input, effectiveSampleSize: 0 });
+  const withEvidence = computeUsagePressure({ ...input, effectiveSampleSize: 10 });
+
+  assert.deepEqual(
+    withoutEvidence.contributors.map(({ dimension, weight }) => ({ dimension, weight })),
+    [
+      { dimension: "prompts", weight: 0.75 },
+      { dimension: "input_tokens", weight: 0.25 },
+    ],
+  );
+  assert.deepEqual(
+    withEvidence.contributors.map(({ dimension, weight }) => ({ dimension, weight })),
+    [
+      { dimension: "prompts", weight: 0.625 },
+      { dimension: "input_tokens", weight: 0.375 },
+    ],
+  );
+});
+
+test("more local evidence never moves a weight away from neutral", () => {
+  fc.assert(
+    fc.property(
+      fc.double({ min: 0, max: 10_000, noNaN: true }),
+      fc.double({ min: 0, max: 10_000, noNaN: true }),
+      (first, second) => {
+        const [lower, higher] = first <= second ? [first, second] : [second, first];
+        const input = {
+          current: { prompts: 1, input_tokens: 1 },
+          baselines: { prompts: [0], input_tokens: [0] },
+          profileWeights: { prompts: 3, input_tokens: 1 },
+        };
+        const weightAt = (/** @type {number} */ ess) =>
+          /** @type {number} */ (
+            computeUsagePressure({ ...input, effectiveSampleSize: ess }).contributors[0]?.weight
+          );
+
+        // The dominant profile weight starts above neutral and only ever descends toward it.
+        assert.ok(weightAt(higher) <= weightAt(lower) + Number.EPSILON);
+        assert.ok(weightAt(higher) >= 0.5 - Number.EPSILON);
+      },
+    ),
+    { numRuns: 100 },
+  );
+});
+
+test("computeUsagePressure combines ranked dimensions into a versioned band", () => {
+  // percentiles 0.625 and 0, equal weights 0.5 -> score 0.3125, which is the low band.
+  const pressure = computeUsagePressure({
+    current: { prompts: 30, input_tokens: 50 },
+    baselines: { prompts: [10, 20, 30, 40], input_tokens: [100, 200] },
+    profileWeights: { prompts: 1, input_tokens: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  assert.equal(pressure.score, 0.3125);
+  assert.equal(pressure.band, "low");
+  assert.equal(pressure.policy_version, "stage4-analytics-v1");
+  assert.equal(pressure.baseline_kind, "local");
+  assert.equal(pressure.completeness, "complete");
+  assert.deepEqual(
+    pressure.contributors.map(({ dimension, contribution }) => ({ dimension, contribution })),
+    [
+      { dimension: "prompts", contribution: 0.3125 },
+      { dimension: "input_tokens", contribution: 0 },
+    ],
+  );
+});
+
+test("a dimension without local history is reported, not scored as zero", () => {
+  const pressure = computeUsagePressure({
+    current: { prompts: 30, input_tokens: 50 },
+    baselines: { prompts: [10, 20, 30, 40] },
+    profileWeights: { prompts: 1, input_tokens: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  // Only the ranked dimension can carry the score; the unranked one stays unknown.
+  assert.equal(pressure.score, 0.625);
+  assert.equal(pressure.completeness, "partial");
+  assert.deepEqual(
+    pressure.contributors.map(({ dimension, percentile, contribution }) => ({
+      dimension,
+      percentile,
+      contribution,
+    })),
+    [
+      { dimension: "prompts", percentile: 0.625, contribution: 0.625 },
+      { dimension: "input_tokens", percentile: null, contribution: null },
+    ],
+  );
+});
+
+test("usage pressure with no local history reports an unknown band", () => {
+  const pressure = computeUsagePressure({
+    current: { prompts: 30 },
+    baselines: {},
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  assert.equal(pressure.band, "unknown");
+  assert.equal(pressure.score, null);
+  assert.equal(pressure.baseline_kind, "none");
+});
+
+test("pressure bands follow the versioned boundaries", () => {
+  /** @param {number} percentile */
+  const bandFor = (percentile) =>
+    computeUsagePressure({
+      current: { prompts: percentile },
+      baselines: { prompts: [percentile - 1, percentile + 1] },
+      profileWeights: { prompts: 1 },
+      effectiveSampleSize: 0,
+    }).band;
+
+  // A two-sample baseline puts the observed value at exactly 0.5.
+  assert.equal(bandFor(10), "moderate");
+  assert.deepEqual(
+    [0.49, 0.5, 0.74, 0.75, 0.89, 0.9].map((score) => bandForScore(score)),
+    ["low", "moderate", "moderate", "elevated", "elevated", "high"],
+  );
+});
+
+/** @param {number} score */
+function bandForScore(score) {
+  // Rank one observation against a baseline built so its percentile equals `score`.
+  const below = Math.round(score * 100);
+  const baseline = Array.from({ length: 100 }, (_, index) => (index < below ? 0 : 2));
+  return computeUsagePressure({
+    current: { prompts: 1 },
+    baselines: { prompts: baseline },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 0,
+  }).band;
+}
+
+test("usage pressure output never claims a share of real provider capacity", () => {
+  const pressure = computeUsagePressure({
+    current: { prompts: 30, input_tokens: 50 },
+    baselines: { prompts: [10, 20, 30, 40], input_tokens: [100, 200] },
+    profileWeights: { prompts: 1, input_tokens: 1 },
+    effectiveSampleSize: 4,
+  });
+
+  // CONTEXT.md forbids these words for usage pressure; real capacity stays unknown.
+  assert.doesNotMatch(
+    JSON.stringify(pressure),
+    /quota|capacity|remaining|utilization|percentage/iu,
+  );
+  assert.ok(/** @type {number} */ (pressure.score) >= 0);
+  assert.ok(/** @type {number} */ (pressure.score) <= 1);
+});
+
+test("pressure never leaves [0, 1] and never falls when observed usage rises", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.double({ min: 0, max: 1e6, noNaN: true }), { minLength: 1, maxLength: 60 }),
+      fc.double({ min: 0, max: 1e6, noNaN: true }),
+      fc.double({ min: 0, max: 1e6, noNaN: true }),
+      fc.double({ min: 0, max: 1e4, noNaN: true }),
+      (baseline, observed, increase, ess) => {
+        const scoreFor = (/** @type {number} */ value) =>
+          /** @type {number} */ (
+            computeUsagePressure({
+              current: { prompts: value },
+              baselines: { prompts: baseline },
+              profileWeights: { prompts: 1 },
+              effectiveSampleSize: ess,
+            }).score
+          );
+
+        const score = scoreFor(observed);
+        assert.ok(score >= 0 && score <= 1, `score ${score} outside [0, 1]`);
+        assert.ok(scoreFor(observed + increase) >= score - Number.EPSILON);
+      },
+    ),
+    { numRuns: 200 },
+  );
+});
+
+test("steady usage sits in the middle bands instead of alarming", () => {
+  // A stationary history: 30 windows of the same size, then one more of that size.
+  const baseline = Array.from({ length: 30 }, () => 100);
+
+  const pressure = computeUsagePressure({
+    current: { prompts: 100 },
+    baselines: { prompts: baseline },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 30,
+  });
+
+  assert.equal(pressure.score, 0.5);
+  assert.equal(pressure.band, "moderate");
+});
+
+test("a window far above every past window reaches the high band", () => {
+  const baseline = Array.from({ length: 30 }, (_, index) => 10 + index);
+
+  const pressure = computeUsagePressure({
+    current: { prompts: 1000 },
+    baselines: { prompts: baseline },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 30,
+  });
+
+  assert.equal(pressure.score, 1);
+  assert.equal(pressure.band, "high");
+});
+
+/**
+ * Deterministic PRNG so simulation evidence is reproducible.
+ *
+ * @param {number} seed
+ */
+function mulberry32(seed) {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("simulation: the decay half-life keeps a steady user's evidence near its daily rate", () => {
+  // Prompts spaced d days apart form a geometric series with ratio 2^(-d / H), so the
+  // settled effective sample size is 1 / (1 - 2^(-d / H)). With H = 1 day and rate r per
+  // day, d = 1 / r.
+  const now = new Date("2026-02-01T00:00:00.000Z");
+  const halfLife = ANALYTICS_POLICY.decay_half_life_seconds;
+
+  for (const perDay of [1, 5, 10, 40]) {
+    const timestamps = [];
+    for (let promptIndex = 0; promptIndex < perDay * 60; promptIndex += 1) {
+      const secondsAgo = (promptIndex / perDay) * 86400;
+      timestamps.push(new Date(now.getTime() - secondsAgo * 1000).toISOString());
+    }
+    const ess = effectiveSampleSize(timestamps, now, halfLife);
+    const spacingInHalfLives = 86400 / perDay / halfLife;
+    const expected = 1 / (1 - Math.pow(2, -spacingInHalfLives));
+
+    assert.ok(
+      Math.abs(ess - expected) / expected < 0.01,
+      `rate ${perDay}/day settled at ESS ${ess}, expected about ${expected}`,
+    );
+  }
+});
+
+test("simulation: a moderate daily rate moves pressure weights off the plan profile", () => {
+  // Evidence that the half-life and blend constant work together: an occasional user
+  // keeps leaning on the profile, while a moderate user is mostly driven by local data.
+  const now = new Date("2026-02-01T00:00:00.000Z");
+  /** @param {number} perDay */
+  const blendFor = (perDay) => {
+    const timestamps = Array.from({ length: perDay * 60 }, (_, index) =>
+      new Date(now.getTime() - (index / perDay) * 86400 * 1000).toISOString(),
+    );
+    const ess = effectiveSampleSize(timestamps, now, ANALYTICS_POLICY.decay_half_life_seconds);
+    return ess / (ess + ANALYTICS_POLICY.weight_blend_equivalent_samples);
+  };
+
+  assert.ok(blendFor(1) < 0.2, `an occasional user blended ${blendFor(1)} away from the profile`);
+  assert.ok(blendFor(10) > 0.5, `a moderate user only blended ${blendFor(10)}`);
+  assert.ok(blendFor(40) > 0.8, `a heavy user only blended ${blendFor(40)}`);
+});
+
+test("simulation: band boundaries produce a sane alarm rate on stationary usage", () => {
+  // Under stationary usage a new window ranks uniformly against its own history, so the
+  // boundaries decide how often each band fires. 0.5 / 0.75 / 0.9 target 50/25/15/10.
+  const random = mulberry32(20260201);
+  /** @type {Record<string, number>} */
+  const counts = { low: 0, moderate: 0, elevated: 0, high: 0 };
+  const trials = 4000;
+
+  for (let trial = 0; trial < trials; trial += 1) {
+    const baseline = Array.from({ length: 40 }, () => random());
+    const { band } = computeUsagePressure({
+      current: { prompts: random() },
+      baselines: { prompts: baseline },
+      profileWeights: { prompts: 1 },
+      effectiveSampleSize: 40,
+    });
+    counts[band] = (counts[band] ?? 0) + 1;
+  }
+
+  const share = (/** @type {string} */ band) => (counts[band] ?? 0) / trials;
+  assert.ok(Math.abs(share("low") - 0.5) < 0.03, `low fired ${share("low")}`);
+  assert.ok(Math.abs(share("moderate") - 0.25) < 0.03, `moderate fired ${share("moderate")}`);
+  assert.ok(Math.abs(share("elevated") - 0.15) < 0.03, `elevated fired ${share("elevated")}`);
+  assert.ok(Math.abs(share("high") - 0.1) < 0.03, `high fired ${share("high")}`);
 });

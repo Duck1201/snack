@@ -13,6 +13,7 @@
   },
   "files": [
     "migrations",
+    "profiles",
     "schemas",
     "src",
     "LICENSE",

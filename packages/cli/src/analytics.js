@@ -5,12 +5,23 @@ const HORIZON_PATTERN = /^P(?!$)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\
 /**
  * Versioned analytics policy.
  *
- * These constants are provisional: Stage 4 Wave 2 promotes them to `v1` only against
- * simulation evidence. Every result that depends on them carries the version.
+ * Every result that depends on these constants carries the version, so a later policy
+ * can be told apart from this one. The simulations in `test/analytics.test.js` are the
+ * evidence behind the current values:
+ *
+ * - `decay_half_life_seconds` and `weight_blend_equivalent_samples` together decide how
+ *   fast local evidence displaces the plan profile. At one day and ten samples, an
+ *   occasional user (1 prompt/day) keeps leaning on the profile while a moderate user
+ *   (10 prompts/day) is mostly driven by local data.
+ * - `pressure_bands` decide how often each band fires. Under stationary usage a window
+ *   ranks uniformly against its own history, so these boundaries target a 50/25/15/10
+ *   split across low, moderate, elevated, and high.
  */
 export const ANALYTICS_POLICY = Object.freeze({
-  version: "stage4-analytics-v0",
+  version: "stage4-analytics-v1",
   decay_half_life_seconds: 86400,
+  weight_blend_equivalent_samples: 10,
+  pressure_bands: Object.freeze({ moderate: 0.5, elevated: 0.75, high: 0.9 }),
 });
 
 /**
@@ -110,6 +121,125 @@ export function summarizeUsageProfile(rows, restrictions, options) {
       excluded,
     },
   };
+}
+
+/**
+ * Rank observed usage against local history for each dimension.
+ *
+ * Usage pressure is a relative signal: it says how this window compares with previous
+ * windows of the same length. It is never a fraction of real provider capacity, which
+ * SNACK treats as unknown.
+ *
+ * @param {{current: Record<string, number>, baselines: Record<string, number[]>, profileWeights: Record<string, number>, effectiveSampleSize: number}} input
+ */
+export function computeUsagePressure(input) {
+  const dimensions = Object.keys(input.current);
+  const weights = blendWeights(dimensions, input.profileWeights, input.effectiveSampleSize);
+  const contributors = dimensions.map((dimension) => {
+    const baseline = input.baselines[dimension] ?? [];
+    const percentile = percentileRank(baseline, /** @type {number} */ (input.current[dimension]));
+    const weight = /** @type {number} */ (weights[dimension]);
+    return {
+      dimension,
+      observed: /** @type {number} */ (input.current[dimension]),
+      baseline_sample: baseline.length,
+      percentile,
+      weight,
+      /** @type {number | null} */
+      contribution: null,
+    };
+  });
+
+  // Only ranked dimensions can carry the score; an unranked one stays unknown rather
+  // than silently contributing zero pressure. Contributions are shares of the score,
+  // so they always add up to it.
+  const ranked = contributors.filter((contributor) => contributor.percentile !== null);
+  const rankedWeight = ranked.reduce((total, contributor) => total + contributor.weight, 0);
+  for (const contributor of ranked) {
+    const percentile = /** @type {number} */ (contributor.percentile);
+    contributor.contribution = (percentile * contributor.weight) / rankedWeight;
+  }
+  const score =
+    ranked.length === 0
+      ? null
+      : ranked.reduce(
+          (total, contributor) => total + /** @type {number} */ (contributor.contribution),
+          0,
+        );
+
+  return {
+    score,
+    band: classifyPressureBand(score),
+    policy_version: ANALYTICS_POLICY.version,
+    baseline_kind: ranked.length === 0 ? "none" : "local",
+    completeness: ranked.length === contributors.length ? "complete" : "partial",
+    contributors: contributors.sort(
+      (left, right) => (right.contribution ?? -1) - (left.contribution ?? -1),
+    ),
+  };
+}
+
+/**
+ * Assign a versioned pressure band.
+ *
+ * Bands describe intensity relative to local history. They are not a share of real
+ * provider capacity.
+ *
+ * @param {number | null} score
+ */
+function classifyPressureBand(score) {
+  if (score === null) return "unknown";
+  const { pressure_bands: bands } = ANALYTICS_POLICY;
+  if (score < bands.moderate) return "low";
+  if (score < bands.elevated) return "moderate";
+  if (score < bands.high) return "elevated";
+  return "high";
+}
+
+/**
+ * Blend plan-profile weights toward an equal-weight vector as local evidence accumulates.
+ *
+ * A plan profile is a weak assumption; local observations must dominate once there are
+ * enough of them. The blend is `w_profile * (1 - t) + w_neutral * t` with
+ * `t = ess / (ess + k)`.
+ *
+ * @param {string[]} dimensions
+ * @param {Record<string, number>} profileWeights
+ * @param {number} effectiveSampleSize
+ * @returns {Record<string, number>} weights summing to one
+ */
+function blendWeights(dimensions, profileWeights, effectiveSampleSize) {
+  const neutral = 1 / dimensions.length;
+  const profileTotal = dimensions.reduce(
+    (total, dimension) => total + (profileWeights[dimension] ?? 0),
+    0,
+  );
+  const blend =
+    effectiveSampleSize / (effectiveSampleSize + ANALYTICS_POLICY.weight_blend_equivalent_samples);
+  /** @type {Record<string, number>} */
+  const weights = {};
+  for (const dimension of dimensions) {
+    const fromProfile =
+      profileTotal > 0 ? (profileWeights[dimension] ?? 0) / profileTotal : neutral;
+    weights[dimension] = fromProfile * (1 - blend) + neutral * blend;
+  }
+  return weights;
+}
+
+/**
+ * Fraction of baseline samples at or below the observed value, counting ties as half.
+ *
+ * @param {number[]} baseline
+ * @param {number} observed
+ * @returns {number | null} null when there is no baseline to rank against
+ */
+function percentileRank(baseline, observed) {
+  if (baseline.length === 0) {
+    return null;
+  }
+  const below = baseline.filter((value) => value < observed).length;
+  const ties = baseline.filter((value) => value === observed).length;
+  return (below + ties / 2) / baseline.length;
 }
 
 /**

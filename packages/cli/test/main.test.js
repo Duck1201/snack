@@ -38,7 +38,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -468,7 +468,12 @@ test("status reports a broad initial estimate with very low evidence", async () 
           profile: "personal",
           plan: "generic",
           active_period: { started_at: "2026-01-02T03:05:00.000Z" },
-          plan_profile: { id: "generic", version: "stage2-v1" },
+          plan_profile: {
+            id: "generic",
+            version: "1.0.0",
+            provenance: "bundled",
+            as_of: "2026-01-01",
+          },
         },
         viability: {
           lower: 0.2666666666666666,
@@ -497,6 +502,136 @@ test("status reports a broad initial estimate with very low evidence", async () 
       },
     },
   );
+});
+
+test("an unknown plan falls back to the generic profile without failing status", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "some-unbundled-plan",
+      "--json",
+    ],
+    fixture.options,
+  );
+  fixture.stdout.value = "";
+
+  const exitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(document.data.source.plan_profile, {
+    id: "generic",
+    version: "1.0.0",
+    provenance: "bundled",
+    as_of: "2026-01-01",
+  });
+  assert.equal(document.data.source.plan, "some-unbundled-plan");
+});
+
+test("an invalid custom plan profile is rejected in favour of the generic profile", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+  // A profile without provenance or version cannot be interpreted, so it must not be used.
+  const customProfile = join(fixture.root, "broken-profile.json");
+  await writeFile(customProfile, JSON.stringify({ schema_version: 1, id: "broken" }), "utf8");
+  const configured = JSON.parse(await readFile(fixture.paths.configFile, "utf8"));
+  configured.sources[0].plan_profile = customProfile;
+  await writeFile(fixture.paths.configFile, JSON.stringify(configured), "utf8");
+  fixture.stdout.value = "";
+
+  const exitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.equal(document.data.source.plan_profile.id, "generic");
+  assert.equal(document.data.source.plan_profile.provenance, "bundled");
+  // Silently ignoring the configured profile would hide a broken assumption.
+  assert.ok(
+    document.warnings.some(
+      (/** @type {{code: string}} */ warning) => warning.code === "plan_profile_unavailable",
+    ),
+    `expected a plan_profile_unavailable warning, got ${JSON.stringify(document.warnings)}`,
+  );
+});
+
+test("setup stamps the active capacity period with the resolved plan profile", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+
+  const database = new Database(fixture.paths.databaseFile, { readonly: true });
+  try {
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT plan_profile_id, plan_profile_version
+           FROM capacity_period WHERE source_alias = 'personal-anthropic'`,
+        )
+        .all(),
+      [{ plan_profile_id: "generic", plan_profile_version: "1.0.0" }],
+    );
+  } finally {
+    database.close();
+  }
 });
 
 test("initial risk labels use the lower viability bound and its versioned thresholds", () => {

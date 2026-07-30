@@ -23,6 +23,7 @@ import {
 } from "./opencode-config.js";
 import { createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
+import { resolvePlanProfile } from "./plan-profile.js";
 import {
   readSpoolEvents,
   removeAcknowledgedSegments,
@@ -309,7 +310,12 @@ export async function run(argv, options = {}) {
                   backup: true,
                 },
               );
-              ensureCapacityPeriod(paths.databaseFile, configuredSource, now);
+              ensureCapacityPeriod(
+                paths.databaseFile,
+                configuredSource,
+                now,
+                resolvePlanProfile(configuredSource).profile,
+              );
               pluginRegistration = registration;
               await clearSetupJournal(paths);
               if (databaseBackupFile !== null) {
@@ -492,6 +498,8 @@ export async function run(argv, options = {}) {
     .action(async function status(commandOptions) {
       /** @type {ReturnType<typeof createInitialStatus>[]} */
       const statuses = [];
+      /** @type {{code: string, message: string}[]} */
+      const statusWarnings = [];
       await withStorageOperationLock(paths, async () => {
         await recoverSetupJournal(paths);
         const current = await readConfig(paths.configFile);
@@ -530,6 +538,7 @@ export async function run(argv, options = {}) {
             }
           }
           const summary = readSourceSummary(paths.databaseFile, source.alias);
+          statusWarnings.push(...resolvePlanProfile(source).warnings);
           statuses.push(createInitialStatus(source, summary, now, synchronization));
         }
         await removeConsumedPendingSegments(paths, configuredSources);
@@ -545,6 +554,7 @@ export async function run(argv, options = {}) {
                   code: "initial_estimate",
                   message: "The estimate is an uncalibrated Stage 2 heuristic.",
                 },
+                ...statusWarnings,
               ],
               now,
             }),
@@ -707,6 +717,12 @@ async function prepareSpoolDirectories(paths, registration) {
  */
 async function synchronizeOpenCodeSource(options) {
   const results = [];
+  // Every write path must agree on the active plan profile, otherwise storing
+  // observations would reopen the capacity period the resolved profile just stamped.
+  const mappings = {
+    ...options.mappings,
+    planProfile: resolvePlanProfile(options.source).profile,
+  };
   try {
     const adapter = createOpenCodeAdapter({ databaseFile: options.source.database });
     const cursor = options.full
@@ -719,7 +735,7 @@ async function synchronizeOpenCodeSource(options) {
         options.source,
         backfill,
         options.now,
-        options.mappings,
+        mappings,
       ),
     );
   } catch {
@@ -734,7 +750,7 @@ async function synchronizeOpenCodeSource(options) {
           options.source,
           { observations: retained, cursor: null },
           options.now,
-          { ...options.mappings, path: "spool" },
+          { ...mappings, path: "spool" },
         ),
       );
     }
@@ -749,7 +765,7 @@ async function synchronizeOpenCodeSource(options) {
       { observations: spool.observations, cursor: null },
       options.now,
       {
-        ...options.mappings,
+        ...mappings,
         path: "spool",
         spoolCursors: spool.cursors,
         rejected: spool.rejected,
@@ -777,7 +793,7 @@ async function synchronizeOpenCodeSource(options) {
         { observations: pending.observations, cursor: null },
         options.now,
         {
-          ...options.mappings,
+          ...mappings,
           path: "spool",
           spoolCursors: pending.cursors,
           rejected: pending.rejected,

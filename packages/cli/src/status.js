@@ -1,7 +1,9 @@
+import { resolvePlanProfile } from "./plan-profile.js";
+
 /**
  * Build the explicitly uncalibrated Stage 2 estimate.
  *
- * @param {{alias: string, provider: string, profile: string, plan: string}} source
+ * @param {{alias: string, provider: string, profile: string, plan: string, plan_profile?: string}} source
  * @param {{prompts: number, successes: number, restrictions: number, excluded: number, as_of: string | null, active_period_started_at: string | null}} observed
  * @param {Date} now
  * @param {{performed: boolean, status: string}} [synchronization]
@@ -12,6 +14,7 @@ export function createInitialStatus(
   now,
   synchronization = { performed: false, status: "not_requested" },
 ) {
+  const planProfile = resolvePlanProfile(source).profile;
   const asOf = observed.as_of;
   const ageSeconds = asOf === null ? null : Math.max(0, (now.getTime() - Date.parse(asOf)) / 1000);
   const alpha = 1 + observed.successes;
@@ -25,7 +28,12 @@ export function createInitialStatus(
       profile: source.profile,
       plan: source.plan,
       active_period: { started_at: observed.active_period_started_at },
-      plan_profile: { id: source.plan, version: "stage2-v1" },
+      plan_profile: {
+        id: planProfile.id,
+        version: planProfile.version,
+        provenance: planProfile.provenance,
+        as_of: planProfile.as_of,
+      },
     },
     viability: {
       lower,

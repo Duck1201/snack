@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/plan-profile.schema.json",
+  "title": "SNACK plan profile",
+  "description": "Weak, versioned assumptions about a plan. A plan profile never states real provider capacity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "as_of",
+    "provenance",
+    "prior_strength",
+    "weights"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "as_of": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "provenance": { "enum": ["bundled", "user-defined"] },
+    "supported": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providers": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "plans": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "prior_strength": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

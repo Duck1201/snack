@@ -365,7 +365,7 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
  * @param {ConfiguredOpenCodeSource} source
  * @param {{observations: Observation[], cursor: {time_updated: number, message_id: string} | null}} batch
  * @param {Date} now
- * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[]}} [options]
+ * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null}} [options]
  */
 export function storeObservations(databaseFile, source, batch, now, options = {}) {
   const database = new Database(databaseFile);
@@ -374,7 +374,12 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
     database.pragma("busy_timeout = 5000");
     const store = database.transaction(() => {
       const timestamp = now.toISOString();
-      const period = ensureSourceBindingAndPeriod(database, source, timestamp);
+      const period = ensureSourceBindingAndPeriod(
+        database,
+        source,
+        timestamp,
+        options.planProfile ?? null,
+      );
       if (
         typeof period !== "object" ||
         period === null ||
@@ -897,14 +902,17 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
  * @param {string} databaseFile
  * @param {ConfiguredOpenCodeSource} source
  * @param {Date} now
+ * @param {{id: string, version: string} | null} [planProfile]
  */
-export function ensureCapacityPeriod(databaseFile, source, now) {
+export function ensureCapacityPeriod(databaseFile, source, now, planProfile = null) {
   const database = new Database(databaseFile);
   try {
     database.pragma("foreign_keys = ON");
     database.pragma("busy_timeout = 5000");
     return database
-      .transaction(() => ensureSourceBindingAndPeriod(database, source, now.toISOString()))
+      .transaction(() =>
+        ensureSourceBindingAndPeriod(database, source, now.toISOString(), planProfile),
+      )
       .immediate();
   } finally {
     database.close();
@@ -915,8 +923,9 @@ export function ensureCapacityPeriod(databaseFile, source, now) {
  * @param {Database.Database} database
  * @param {ConfiguredOpenCodeSource} source
  * @param {string} timestamp
+ * @param {{id: string, version: string} | null} planProfile
  */
-function ensureSourceBindingAndPeriod(database, source, timestamp) {
+function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) {
   database
     .prepare(
       `INSERT INTO capacity_source (alias, created_at)
@@ -963,11 +972,13 @@ function ensureSourceBindingAndPeriod(database, source, timestamp) {
 
   let period = database
     .prepare(
-      `SELECT id, provider, profile, plan
+      `SELECT id, provider, profile, plan, plan_profile_id
        FROM capacity_period
        WHERE source_alias = ? AND ended_at IS NULL`,
     )
     .get(source.alias);
+  // ponytail: a profile version bump alone keeps the period, so shipping an updated
+  // bundled profile never resets local evidence. Doctor reports the drift instead.
   if (
     typeof period !== "object" ||
     period === null ||
@@ -976,7 +987,9 @@ function ensureSourceBindingAndPeriod(database, source, timestamp) {
     !("profile" in period) ||
     period.profile !== source.profile ||
     !("plan" in period) ||
-    period.plan !== source.plan
+    period.plan !== source.plan ||
+    !("plan_profile_id" in period) ||
+    period.plan_profile_id !== (planProfile?.id ?? null)
   ) {
     database
       .prepare(
@@ -988,10 +1001,19 @@ function ensureSourceBindingAndPeriod(database, source, timestamp) {
     const inserted = database
       .prepare(
         `INSERT INTO capacity_period
-           (source_alias, provider, profile, plan, started_at)
-         VALUES (?, ?, ?, ?, ?)`,
+           (source_alias, provider, profile, plan, started_at,
+            plan_profile_id, plan_profile_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(source.alias, source.provider, source.profile, source.plan, timestamp);
+      .run(
+        source.alias,
+        source.provider,
+        source.profile,
+        source.plan,
+        timestamp,
+        planProfile?.id ?? null,
+        planProfile?.version ?? null,
+      );
     period = { id: Number(inserted.lastInsertRowid) };
   }
   if (typeof period !== "object" || period === null || !("id" in period)) {
