@@ -303,6 +303,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 3 - Reliable Live Capture
 
 - **Release:** `0.3.0` on npm `next`; first independent `@snack-ai/opencode` release
+- **Status:** Complete (2026-07-30)
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Add live event fidelity without allowing SNACK to block OpenCode or double-count backfilled history.
 

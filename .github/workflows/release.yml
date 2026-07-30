@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type publish-0.2.0 after reviewing the release evidence
+        description: Type publish-0.3.0 after reviewing the release evidence
         required: true
         type: string
 
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   publish:
-    if: inputs.confirmation == 'publish-0.2.0' && github.ref == 'refs/heads/main'
+    if: inputs.confirmation == 'publish-0.3.0' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -37,5 +37,7 @@ jobs:
       - run: npm run check
       - run: npm run pack:smoke
       - run: npm run release:check
-      - name: Publish package
+      - name: Publish CLI package
         run: npm publish --workspace @snack-ai/cli --tag next --access public --provenance
+      - name: Publish OpenCode plugin
+        run: npm publish --workspace @snack-ai/opencode --tag next --access public --provenance

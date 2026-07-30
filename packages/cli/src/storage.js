@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,42 @@ import lockfile from "proper-lockfile";
 import { ExitCode, SnackError } from "./errors.js";
 
 export const migrationDirectory = fileURLToPath(new URL("../migrations", import.meta.url));
+
+/**
+ * Serialize commands that can write or replace canonical storage.
+ *
+ * @template T
+ * @param {{stateDir: string}} paths
+ * @param {() => Promise<T>} callback
+ */
+export async function withStorageOperationLock(paths, callback) {
+  await ensurePrivateDirectory(paths.stateDir);
+  const target = join(paths.stateDir, "storage-operation");
+  const seed = await open(target, "a", 0o600);
+  await seed.close();
+  await chmod(target, 0o600);
+  let release;
+  try {
+    release = await lockfile.lock(target, {
+      realpath: false,
+      stale: 120_000,
+      update: 10_000,
+      retries: { retries: 20, minTimeout: 50, maxTimeout: 250 },
+    });
+    await chmod(`${target}.lock`, 0o700);
+  } catch (error) {
+    throw new SnackError("Storage is locked by another operation; retry after it finishes.", {
+      code: ExitCode.storage,
+      reason: "storage_locked",
+      cause: error,
+    });
+  }
+  try {
+    return await callback();
+  } finally {
+    await release?.().catch(() => {});
+  }
+}
 
 /**
  * @typedef {object} ConfiguredOpenCodeSource
@@ -155,6 +191,65 @@ export async function rollbackDatabaseInitialization(paths, existed) {
   ]);
 }
 
+/** @param {{databaseFile: string, stateDir: string}} paths */
+export async function createSetupDatabaseBackup(paths) {
+  if (!(await pathExists(paths.databaseFile))) return null;
+  await ensurePrivateDirectory(paths.stateDir);
+  const backupFile = join(paths.stateDir, `setup-${randomUUID()}.sqlite3`);
+  const database = new Database(paths.databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    await database.backup(backupFile);
+    await chmod(backupFile, 0o600);
+    return backupFile;
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {{databaseFile: string}} paths @param {string | null} backupFile */
+export async function restoreSetupDatabaseBackup(paths, backupFile) {
+  if (backupFile === null) {
+    await Promise.all([
+      rm(paths.databaseFile, { force: true }),
+      rm(`${paths.databaseFile}-wal`, { force: true }),
+      rm(`${paths.databaseFile}-shm`, { force: true }),
+    ]);
+    return;
+  }
+  const backup = new Database(backupFile, { readonly: true, fileMustExist: true });
+  const restoredFile = `${paths.databaseFile}.setup-restore-${randomUUID()}`;
+  try {
+    if (
+      backup.pragma("quick_check", { simple: true }) !== "ok" ||
+      /** @type {unknown[]} */ (backup.pragma("foreign_key_check")).length > 0
+    ) {
+      throw new Error("Setup database backup failed integrity validation.");
+    }
+    await backup.backup(restoredFile);
+    await chmod(restoredFile, 0o600);
+    const restored = new Database(restoredFile, { readonly: true, fileMustExist: true });
+    try {
+      if (
+        restored.pragma("quick_check", { simple: true }) !== "ok" ||
+        /** @type {unknown[]} */ (restored.pragma("foreign_key_check")).length > 0
+      ) {
+        throw new Error("Restored setup database failed integrity validation.");
+      }
+    } finally {
+      restored.close();
+    }
+    await rename(restoredFile, paths.databaseFile);
+    await Promise.all([
+      rm(`${paths.databaseFile}-wal`, { force: true }),
+      rm(`${paths.databaseFile}-shm`, { force: true }),
+    ]);
+  } finally {
+    backup.close();
+    await rm(restoredFile, { force: true });
+  }
+  await rm(backupFile, { force: true });
+}
+
 /**
  * Read-only storage checks for doctor.
  *
@@ -224,10 +319,53 @@ export function readIngestionCursor(databaseFile, sourceAlias) {
 
 /**
  * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {Map<string, number>}
+ */
+export function readSpoolCursors(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare("SELECT segment, byte_offset FROM spool_cursor WHERE source_alias = ?")
+      .all(sourceAlias);
+    return new Map(
+      rows.flatMap((row) =>
+        typeof row === "object" &&
+        row !== null &&
+        "segment" in row &&
+        typeof row.segment === "string" &&
+        "byte_offset" in row &&
+        typeof row.byte_offset === "number"
+          ? [[row.segment, row.byte_offset]]
+          : [],
+      ),
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile @param {string} sourceAlias */
+export function readSpoolIssueCount(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const row = database
+      .prepare(
+        "SELECT COALESCE(SUM(occurrences), 0) AS count FROM ingestion_issue WHERE source_alias = ?",
+      )
+      .get(sourceAlias);
+    return typeof row === "object" && row !== null && "count" in row ? Number(row.count) : 0;
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * @param {string} databaseFile
  * @param {ConfiguredOpenCodeSource} source
  * @param {{observations: Observation[], cursor: {time_updated: number, message_id: string} | null}} batch
  * @param {Date} now
- * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>}} [options]
+ * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[]}} [options]
  */
 export function storeObservations(databaseFile, source, batch, now, options = {}) {
   const database = new Database(databaseFile);
@@ -256,20 +394,27 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
          ORDER BY started_at DESC
          LIMIT 1`,
       );
+      const retainPendingSpoolObservation = database.prepare(
+        `INSERT INTO pending_spool_observation
+           (installation_id, source_prompt_id, provider, revision, observation_json, first_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(installation_id, source_prompt_id, provider, revision) DO NOTHING`,
+      );
 
       const counts = {
         alias: source.alias,
-        path: "backfill",
+        path: options.path ?? "backfill",
         read: batch.observations.length,
         inserted: 0,
         updated: 0,
         unchanged: 0,
         excluded: 0,
         pending_mapping: 0,
-        rejected_invalid: 0,
+        rejected_invalid: options.rejected?.length ?? 0,
         failed: 0,
       };
       for (const observation of batch.observations) {
+        const inputFeatures = observation.input_features ?? null;
         const mappedCount =
           observation.provider === null
             ? 0
@@ -290,6 +435,16 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.model,
               timestamp,
             );
+          if ((options.path ?? "backfill") === "spool") {
+            retainPendingSpoolObservation.run(
+              source.installation_id,
+              observation.source_prompt_id,
+              observation.provider,
+              observation.revision,
+              JSON.stringify(observation),
+              timestamp,
+            );
+          }
           counts.pending_mapping += 1;
           continue;
         }
@@ -298,9 +453,12 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             database
               .prepare(
                 `DELETE FROM pending_mapping
-                 WHERE source_alias = ? AND source_prompt_id = ? AND provider = ?`,
+                 WHERE source_prompt_id = ? AND provider = ?
+                   AND source_alias IN (
+                     SELECT source_alias FROM source_binding WHERE installation_id = ?
+                   )`,
               )
-              .run(source.alias, observation.source_prompt_id, observation.provider);
+              .run(observation.source_prompt_id, observation.provider, source.installation_id);
             continue;
           }
           database
@@ -317,6 +475,16 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.model,
               timestamp,
             );
+          if ((options.path ?? "backfill") === "spool") {
+            retainPendingSpoolObservation.run(
+              source.installation_id,
+              observation.source_prompt_id,
+              observation.provider ?? "unknown",
+              observation.revision,
+              JSON.stringify(observation),
+              timestamp,
+            );
+          }
           counts.pending_mapping += 1;
           continue;
         }
@@ -329,9 +497,20 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         database
           .prepare(
             `DELETE FROM pending_mapping
-             WHERE source_alias = ? AND source_prompt_id = ? AND provider = ?`,
+             WHERE source_prompt_id = ? AND provider = ?
+               AND source_alias IN (
+                 SELECT source_alias FROM source_binding WHERE installation_id = ?
+               )`,
           )
-          .run(source.alias, observation.source_prompt_id, observation.provider);
+          .run(observation.source_prompt_id, observation.provider, source.installation_id);
+        if ((options.path ?? "backfill") === "spool") {
+          database
+            .prepare(
+              `DELETE FROM pending_spool_observation
+               WHERE installation_id = ? AND source_prompt_id = ? AND provider = ?`,
+            )
+            .run(source.installation_id, observation.source_prompt_id, observation.provider);
+        }
         if (!isValidObservation(observation)) {
           counts.rejected_invalid += 1;
           continue;
@@ -339,11 +518,59 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const observationHash = hashObservation(observation);
         const existing = database
           .prepare(
-            `SELECT id, source_revision, observation_hash, completion
-             FROM prompt_execution
+            `SELECT id, source_revision, observation_hash, completion, revision_domain
+              FROM prompt_execution
              WHERE source_alias = ? AND source_prompt_id = ?`,
           )
           .get(source.alias, observation.source_prompt_id);
+        const existingRevisionDomain =
+          typeof existing === "object" &&
+          existing !== null &&
+          "revision_domain" in existing &&
+          typeof existing.revision_domain === "string"
+            ? existing.revision_domain
+            : null;
+        if (
+          (options.path ?? "backfill") === "spool" &&
+          typeof existing === "object" &&
+          existing !== null &&
+          "id" in existing &&
+          typeof existing.id === "number"
+        ) {
+          database
+            .prepare(
+              "UPDATE prompt_execution SET seen_spool = 1, last_observed_at = ? WHERE id = ?",
+            )
+            .run(timestamp, existing.id);
+        }
+        if (
+          observation.restrictions.length > 0 &&
+          typeof existing === "object" &&
+          existing !== null &&
+          "id" in existing &&
+          typeof existing.id === "number"
+        ) {
+          const insertRestriction = database.prepare(
+            `INSERT OR IGNORE INTO restriction_observation
+               (prompt_execution_id, class, source_code, observed_at, classifier_version, provenance)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          );
+          for (const restriction of observation.restrictions) {
+            insertRestriction.run(
+              existing.id,
+              restriction.class,
+              restriction.source_code,
+              restriction.observed_at,
+              restriction.classifier_version,
+              restriction.provenance,
+            );
+          }
+          database
+            .prepare(
+              "UPDATE prompt_source_outcome SET outcome = 'restricted' WHERE prompt_execution_id = ?",
+            )
+            .run(existing.id);
+        }
         if (
           typeof existing === "object" &&
           existing !== null &&
@@ -351,7 +578,8 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           typeof existing.source_revision === "string" &&
           "completion" in existing &&
           ((existing.completion === "completed" && observation.completion === "provisional") ||
-            (existing.completion === observation.completion &&
+            (existingRevisionDomain === observation.revision_domain &&
+              existing.completion === observation.completion &&
               compareRevision(observation.revision, existing.source_revision) < 0))
         ) {
           counts.unchanged += 1;
@@ -369,16 +597,124 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           continue;
         }
 
+        const existingRecord =
+          typeof existing === "object" && existing !== null
+            ? /** @type {Record<string, unknown>} */ (existing)
+            : null;
+        const backfillFinalizesProvisional =
+          (options.path ?? "backfill") === "backfill" &&
+          existingRecord?.completion === "provisional" &&
+          observation.completion === "completed";
+        if (
+          existingRevisionDomain !== null &&
+          existingRevisionDomain !== observation.revision_domain &&
+          !backfillFinalizesProvisional
+        ) {
+          const existingOutcome = database
+            .prepare("SELECT outcome FROM prompt_source_outcome WHERE prompt_execution_id = ?")
+            .get(existingRecord?.id);
+          const existingIsRestricted =
+            typeof existingOutcome === "object" &&
+            existingOutcome !== null &&
+            "outcome" in existingOutcome &&
+            existingOutcome.outcome === "restricted";
+          const compatibleBackfill =
+            (options.path ?? "backfill") === "backfill" &&
+            (existingIsRestricted ||
+              (typeof existingOutcome === "object" &&
+                existingOutcome !== null &&
+                "outcome" in existingOutcome &&
+                existingOutcome.outcome === observation.outcome));
+          if (compatibleBackfill) {
+            // Backfill supplies finalized boundaries and usage; live restrictions remain dominant.
+          } else if (
+            observation.restrictions.length > 0 &&
+            existingRecord !== null &&
+            typeof existingRecord.id === "number"
+          ) {
+            const promptId = existingRecord.id;
+            database
+              .prepare(
+                "UPDATE prompt_execution SET seen_spool = 1, last_observed_at = ? WHERE id = ?",
+              )
+              .run(timestamp, promptId);
+            database
+              .prepare(
+                "UPDATE prompt_source_outcome SET outcome = 'restricted' WHERE prompt_execution_id = ?",
+              )
+              .run(promptId);
+            const insertRestriction = database.prepare(
+              `INSERT OR IGNORE INTO restriction_observation
+                 (prompt_execution_id, class, source_code, observed_at, classifier_version, provenance)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+            );
+            for (const restriction of observation.restrictions) {
+              insertRestriction.run(
+                promptId,
+                restriction.class,
+                restriction.source_code,
+                restriction.observed_at,
+                restriction.classifier_version,
+                restriction.provenance,
+              );
+            }
+            counts.updated += 1;
+          } else if (existingIsRestricted) {
+            counts.unchanged += 1;
+          } else if (
+            typeof existingOutcome === "object" &&
+            existingOutcome !== null &&
+            "outcome" in existingOutcome &&
+            typeof existingOutcome.outcome === "string" &&
+            existingOutcome.outcome !== observation.outcome &&
+            existingRecord !== null &&
+            typeof existingRecord.id === "number"
+          ) {
+            database
+              .prepare(
+                "UPDATE prompt_source_outcome SET outcome = 'excluded' WHERE prompt_execution_id = ?",
+              )
+              .run(existingRecord.id);
+            database
+              .prepare(
+                `INSERT INTO ingestion_issue
+                   (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+                 VALUES (?, ?, 'incomparable_outcome_conflict', NULL, NULL, ?, ?, 1)`,
+              )
+              .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
+            counts.excluded += 1;
+            counts.updated += 1;
+          } else {
+            counts.unchanged += 1;
+          }
+          if (!compatibleBackfill) continue;
+        }
+
         let promptId;
+        /** @type {Observation["restrictions"]} */
+        let restrictions = observation.restrictions;
         if (typeof existing === "object" && existing !== null && "id" in existing) {
           promptId = existing.id;
+          const existingRestrictions = database
+            .prepare(
+              `SELECT class, source_code, observed_at, classifier_version, provenance
+               FROM restriction_observation WHERE prompt_execution_id = ?`,
+            )
+            .all(promptId);
+          restrictions = mergeRestrictions(existingRestrictions, observation.restrictions);
           database
             .prepare(
               `UPDATE prompt_execution SET
-                 source_session_fingerprint = ?, source_revision = ?,
-                 observation_hash = ?, revision_domain = ?, parser_version = ?, started_at = ?, completed_at = ?,
-                 duration_ms = ?, completion = ?, last_observed_at = ?
-               WHERE id = ?`,
+                   source_session_fingerprint = ?, source_revision = ?,
+                   observation_hash = ?, revision_domain = ?, parser_version = ?, started_at = ?, completed_at = ?,
+                   duration_ms = ?, completion = ?,
+                   input_analyzer_version = COALESCE(?, input_analyzer_version),
+                   estimated_input_tokens = COALESCE(?, estimated_input_tokens),
+                   input_line_count_bucket = COALESCE(?, input_line_count_bucket),
+                   input_code_block_count_bucket = COALESCE(?, input_code_block_count_bucket),
+                   input_attachment_count = COALESCE(?, input_attachment_count),
+                   seen_spool = MAX(seen_spool, ?), last_observed_at = ?
+                WHERE id = ?`,
             )
             .run(
               hashOpaque(observation.source_session_id),
@@ -390,6 +726,12 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.completed_at,
               observation.duration_ms,
               observation.completion,
+              inputFeatures?.analyzer_version ?? null,
+              inputFeatures?.estimated_input_tokens ?? null,
+              inputFeatures?.line_count_bucket ?? null,
+              inputFeatures?.code_block_count_bucket ?? null,
+              inputFeatures?.attachment_count ?? null,
+              Number(options.path === "spool"),
               timestamp,
               promptId,
             );
@@ -422,9 +764,11 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             .prepare(
               `INSERT INTO prompt_execution
                  (source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
-                  source_revision, observation_hash, revision_domain, parser_version, started_at, completed_at,
-                  duration_ms, completion, first_observed_at, last_observed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                   source_revision, observation_hash, revision_domain, parser_version, started_at, completed_at,
+                   duration_ms, completion, input_analyzer_version, estimated_input_tokens,
+                   input_line_count_bucket, input_code_block_count_bucket, input_attachment_count,
+                   first_observed_at, last_observed_at, seen_spool)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               source.alias,
@@ -439,8 +783,14 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.completed_at,
               observation.duration_ms,
               observation.completion,
+              inputFeatures?.analyzer_version ?? null,
+              inputFeatures?.estimated_input_tokens ?? null,
+              inputFeatures?.line_count_bucket ?? null,
+              inputFeatures?.code_block_count_bucket ?? null,
+              inputFeatures?.attachment_count ?? null,
               timestamp,
               timestamp,
+              Number(options.path === "spool"),
             );
           promptId = Number(inserted.lastInsertRowid);
           counts.inserted += 1;
@@ -470,16 +820,16 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         database
           .prepare(
             `INSERT INTO prompt_source_outcome
-               (prompt_execution_id, outcome, policy_version)
-             VALUES (?, ?, 'opencode-outcome-v1')`,
+                (prompt_execution_id, outcome, policy_version)
+              VALUES (?, ?, 'opencode-outcome-v1')`,
           )
-          .run(promptId, observation.outcome);
+          .run(promptId, restrictions.length > 0 ? "restricted" : observation.outcome);
         const insertRestriction = database.prepare(
           `INSERT INTO restriction_observation
              (prompt_execution_id, class, source_code, observed_at, classifier_version, provenance)
            VALUES (?, ?, ?, ?, ?, ?)`,
         );
-        for (const restriction of observation.restrictions) {
+        for (const restriction of restrictions) {
           insertRestriction.run(
             promptId,
             restriction.class,
@@ -489,27 +839,50 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             restriction.provenance,
           );
         }
-        if (observation.outcome === "excluded") counts.excluded += 1;
+        if ((restrictions.length > 0 ? "restricted" : observation.outcome) === "excluded")
+          counts.excluded += 1;
       }
 
-      database
-        .prepare(
-          `INSERT INTO ingestion_cursor
-             (source_alias, fingerprint, time_updated, message_id, committed_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(source_alias) DO UPDATE SET
-             fingerprint = excluded.fingerprint,
-             time_updated = excluded.time_updated,
-             message_id = excluded.message_id,
-             committed_at = excluded.committed_at`,
-        )
-        .run(
-          source.alias,
-          source.fingerprint,
-          batch.cursor?.time_updated ?? null,
-          batch.cursor?.message_id ?? null,
-          timestamp,
+      if (options.path === "spool") {
+        const saveCursor = database.prepare(
+          `INSERT INTO spool_cursor (source_alias, segment, byte_offset, committed_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(source_alias, segment) DO UPDATE SET
+             byte_offset = excluded.byte_offset, committed_at = excluded.committed_at`,
         );
+        for (const cursor of options.spoolCursors ?? []) {
+          saveCursor.run(source.alias, cursor.segment, cursor.byte_offset, timestamp);
+        }
+        const saveIssue = database.prepare(
+          `INSERT INTO ingestion_issue
+             (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+           VALUES (?, 'spool', 'invalid_spool_event', ?, ?, ?, ?, 1)
+           ON CONFLICT(source_alias, path, reason, segment, line_offset) DO UPDATE SET
+             last_seen_at = excluded.last_seen_at, occurrences = ingestion_issue.occurrences + 1`,
+        );
+        for (const issue of options.rejected ?? []) {
+          saveIssue.run(source.alias, issue.segment, issue.line_offset, timestamp, timestamp);
+        }
+      } else {
+        database
+          .prepare(
+            `INSERT INTO ingestion_cursor
+                (source_alias, fingerprint, time_updated, message_id, committed_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(source_alias) DO UPDATE SET
+                fingerprint = excluded.fingerprint,
+                time_updated = excluded.time_updated,
+                message_id = excluded.message_id,
+                committed_at = excluded.committed_at`,
+          )
+          .run(
+            source.alias,
+            source.fingerprint,
+            batch.cursor?.time_updated ?? null,
+            batch.cursor?.message_id ?? null,
+            timestamp,
+          );
+      }
       return counts;
     });
     return store.immediate();
@@ -697,6 +1070,38 @@ export function readPendingMappingCount(databaseFile, source) {
   }
 }
 
+/** @param {string} databaseFile @param {ConfiguredOpenCodeSource} source */
+export function readPendingSpoolObservations(databaseFile, source) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    return database
+      .prepare(
+        `SELECT observation_json FROM pending_spool_observation
+         WHERE installation_id = ? AND provider = ?
+         ORDER BY first_seen_at, source_prompt_id, revision`,
+      )
+      .all(source.installation_id, source.provider)
+      .flatMap((row) => {
+        if (
+          typeof row !== "object" ||
+          row === null ||
+          !("observation_json" in row) ||
+          typeof row.observation_json !== "string"
+        ) {
+          return [];
+        }
+        try {
+          const observation = /** @type {Observation} */ (JSON.parse(row.observation_json));
+          return isValidObservation(observation) ? [observation] : [];
+        } catch {
+          return [];
+        }
+      });
+  } finally {
+    database.close();
+  }
+}
+
 /** @param {string} value */
 function hashOpaque(value) {
   return createHash("sha256").update(`opencode-session\0${value}`).digest("hex");
@@ -709,6 +1114,7 @@ function hashObservation(observation) {
 
 /** @param {string} left @param {string} right */
 function compareRevision(left, right) {
+  if (!/^\d+:/u.test(left) || !/^\d+:/u.test(right)) return left.localeCompare(right);
   const leftSeparator = left.indexOf(":");
   const rightSeparator = right.indexOf(":");
   const leftTime = Number(left.slice(0, leftSeparator));
@@ -732,6 +1138,50 @@ function isValidObservation(observation) {
 }
 
 /**
+ * @param {unknown[]} existing
+ * @param {Observation["restrictions"]} incoming
+ * @returns {Observation["restrictions"]}
+ */
+function mergeRestrictions(existing, incoming) {
+  const restrictions = [...incoming];
+  for (const value of existing) {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("class" in value) ||
+      !("source_code" in value) ||
+      !("observed_at" in value) ||
+      !("classifier_version" in value) ||
+      !("provenance" in value) ||
+      typeof value.class !== "string" ||
+      typeof value.source_code !== "string" ||
+      typeof value.observed_at !== "string" ||
+      typeof value.classifier_version !== "string" ||
+      typeof value.provenance !== "string"
+    ) {
+      continue;
+    }
+    if (
+      !restrictions.some(
+        (restriction) =>
+          restriction.class === value.class &&
+          restriction.source_code === value.source_code &&
+          restriction.observed_at === value.observed_at,
+      )
+    ) {
+      restrictions.push({
+        class: value.class,
+        source_code: value.source_code,
+        observed_at: value.observed_at,
+        classifier_version: value.classifier_version,
+        provenance: value.provenance,
+      });
+    }
+  }
+  return restrictions;
+}
+
+/**
  * @typedef {object} Observation
  * @property {string} source_prompt_id
  * @property {string} source_session_id
@@ -745,6 +1195,7 @@ function isValidObservation(observation) {
  * @property {string | null} provider
  * @property {string | null} model
  * @property {string} outcome
+ * @property {{analyzer_version: string, estimated_input_tokens: number, line_count_bucket: string, code_block_count_bucket: string, attachment_count: number} | null | undefined} [input_features]
  * @property {Array<{source_slice_id: string, provider: string | null, model: string | null, input_tokens: number | null, output_tokens: number | null, reasoning_tokens: number | null, cache_read_tokens: number | null, cache_write_tokens: number | null, cost_decimal: string | null, currency: string | null}>} usage_slices
  * @property {Array<{class: string, source_code: string, observed_at: string, classifier_version: string, provenance: string}>} restrictions
  */

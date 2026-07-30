@@ -10,6 +10,7 @@ const { isAbsolute, join } = path;
  * @property {string} dataDir
  * @property {string} databaseFile
  * @property {string} backupDir
+ * @property {string} spoolDir
  * @property {string} cacheDir
  * @property {string} stateDir
  */
@@ -63,5 +64,6 @@ function buildPaths(roots) {
     configFile: join(roots.configDir, "config.jsonc"),
     databaseFile: join(roots.dataDir, "snack.sqlite3"),
     backupDir: join(roots.dataDir, "backups"),
+    spoolDir: join(roots.dataDir, "spool"),
   };
 }

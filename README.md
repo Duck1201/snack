@@ -8,9 +8,10 @@ SNACK e o Statistical Next-prompt Assessment & Calibration Kit: uma CLI local qu
 observado de ferramentas de IA e estima a viabilidade do proximo prompt sem afirmar que conhece a
 quota real do provedor.
 
-The `0.2.x` tracer adds read-only OpenCode backfill, explicit capacity-source mappings, source
-diagnostics, and a broad initial next-prompt estimate with very-low evidence. It does not claim to
-know provider capacity and does not retain prompt or response content.
+The `0.3.x` tracer adds fail-open OpenCode live capture through a private, versioned metadata spool
+alongside read-only backfill, explicit capacity-source mappings, source diagnostics, and a broad
+initial next-prompt estimate with very-low evidence. It does not claim to know provider capacity or
+retain prompt or response content.
 
 See [PLAN.md](./PLAN.md) and [docs/specification.md](./docs/specification.md) for the accepted
 scope. See [docs/opencode-support.md](./docs/opencode-support.md) for supported schema families.

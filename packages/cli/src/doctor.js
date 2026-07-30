@@ -1,10 +1,19 @@
-import { readdir, stat } from "node:fs/promises";
+import { Buffer } from "node:buffer";
+import { access, constants, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { readConfig } from "./config.js";
 import { SnackError } from "./errors.js";
 import { createOpenCodeAdapter } from "./opencode-adapter.js";
-import { inspectDatabase, readPendingMappingCount, readSourceSummary } from "./storage.js";
+import { inspectPluginRegistration } from "./opencode-config.js";
+import { setupJournalFile } from "./setup-journal.js";
+import {
+  inspectDatabase,
+  readPendingMappingCount,
+  readSourceSummary,
+  readSpoolCursors,
+  readSpoolIssueCount,
+} from "./storage.js";
 
 /**
  * @typedef {object} DoctorCheck
@@ -15,7 +24,7 @@ import { inspectDatabase, readPendingMappingCount, readSourceSummary } from "./s
 
 /**
  * @param {import("./paths.js").SnackPaths} paths
- * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date}} [options]
+ * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string}} [options]
  * @returns {Promise<{status: "ok" | "degraded" | "error", checks: DoctorCheck[]}>}
  */
 export async function runDoctor(paths, options = {}) {
@@ -54,6 +63,7 @@ export async function runDoctor(paths, options = {}) {
   if (configLock) checks.push(configLock);
   const configBackup = await checkOptionalMode(`${paths.configFile}.bak`, 0o600, "config_backup");
   if (configBackup) checks.push(configBackup);
+  checks.push(await checkSetupJournal(setupJournalFile(paths)));
 
   try {
     const storageLock = await checkLock(`${paths.databaseFile}.lock`, "storage_lock");
@@ -78,11 +88,23 @@ export async function runDoctor(paths, options = {}) {
   }
   checks.push(await checkMode(paths.dataDir, 0o700, "data_directory"));
   checks.push(await checkMode(paths.backupDir, 0o700, "backup_directory"));
+  const spoolExists = await pathExists(paths.spoolDir);
+  if (spoolExists) checks.push(await checkMode(paths.spoolDir, 0o700, "spool_directory"));
   checks.push(await checkMode(paths.databaseFile, 0o600, "database_file"));
   const backupFiles = await checkBackupFiles(paths.backupDir);
   if (backupFiles) checks.push(backupFiles);
 
   const sources = Array.isArray(config?.sources) ? config.sources : [];
+  if (sources.some(isConfiguredSource) && options.opencodeConfigFile) {
+    const registration = await inspectPluginRegistration(options.opencodeConfigFile);
+    checks.push(
+      registration === "compatible"
+        ? pass("opencode_plugin", "OpenCode live-capture plugin registration is compatible.")
+        : registration === "missing"
+          ? warn("opencode_plugin", "OpenCode live-capture plugin is not registered.")
+          : fail("opencode_plugin", "OpenCode live-capture plugin registration is incompatible."),
+    );
+  }
   for (const source of sources) {
     if (!isConfiguredSource(source)) continue;
     try {
@@ -129,6 +151,35 @@ export async function runDoctor(paths, options = {}) {
         warn(`source_freshness:${source.alias}`, "Synchronized usage freshness is unknown."),
       );
     }
+    if (spoolExists) {
+      let cursors = null;
+      try {
+        cursors = readSpoolCursors(paths.databaseFile, source.alias);
+      } catch {
+        checks.push(
+          warn(
+            `spool_cursor:${source.alias}`,
+            "Spool cursors are unavailable with current storage.",
+          ),
+        );
+      }
+      checks.push(
+        ...(await checkSpoolDirectory(join(paths.spoolDir, source.alias), source.alias, cursors)),
+      );
+      try {
+        const rejected = readSpoolIssueCount(paths.databaseFile, source.alias);
+        checks.push(
+          rejected === 0
+            ? pass(`source_spool:${source.alias}`, "Live spool has no rejected events.")
+            : warn(
+                `source_spool:${source.alias}`,
+                `${rejected} live spool event(s) were rejected.`,
+              ),
+        );
+      } catch {
+        checks.push(warn(`source_spool:${source.alias}`, "Live spool health is unknown."));
+      }
+    }
   }
 
   const status = checks.some((check) => check.status === "fail")
@@ -137,6 +188,83 @@ export async function runDoctor(paths, options = {}) {
       ? "degraded"
       : "ok";
   return { status, checks };
+}
+
+/** @param {string} directory @param {string} alias @param {Map<string, number> | null} cursors */
+async function checkSpoolDirectory(directory, alias, cursors) {
+  /** @type {DoctorCheck[]} */
+  const checks = [];
+  try {
+    const details = await stat(directory);
+    checks.push(
+      (details.mode & 0o777) === 0o700
+        ? pass(`spool_permissions:${alias}`, "Source spool permissions are private.")
+        : fail(`spool_permissions:${alias}`, "Source spool directory permissions must be 700."),
+    );
+    await access(directory, constants.W_OK);
+    checks.push(pass(`spool_writable:${alias}`, "Source spool directory is writable."));
+    const names = (await readdir(directory)).filter(
+      (name) => name === "current.open" || name.endsWith(".ndjson"),
+    );
+    let truncated = 0;
+    let cursorLag = 0;
+    for (const name of names) {
+      const file = join(directory, name);
+      const fileDetails = await stat(file);
+      if ((fileDetails.mode & 0o777) !== 0o600) {
+        checks.push(fail(`spool_files:${alias}`, "Every spool segment must use permissions 600."));
+        return checks;
+      }
+      if (fileDetails.size > 0 && !(await endsWithNewline(file, fileDetails.size))) truncated += 1;
+      if (
+        cursors !== null &&
+        name.endsWith(".ndjson") &&
+        (cursors.get(name) ?? 0) < fileDetails.size
+      ) {
+        cursorLag += 1;
+      }
+    }
+    checks.push(pass(`spool_files:${alias}`, "Spool segment permissions are private."));
+    checks.push(
+      truncated === 0
+        ? pass(`spool_truncation:${alias}`, "Spool segments contain no truncated tail.")
+        : warn(`spool_truncation:${alias}`, `${truncated} spool segment(s) have a truncated tail.`),
+    );
+    checks.push(
+      pass(
+        `spool_rotation:${alias}`,
+        `${names.filter((name) => name.endsWith(".ndjson")).length} closed segment(s).`,
+      ),
+    );
+    if (cursors !== null) {
+      checks.push(
+        cursorLag === 0
+          ? pass(`spool_cursor:${alias}`, "Closed spool segments are fully acknowledged.")
+          : warn(
+              `spool_cursor:${alias}`,
+              `${cursorLag} closed spool segment(s) await synchronization.`,
+            ),
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return [warn(`spool_writable:${alias}`, "Source spool has not received live events.")];
+    }
+    return [fail(`spool_writable:${alias}`, "Source spool is inaccessible or not writable.")];
+  }
+  return checks;
+}
+
+/** @param {string} file @param {number} size */
+async function endsWithNewline(file, size) {
+  const handle = await open(file, "r");
+  try {
+    const byte = Buffer.alloc(1);
+    await handle.read(byte, 0, 1, size - 1);
+    return byte[0] === 10;
+  } finally {
+    await handle.close();
+  }
 }
 
 /** @param {string} path @param {string} id */
@@ -193,6 +321,32 @@ async function checkMode(path, expected, id) {
       return warn(id, "Path has not been created.");
     }
     return fail(id, "Permissions could not be inspected.");
+  }
+}
+
+/** @param {string} path */
+async function pathExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ENOENT");
+  }
+}
+
+/** @param {string} file */
+async function checkSetupJournal(file) {
+  try {
+    await stat(file);
+    return warn(
+      "setup_recovery",
+      "An interrupted OpenCode plugin setup will be recovered on rerun.",
+    );
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return pass("setup_recovery", "No interrupted setup recovery is pending.");
+    }
+    return fail("setup_recovery", "Setup recovery state could not be inspected.");
   }
 }
 

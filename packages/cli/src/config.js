@@ -103,8 +103,16 @@ export async function setConfigValue(configFile, key, rawValue) {
  * @param {string} rawValue
  */
 export async function prepareConfigValue(configFile, key, rawValue) {
-  const path = parseKey(key);
-  const value = parseCommandValue(rawValue);
+  return prepareConfigValues(configFile, [[key, parseCommandValue(rawValue)]]);
+}
+
+/**
+ * Validate multiple configuration updates as one atomic replacement.
+ *
+ * @param {string} configFile
+ * @param {[string, unknown][]} updates
+ */
+export async function prepareConfigValues(configFile, updates) {
   let source;
   try {
     source = await readFile(configFile, "utf8");
@@ -119,10 +127,13 @@ export async function prepareConfigValue(configFile, key, rawValue) {
     source = `${JSON.stringify(defaultConfig, null, 2)}\n`;
   }
 
-  const edits = modify(source, path, value, {
-    formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
-  });
-  const updated = applyEdits(source, edits);
+  let updated = source;
+  for (const [key, value] of updates) {
+    const edits = modify(updated, parseKey(key), value, {
+      formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+    });
+    updated = applyEdits(updated, edits);
+  }
   const config = parseAndValidateConfig(updated);
   return { config, content: updated };
 }

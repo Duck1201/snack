@@ -32,7 +32,12 @@ try {
   );
 
   const result = (
-    await packWorkspace(workspace, temporary, join(temporary, "pack-manifest.json"))
+    await packWorkspace(
+      workspace,
+      "@snack-ai/cli",
+      temporary,
+      join(temporary, "pack-manifest.json"),
+    )
   )[0];
   if (!result || typeof result.filename !== "string" || !Array.isArray(result.files)) {
     throw new Error("npm pack returned an unexpected manifest.");
@@ -47,6 +52,7 @@ try {
     "migrations/002_open_code_tracer.sql",
     "package.json",
     "schemas/config.schema.json",
+    "schemas/spool-event.schema.json",
     "src/cli.js",
   ];
   for (const path of required) assert.ok(files.includes(path), `tarball is missing ${path}`);
@@ -72,7 +78,64 @@ try {
   const smoke = await execute(binary, ["--version"], { cwd: temporary });
   assert.equal(smoke.stdout.trim(), cliManifest.version);
 
-  process.stdout.write(`Package smoke passed for ${basename(tarball)} (${files.length} files).\n`);
+  const pluginManifest = JSON.parse(
+    await readFile(join(workspace, "packages", "opencode", "package.json"), "utf8"),
+  );
+  const pluginResult = (
+    await packWorkspace(
+      workspace,
+      "@snack-ai/opencode",
+      temporary,
+      join(temporary, "plugin-pack-manifest.json"),
+    )
+  )[0];
+  if (
+    !pluginResult ||
+    typeof pluginResult.filename !== "string" ||
+    !Array.isArray(pluginResult.files)
+  ) {
+    throw new Error("npm pack returned an unexpected plugin manifest.");
+  }
+  const pluginFiles = pluginResult.files.map((entry) => entry.path);
+  for (const path of [
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "package.json",
+    "schemas/spool-event.schema.json",
+    "src/plugin.js",
+  ]) {
+    assert.ok(pluginFiles.includes(path), `plugin tarball is missing ${path}`);
+  }
+  assert.deepEqual(
+    JSON.parse(
+      await readFile(join(workspace, "packages", "cli", "schemas", "spool-event.schema.json")),
+    ),
+    JSON.parse(
+      await readFile(join(workspace, "packages", "opencode", "schemas", "spool-event.schema.json")),
+    ),
+    "CLI and plugin spool schemas must be identical",
+  );
+  for (const path of pluginFiles) {
+    assert.doesNotMatch(path, /(^|\/)(?:test|fixtures?|\.env)(?:\/|$)/iu);
+  }
+  const pluginTarball = join(temporary, pluginResult.filename);
+  await execute(process.execPath, [npmCli, "install", "--prefix", temporary, pluginTarball], {
+    cwd: workspace,
+    env: { ...process.env, npm_config_cache: join(temporary, "npm-cache") },
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  await execute(
+    process.execPath,
+    ["--input-type=module", "--eval", "await import('@snack-ai/opencode')"],
+    {
+      cwd: temporary,
+    },
+  );
+
+  process.stdout.write(
+    `Package smoke passed for ${basename(tarball)} (${files.length} files) and ${pluginManifest.name}.\n`,
+  );
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
@@ -82,16 +145,17 @@ try {
  * Directing stdout to a file preserves the manifest without leaving a tarball in the workspace.
  *
  * @param {string} cwd
+ * @param {string} packageName
  * @param {string} destination
  * @param {string} manifestFile
  */
-async function packWorkspace(cwd, destination, manifestFile) {
+async function packWorkspace(cwd, packageName, destination, manifestFile) {
   const manifest = await open(manifestFile, "w", 0o600);
   try {
     await new Promise((resolve, reject) => {
       const child = spawn(
         "npm",
-        ["pack", "--workspace", "@snack-ai/cli", "--json", "--pack-destination", destination],
+        ["pack", "--workspace", packageName, "--json", "--pack-destination", destination],
         {
           cwd,
           env: { ...process.env, npm_config_cache: join(destination, "npm-cache") },

@@ -38,7 +38,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -275,6 +275,7 @@ test("setup opencode configures an explicit source after a compatible dry-run", 
       data: {
         source: {
           alias: "personal-anthropic",
+          installation_id: configuredSources[0].installation_id,
           adapter: "opencode",
           provider: "anthropic",
           profile: "personal",
@@ -596,7 +597,7 @@ test("doctor reports configured OpenCode fingerprint mapping and freshness", asy
     { exitCode, status: document.status, sourceChecks },
     {
       exitCode: 0,
-      status: "ok",
+      status: "degraded",
       sourceChecks: [
         { id: "source_fingerprint:personal-anthropic", status: "pass" },
         { id: "source_mapping:personal-anthropic", status: "pass" },
@@ -759,7 +760,7 @@ test("unmatched provider metadata remains pending and degrades mapping health", 
   );
 });
 
-test("full sync cannot regress a finalized prompt with an older source revision", async () => {
+test("an older revision preserves finality while adding restriction evidence", async () => {
   const fixture = await makeRunFixture();
   fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
@@ -814,7 +815,7 @@ test("full sync cannot regress a finalized prompt with an older source revision"
     {
       updated: 0,
       unchanged: 1,
-      observed: { prompts: 1, successes: 1, restrictions: 0, excluded: 0 },
+      observed: { prompts: 1, successes: 0, restrictions: 1, excluded: 0 },
     },
   );
   assert.doesNotMatch(fixture.stdout.value, /PRIVATE_STALE_CANARY/u);
