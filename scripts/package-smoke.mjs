@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -14,6 +14,23 @@ if (!npmCli) throw new Error("Run package smoke through npm.");
 const temporary = await mkdtemp(join(tmpdir(), "snack-package-smoke-"));
 let tarball;
 try {
+  const cliManifest = JSON.parse(
+    await readFile(join(workspace, "packages", "cli", "package.json"), "utf8"),
+  );
+  const sqliteVersion = cliManifest.dependencies?.["better-sqlite3"];
+  if (typeof sqliteVersion !== "string") throw new Error("better-sqlite3 version is missing.");
+  await writeFile(
+    join(temporary, "package.json"),
+    `${JSON.stringify(
+      {
+        private: true,
+        allowScripts: { [`better-sqlite3@${sqliteVersion}`]: true },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
   const packed = await execute(
     process.execPath,
     [npmCli, "pack", "--workspace", "@snack-ai/cli", "--json"],
