@@ -1052,6 +1052,160 @@ export function readSourceSummary(databaseFile, sourceAlias) {
   }
 }
 
+/**
+ * @typedef {object} UsageSliceRow
+ * @property {string} source_slice_id
+ * @property {string} provider
+ * @property {string | null} model
+ * @property {number | null} input_tokens
+ * @property {number | null} output_tokens
+ * @property {number | null} reasoning_tokens
+ * @property {number | null} cache_read_tokens
+ * @property {number | null} cache_write_tokens
+ * @property {string | null} cost_decimal
+ * @property {string | null} currency
+ */
+
+/**
+ * @typedef {object} UsageWindowRow
+ * @property {number} prompt_execution_id
+ * @property {number} capacity_period_id
+ * @property {string} started_at
+ * @property {string | null} completed_at
+ * @property {number | null} duration_ms
+ * @property {string} outcome
+ * @property {UsageSliceRow[]} slices
+ */
+
+/**
+ * Read every prompt of one capacity source whose start falls inside a rolling window.
+ *
+ * The window is half-open: `from` is inclusive and `to` is exclusive. Rows are returned
+ * unaggregated; horizon statistics are computed by the analytics module.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{from: string, to: string}} window
+ * @returns {UsageWindowRow[]}
+ */
+export function readUsageWindowRows(databaseFile, sourceAlias, window) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT
+           prompt_execution.id AS prompt_execution_id,
+           prompt_execution.capacity_period_id AS capacity_period_id,
+           prompt_execution.started_at AS started_at,
+           prompt_execution.completed_at AS completed_at,
+           prompt_execution.duration_ms AS duration_ms,
+           prompt_source_outcome.outcome AS outcome,
+           prompt_usage_slice.source_slice_id AS source_slice_id,
+           prompt_usage_slice.provider AS provider,
+           prompt_usage_slice.model AS model,
+           prompt_usage_slice.input_tokens AS input_tokens,
+           prompt_usage_slice.output_tokens AS output_tokens,
+           prompt_usage_slice.reasoning_tokens AS reasoning_tokens,
+           prompt_usage_slice.cache_read_tokens AS cache_read_tokens,
+           prompt_usage_slice.cache_write_tokens AS cache_write_tokens,
+           prompt_usage_slice.cost_decimal AS cost_decimal,
+           prompt_usage_slice.currency AS currency
+         FROM prompt_execution
+         JOIN prompt_source_outcome
+           ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
+         LEFT JOIN prompt_usage_slice
+           ON prompt_usage_slice.prompt_execution_id = prompt_execution.id
+         WHERE prompt_execution.source_alias = ?
+           AND prompt_execution.started_at >= ?
+           AND prompt_execution.started_at < ?
+         ORDER BY prompt_execution.started_at, prompt_execution.id,
+                  prompt_usage_slice.source_slice_id`,
+      )
+      .all(sourceAlias, window.from, window.to);
+
+    /** @type {Map<number, UsageWindowRow>} */
+    const prompts = new Map();
+    for (const row of /** @type {(UsageWindowRow & UsageSliceRow)[]} */ (rows)) {
+      let prompt = prompts.get(row.prompt_execution_id);
+      if (prompt === undefined) {
+        prompt = {
+          prompt_execution_id: row.prompt_execution_id,
+          capacity_period_id: row.capacity_period_id,
+          started_at: row.started_at,
+          completed_at: row.completed_at,
+          duration_ms: row.duration_ms,
+          outcome: row.outcome,
+          slices: [],
+        };
+        prompts.set(row.prompt_execution_id, prompt);
+      }
+      if (row.source_slice_id !== null) {
+        prompt.slices.push({
+          source_slice_id: row.source_slice_id,
+          provider: row.provider,
+          model: row.model,
+          input_tokens: row.input_tokens,
+          output_tokens: row.output_tokens,
+          reasoning_tokens: row.reasoning_tokens,
+          cache_read_tokens: row.cache_read_tokens,
+          cache_write_tokens: row.cache_write_tokens,
+          cost_decimal: row.cost_decimal,
+          currency: row.currency,
+        });
+      }
+    }
+    return [...prompts.values()];
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * @typedef {object} RestrictionWindowRow
+ * @property {number} prompt_execution_id
+ * @property {string} class
+ * @property {string} source_code
+ * @property {string} observed_at
+ */
+
+/**
+ * Read observed restrictions of one capacity source inside a rolling window.
+ *
+ * Only sanitized identifiers are stored, so no message text can be returned here.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{from: string, to: string}} window
+ * @returns {RestrictionWindowRow[]}
+ */
+export function readRestrictionWindowRows(databaseFile, sourceAlias, window) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    return /** @type {RestrictionWindowRow[]} */ (
+      database
+        .prepare(
+          `SELECT
+             restriction_observation.prompt_execution_id AS prompt_execution_id,
+             restriction_observation.class AS class,
+             restriction_observation.source_code AS source_code,
+             restriction_observation.observed_at AS observed_at
+           FROM restriction_observation
+           JOIN prompt_execution
+             ON prompt_execution.id = restriction_observation.prompt_execution_id
+           WHERE prompt_execution.source_alias = ?
+             AND restriction_observation.observed_at >= ?
+             AND restriction_observation.observed_at < ?
+           ORDER BY restriction_observation.observed_at,
+                    restriction_observation.prompt_execution_id,
+                    restriction_observation.class`,
+        )
+        .all(sourceAlias, window.from, window.to)
+    );
+  } finally {
+    database.close();
+  }
+}
+
 /** @param {string} databaseFile @param {ConfiguredOpenCodeSource} source */
 export function readPendingMappingCount(databaseFile, source) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
