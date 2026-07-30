@@ -31,17 +31,34 @@ jobs:
       - run: npm run check
       - run: npm run pack:smoke
 
-  wsl-oriented-smoke:
-    name: WSL-oriented dependency smoke
+  wsl-smoke:
+    name: WSL2 / Debian 13
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: Vampire/setup-wsl@5fae231e29d976722de11654d8323419501bb327 # v7.0.0
         with:
-          node-version: 24.18.1
-          cache: npm
-      - run: npm install --global npm@11.16.0
-      - run: npm ci
-      - run: npm audit --audit-level=high
-      - run: node packages/cli/src/cli.js --version
-      - run: node --test packages/cli/test/paths.test.js
+          distribution: Debian-13
+          additional-packages: ca-certificates curl xz-utils
+          wsl-version: 2
+      - name: Install verified Node.js toolchain in WSL
+        shell: wsl-bash {0}
+        run: |
+          grep -qi microsoft /proc/version
+          node_archive="node-v24.18.1-linux-x64.tar.xz"
+          curl --fail --silent --show-error --location --remote-name "https://nodejs.org/dist/v24.18.1/${node_archive}"
+          curl --fail --silent --show-error --location --remote-name "https://nodejs.org/dist/v24.18.1/SHASUMS256.txt"
+          grep " ${node_archive}$" SHASUMS256.txt | sha256sum --check --strict
+          tar --extract --xz --file "${node_archive}" --directory /usr/local --strip-components=1
+          npm install --global npm@11.16.0
+      - name: Test clean package lifecycle inside WSL
+        shell: wsl-bash {0}
+        run: |
+          cp --archive . /tmp/snack
+          cd /tmp/snack
+          node --version
+          npm --version
+          npm ci
+          npm audit --audit-level=high
+          npm run check
+          npm run pack:smoke
