@@ -10,11 +10,13 @@ Status as of 2026-07-30:
 
 Package availability is established by authenticated npm organization access and registry queries. Trademark searches in INPI and USPTO remain a publication gate and are not legal advice; implementation may proceed under the provisional identity, but `0.1.0` must not publish until that gate is recorded as passed or the project is renamed.
 
-Trademark gate: pending
+Trademark gate: passed
 
 The official-source screening is recorded in [trademark-search.md](./trademark-search.md). Live
 exact `SNACK` software marks in the United States and relevant Brazilian near marks require a name
-or legal-clearance decision before publication.
+or legal-clearance decision before publication. On 2026-07-30, the owner selected the documented
+go decision and accepted the identified risk under ADR-0005. This decision is not legal advice or a
+finding that the mark is available.
 
 npm trusted publisher gate: pending
 

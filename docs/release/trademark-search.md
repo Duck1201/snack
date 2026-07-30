@@ -6,11 +6,11 @@ Proposed use: `SNACK` as the name of software and a command-line interface.
 
 ## Outcome
 
-**Preliminary trademark gate: pending.** This search does not support marking the
-gate passed. The official records include live, exact `SNACK` marks for software
-and software services in the United States, a live exact application covering
-both relevant classes, and live Brazilian marks containing `SNACK` for software
-and data-processing/software services.
+**Preliminary search result: conflicts require a decision.** This search alone
+does not support legal clearance. The official records include live, exact
+`SNACK` marks for software and software services in the United States, a live
+exact application covering both relevant classes, and live Brazilian marks
+containing `SNACK` for software and data-processing/software services.
 
 This report is a limited screening of public government databases, not a legal
 clearance opinion and not a conclusion that `SNACK` is available or unavailable.
@@ -18,7 +18,10 @@ A qualified trademark attorney should evaluate likelihood of confusion, the
 actual goods and channels of trade, common-law use, and filing strategy before
 release or filing.
 
-`docs/release/identity.md` remains unchanged with `Trademark gate: pending`.
+After reviewing these findings on 2026-07-30, the owner chose to retain the name
+and accept the identified risk. ADR-0005 records that go/no-go decision, and
+`docs/release/identity.md` marks the decision gate passed. The underlying search
+findings and limitations remain unchanged.
 
 ## Scope And Classification
 

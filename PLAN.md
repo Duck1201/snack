@@ -15,6 +15,7 @@ SNACK is a local-first command-line application that describes observed AI-tool 
 - [ADR-0002](./docs/adr/0002-local-metadata-without-content.md): local-only metadata and no retained content.
 - [ADR-0003](./docs/adr/0003-hybrid-opencode-ingestion.md): hybrid OpenCode ingestion.
 - [ADR-0004](./docs/adr/0004-nodejs-24-baseline.md): Node.js 24 baseline.
+- [ADR-0005](./docs/adr/0005-retain-snack-name.md): retain the SNACK name after preliminary trademark screening.
 
 ## Product Thesis
 
