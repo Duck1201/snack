@@ -149,6 +149,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 1 - Technical Foundation
 
 - **Release:** `0.1.0` on npm `next`
+- **Status:** Complete (2026-07-30)
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Prove that SNACK can be installed, configured, migrated, tested, and released before integrating real client data.
 

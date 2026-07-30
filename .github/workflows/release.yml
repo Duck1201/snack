@@ -37,10 +37,5 @@ jobs:
       - run: npm run check
       - run: npm run pack:smoke
       - run: npm run release:check
-        env:
-          SNACK_NPM_BOOTSTRAP: "1"
       - name: Publish package
         run: npm publish --workspace @snack-ai/cli --tag next --access public --provenance
-        env:
-          # Used only to bootstrap the package before npm can accept its trusted-publisher binding.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
