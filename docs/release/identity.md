@@ -43,3 +43,10 @@ The requested release channel is `next`. npm also assigns `latest` to the first 
 and rejects removing that required tag with HTTP 400 while it is the package's only version. This
 registry behavior is tracked in [npm/cli#8490](https://github.com/npm/cli/issues/8490); subsequent
 technical previews continue to publish explicitly to `next`.
+
+Stage 2 publication: passed
+
+`@snack-ai/cli@0.2.0` was published to the `next` channel from commit
+`51696842098cbf58cd55c9ee9c05acb6c265f12a` by protected release run
+[30575846623](https://github.com/Duck1201/snack/actions/runs/30575846623). The registry confirms
+`next` resolves to `0.2.0`; `latest` remains `0.1.0`.
