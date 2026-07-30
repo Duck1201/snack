@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -31,25 +31,20 @@ try {
     )}\n`,
   );
 
-  const packed = await execute(
-    process.execPath,
-    [npmCli, "pack", "--workspace", "@snack-ai/cli", "--json"],
-    {
-      cwd: workspace,
-      maxBuffer: 10 * 1024 * 1024,
-    },
-  );
-  const result = JSON.parse(packed.stdout)[0];
+  const result = (
+    await packWorkspace(workspace, temporary, join(temporary, "pack-manifest.json"))
+  )[0];
   if (!result || typeof result.filename !== "string" || !Array.isArray(result.files)) {
     throw new Error("npm pack returned an unexpected manifest.");
   }
-  tarball = join(workspace, result.filename);
+  tarball = join(temporary, result.filename);
   const files = result.files.map((entry) => entry.path);
   const required = [
     "LICENSE",
     "NOTICE",
     "README.md",
     "migrations/001_initialize.sql",
+    "migrations/002_open_code_tracer.sql",
     "package.json",
     "schemas/config.schema.json",
     "src/cli.js",
@@ -62,7 +57,11 @@ try {
   await execute(
     process.execPath,
     [npmCli, "install", "--prefix", temporary, "--ignore-scripts=false", tarball],
-    { cwd: workspace, maxBuffer: 10 * 1024 * 1024 },
+    {
+      cwd: workspace,
+      env: { ...process.env, npm_config_cache: join(temporary, "npm-cache") },
+      maxBuffer: 10 * 1024 * 1024,
+    },
   );
   const binary = join(
     temporary,
@@ -71,10 +70,47 @@ try {
     process.platform === "win32" ? "snack.cmd" : "snack",
   );
   const smoke = await execute(binary, ["--version"], { cwd: temporary });
-  assert.equal(smoke.stdout.trim(), "0.1.0");
+  assert.equal(smoke.stdout.trim(), cliManifest.version);
 
   process.stdout.write(`Package smoke passed for ${basename(tarball)} (${files.length} files).\n`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
-  if (tarball) await rm(tarball, { force: true });
+}
+
+/**
+ * npm 11 can suppress `pack --json` when its stdout is a child-process pipe.
+ * Directing stdout to a file preserves the manifest without leaving a tarball in the workspace.
+ *
+ * @param {string} cwd
+ * @param {string} destination
+ * @param {string} manifestFile
+ */
+async function packWorkspace(cwd, destination, manifestFile) {
+  const manifest = await open(manifestFile, "w", 0o600);
+  try {
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(
+        "npm",
+        ["pack", "--workspace", "@snack-ai/cli", "--json", "--pack-destination", destination],
+        {
+          cwd,
+          env: { ...process.env, npm_config_cache: join(destination, "npm-cache") },
+          stdio: ["ignore", manifest.fd, "pipe"],
+        },
+      );
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.once("error", reject);
+      child.once("close", (code) => {
+        if (code === 0) resolve(stderr);
+        else reject(new Error(`npm pack failed with exit code ${code}: ${stderr}`));
+      });
+    });
+    if (output) throw new Error(`npm pack wrote to stderr: ${output}`);
+  } finally {
+    await manifest.close();
+  }
+  return JSON.parse(await readFile(manifestFile, "utf8"));
 }

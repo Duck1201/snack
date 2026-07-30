@@ -3,7 +3,8 @@ import { join } from "node:path";
 
 import { readConfig } from "./config.js";
 import { SnackError } from "./errors.js";
-import { inspectDatabase } from "./storage.js";
+import { createOpenCodeAdapter } from "./opencode-adapter.js";
+import { inspectDatabase, readPendingMappingCount, readSourceSummary } from "./storage.js";
 
 /**
  * @typedef {object} DoctorCheck
@@ -14,7 +15,7 @@ import { inspectDatabase } from "./storage.js";
 
 /**
  * @param {import("./paths.js").SnackPaths} paths
- * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined}} [options]
+ * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date}} [options]
  * @returns {Promise<{status: "ok" | "degraded" | "error", checks: DoctorCheck[]}>}
  */
 export async function runDoctor(paths, options = {}) {
@@ -22,6 +23,9 @@ export async function runDoctor(paths, options = {}) {
   const checks = [];
   const nodeVersion = options.nodeVersion ?? process.versions.node;
   const platform = options.platform ?? process.platform;
+  const now = options.now ?? new Date();
+  /** @type {Record<string, unknown> | undefined} */
+  let config;
 
   checks.push(
     Number(nodeVersion.split(".")[0]) === 24
@@ -35,7 +39,7 @@ export async function runDoctor(paths, options = {}) {
   );
 
   try {
-    await readConfig(paths.configFile);
+    config = await readConfig(paths.configFile);
     checks.push(pass("config", "Configuration is valid."));
   } catch (error) {
     if (error instanceof SnackError && error.reason === "config_missing") {
@@ -77,6 +81,55 @@ export async function runDoctor(paths, options = {}) {
   checks.push(await checkMode(paths.databaseFile, 0o600, "database_file"));
   const backupFiles = await checkBackupFiles(paths.backupDir);
   if (backupFiles) checks.push(backupFiles);
+
+  const sources = Array.isArray(config?.sources) ? config.sources : [];
+  for (const source of sources) {
+    if (!isConfiguredSource(source)) continue;
+    try {
+      const fingerprint = createOpenCodeAdapter({ databaseFile: source.database }).fingerprint();
+      checks.push(
+        fingerprint.supported && fingerprint.family === source.fingerprint
+          ? pass(`source_fingerprint:${source.alias}`, "OpenCode schema fingerprint is supported.")
+          : fail(
+              `source_fingerprint:${source.alias}`,
+              "OpenCode schema fingerprint is unsupported.",
+            ),
+      );
+    } catch {
+      checks.push(fail(`source_fingerprint:${source.alias}`, "OpenCode source is inaccessible."));
+    }
+    try {
+      const pending = readPendingMappingCount(paths.databaseFile, source);
+      checks.push(
+        pending === 0
+          ? pass(
+              `source_mapping:${source.alias}`,
+              "Provider and local profile mapping are explicit.",
+            )
+          : warn(
+              `source_mapping:${source.alias}`,
+              `${pending} schema-valid observation(s) need an explicit mapping.`,
+            ),
+      );
+    } catch {
+      checks.push(warn(`source_mapping:${source.alias}`, "Pending source mappings are unknown."));
+    }
+    try {
+      const summary = readSourceSummary(paths.databaseFile, source.alias);
+      const ageMs = summary.as_of === null ? null : now.getTime() - Date.parse(summary.as_of);
+      checks.push(
+        summary.as_of === null
+          ? warn(`source_freshness:${source.alias}`, "No synchronized usage is available.")
+          : ageMs !== null && ageMs > 24 * 60 * 60 * 1000
+            ? warn(`source_freshness:${source.alias}`, "Synchronized usage is older than 24 hours.")
+            : pass(`source_freshness:${source.alias}`, "Synchronized usage is available."),
+      );
+    } catch {
+      checks.push(
+        warn(`source_freshness:${source.alias}`, "Synchronized usage freshness is unknown."),
+      );
+    }
+  }
 
   const status = checks.some((check) => check.status === "fail")
     ? "error"
@@ -156,4 +209,22 @@ function warn(id, message) {
 /** @param {string} id @param {string} message @returns {DoctorCheck} */
 function fail(id, message) {
   return { id, status: "fail", message };
+}
+
+/** @param {unknown} value */
+function isConfiguredSource(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "alias" in value &&
+    typeof value.alias === "string" &&
+    "installation_id" in value &&
+    typeof value.installation_id === "string" &&
+    "provider" in value &&
+    typeof value.provider === "string" &&
+    "database" in value &&
+    typeof value.database === "string" &&
+    "fingerprint" in value &&
+    typeof value.fingerprint === "string"
+  );
 }

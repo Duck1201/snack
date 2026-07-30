@@ -9,6 +9,52 @@
     "schema_version": {
       "const": 1
     },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alias",
+          "installation_id",
+          "adapter",
+          "database",
+          "provider",
+          "profile",
+          "plan",
+          "fingerprint"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62})$"
+          },
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "adapter": {
+            "const": "opencode"
+          },
+          "database": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "$ref": "#/$defs/localIdentifier"
+          },
+          "profile": {
+            "$ref": "#/$defs/localIdentifier"
+          },
+          "plan": {
+            "$ref": "#/$defs/localIdentifier"
+          },
+          "fingerprint": {
+            "const": "oc-sqlite-msgpart-v1"
+          }
+        }
+      }
+    },
     "analysis": {
       "type": "object",
       "additionalProperties": false,
@@ -41,6 +87,12 @@
           "type": "boolean"
         }
       }
+    }
+  },
+  "$defs": {
+    "localIdentifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
     }
   }
 }

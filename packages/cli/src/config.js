@@ -17,6 +17,7 @@ const validate = ajv.compile(schema);
 
 export const defaultConfig = Object.freeze({
   schema_version: 1,
+  sources: [],
   analysis: {
     horizons: ["PT1H", "PT5H", "P1D", "P7D"],
   },

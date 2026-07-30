@@ -221,6 +221,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 2 - OpenCode Tracer
 
 - **Release:** `0.2.0` on npm `next`
+- **Status:** Complete (2026-07-30)
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Deliver the first user-usable flow from OpenCode history to a transparent, broad next-prompt estimate.
 

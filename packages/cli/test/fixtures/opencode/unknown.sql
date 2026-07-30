@@ -1,0 +1,19 @@
+CREATE TABLE session (
+  id TEXT PRIMARY KEY,
+  version TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE message (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  time_created INTEGER NOT NULL,
+  data TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE part (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES message(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  time_created INTEGER NOT NULL,
+  data TEXT NOT NULL
+) STRICT;
