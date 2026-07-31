@@ -1060,13 +1060,27 @@ function primaryHorizon(config) {
 function computeSourcePressure(input) {
   const horizonSeconds = parseHorizon(input.horizon);
   const windowCount = ANALYTICS_POLICY.pressure_baseline_windows;
-  const current = summarizeWindow(input, horizonWindow(input.now, horizonSeconds));
+  // One read covers the current window and every baseline window behind it. Reading each
+  // window separately meant one SQLite connection and one scan per window.
+  const span = horizonWindow(input.now, horizonSeconds * (windowCount + 1));
+  const rows = readUsageWindowRows(input.databaseFile, input.source.alias, span);
+
+  /** @type {import("./storage.js").UsageWindowRow[][]} */
+  const buckets = Array.from({ length: windowCount + 1 }, () => []);
+  for (const row of rows) {
+    // Windows are half-open as `[start, end)`, so an age of exactly one horizon still
+    // belongs to the newer window.
+    const ageSeconds = (input.now.getTime() - Date.parse(row.started_at)) / 1000;
+    const bucket = Math.ceil(ageSeconds / horizonSeconds) - 1;
+    buckets[bucket]?.push(row);
+  }
+
+  const current = summarizeWindow(/** @type {typeof rows} */ (buckets[0]), input.now);
   /** @type {Record<string, number[]>} */
   const baselines = {};
   let observedWindows = 0;
   for (let offset = 1; offset <= windowCount; offset += 1) {
-    const end = new Date(input.now.getTime() - offset * horizonSeconds * 1000);
-    const past = summarizeWindow(input, horizonWindow(end, horizonSeconds));
+    const past = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
     // A window with no prompts means the tool was not used then, which is absence of
     // observation rather than evidence of low usage. Ranking against it would call a
     // brand new user's first prompt the heaviest window on record.
@@ -1101,15 +1115,15 @@ function computeSourcePressure(input) {
 }
 
 /**
- * @param {{databaseFile: string, source: {alias: string}}} input
- * @param {{from: string, to: string}} window
+ * @param {import("./storage.js").UsageWindowRow[]} rows
+ * @param {Date} now
  */
-function summarizeWindow(input, window) {
-  const profile = summarizeUsageProfile(
-    readUsageWindowRows(input.databaseFile, input.source.alias, window),
-    [],
-    { horizon: "", window },
-  );
+function summarizeWindow(rows, now) {
+  const profile = summarizeUsageProfile(rows, [], {
+    horizon: "",
+    window: { from: "", to: "" },
+    now,
+  });
   /** @type {Record<string, number>} */
   const values = { prompts: profile.prompts.count };
   for (const [dimension, summary] of Object.entries(profile.dimensions)) {
