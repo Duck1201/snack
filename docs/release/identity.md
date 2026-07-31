@@ -222,3 +222,31 @@ on the registry.
 the only registry write this workflow makes, and it is corrected by hand when there is reason to;
 `latest`, which a default install resolves, is what the release guarantees.
 
+
+## 0.7.0
+
+`@snack-ai/cli@0.7.0` was published from commit `7379c02` by protected release run
+[30672396220](https://github.com/Duck1201/snack/actions/runs/30672396220). The plugin step skipped:
+Stage 7 changed nothing in `@snack-ai/opencode`, which stays at `0.1.2`.
+
+It published under `next`, which was the channel policy at the time of the dispatch, and was then
+promoted to `latest` by hand. The policy changed with it: from `0.7.0` each minor takes `latest` on
+release, so a default install resolves the newest supported product rather than a version the
+project has moved past. `0.6.1` keeps the MVP surface under a new `stable` tag, for installs that
+cannot absorb pre-1.0 contract churn.
+
+| Package | Version | `latest` | `stable` | `next` | Attestations |
+| --- | --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | — | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | — | publish + SLSA provenance |
+
+`latest` and `stable` were both moved with `npm dist-tag add` from an authenticated session, and
+`next` was removed from both packages with `npm dist-tag rm` in the same session. Under the new
+policy `next` carries release candidates, and there is no candidate: leaving it pointing at the
+current release would have made `@next` and `@latest` the same install while implying they are
+different channels. It stays absent until the first `1.0.0-rc.N` publish recreates it.
+
+None of that came from the workflow. Trusted publishing authorizes a publish request and not a
+`dist-tag` call, which answers `E401` even for the package just published — the workflow sets a tag
+only through `--tag` on the publish itself, and it is now an input of the dispatch rather than
+hardcoded. `stable` is never set by a release: it moves by decision.
