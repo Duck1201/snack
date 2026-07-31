@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -92,6 +92,99 @@ async function makeLargeHistory() {
   return { root, env, paths, databaseFile: paths.databaseFile };
 }
 
+/**
+ * Build an OpenCode database holding a six-figure history in OpenCode's own shape, so the
+ * backfill it feeds travels the adapter, the classifier and `storeObservations` exactly as a
+ * real first run would. Writing straight into SNACK's tables here would measure nothing.
+ *
+ * @param {string} root
+ * @returns {Promise<string>}
+ */
+async function makeLargeOpenCodeHistory(root) {
+  const databaseFile = join(root, "opencode.db");
+  const database = new Database(databaseFile);
+  try {
+    database.exec(
+      await readFile(new URL("./fixtures/opencode/supported-v1.sql", import.meta.url), "utf8"),
+    );
+    database.exec("DELETE FROM part; DELETE FROM message; DELETE FROM session;");
+    const insertSession = database.prepare(
+      "INSERT INTO session (id, version) VALUES (?, '1.18.9')",
+    );
+    const insertMessage = database.prepare(
+      `INSERT INTO message (id, session_id, time_created, time_updated, data)
+       VALUES (@id, @session_id, @time, @time, @data)`,
+    );
+    const insertPart = database.prepare(
+      `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+       VALUES (@id, @message_id, @session_id, @time, @time, @data)`,
+    );
+    // A hundred prompts per session, which is the shape that makes the adapter's per-message
+    // slice read run a hundred thousand times rather than being amortized over a few sessions.
+    const perSession = 100;
+    database.transaction(() => {
+      for (let index = 1; index <= PROMPTS; index += 1) {
+        const sessionId = `session-${Math.ceil(index / perSession)}`;
+        if (index % perSession === 1) insertSession.run(sessionId);
+        const created = origin + index * 60_000;
+        const completed = created + 4_000;
+        const model = index % 3 === 0 ? "claude-haiku" : "claude-sonnet";
+        insertMessage.run({
+          id: `user-${index}`,
+          session_id: sessionId,
+          time: created,
+          data: JSON.stringify({
+            role: "user",
+            time: { created },
+            agent: "build",
+            model: { providerID: "anthropic", modelID: model },
+          }),
+        });
+        const tokens = {
+          input: 100 + (index % 900),
+          output: 25,
+          reasoning: 5,
+          cache: { read: 10, write: 2 },
+        };
+        insertMessage.run({
+          id: `assistant-${index}`,
+          session_id: sessionId,
+          time: completed,
+          data: JSON.stringify({
+            role: "assistant",
+            time: { created: created + 1_000, completed },
+            parentID: `user-${index}`,
+            providerID: "anthropic",
+            modelID: model,
+            ...(index % 97 === 0
+              ? { error: { name: "ProviderAuthError", data: { statusCode: 429 } } }
+              : { finish: "stop" }),
+            cost: 0.003,
+            tokens,
+          }),
+        });
+        insertPart.run({
+          id: `user-text-${index}`,
+          message_id: `user-${index}`,
+          session_id: sessionId,
+          time: created,
+          data: '{"type":"text","text":""}',
+        });
+        insertPart.run({
+          id: `step-finish-${index}`,
+          message_id: `assistant-${index}`,
+          session_id: sessionId,
+          time: completed,
+          data: JSON.stringify({ type: "step-finish", reason: "stop", cost: 0.003, tokens }),
+        });
+      }
+    })();
+  } finally {
+    database.close();
+  }
+  return databaseFile;
+}
+
 const executeFile = promisify(execFile);
 const cliEntry = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 
@@ -120,10 +213,21 @@ async function writeStatusConfig(history) {
   );
 }
 
-/** @param {string[]} args @param {Awaited<ReturnType<typeof makeLargeHistory>>} history */
-async function runCli(args, history) {
+/**
+ * @param {string[]} args
+ * @param {{root: string, env: NodeJS.ProcessEnv}} history
+ * @param {{heapLimitMb?: number}} [options]
+ */
+async function runCli(args, history, options = {}) {
   return executeFile(process.execPath, [cliEntry, ...args], {
-    env: { ...process.env, ...history.env, HOME: history.root },
+    env: {
+      ...process.env,
+      ...history.env,
+      HOME: history.root,
+      ...(options.heapLimitMb === undefined
+        ? {}
+        : { NODE_OPTIONS: `--max-old-space-size=${options.heapLimitMb}` }),
+    },
   });
 }
 
@@ -227,6 +331,86 @@ test(`\`status --no-sync\` over ${PROMPTS.toLocaleString("en-US")} prompts stays
     p95 < 250,
     `p95 ${p95.toFixed(0)}ms, p50 ${(samples[10] ?? 0).toFixed(0)}ms, min ${(samples[0] ?? 0).toFixed(0)}ms`,
   );
+});
+
+test(`backfilling ${PROMPTS.toLocaleString("en-US")} prompts from OpenCode meets the backfill and memory budgets`, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "snack-backfill-"));
+  temporaryRoots.push(root);
+  const databaseFile = await makeLargeOpenCodeHistory(root);
+  const history = {
+    root,
+    env: {
+      XDG_CONFIG_HOME: join(root, "config"),
+      XDG_DATA_HOME: join(root, "data"),
+      XDG_CACHE_HOME: join(root, "cache"),
+      XDG_STATE_HOME: join(root, "state"),
+      OPENCODE_DB: databaseFile,
+    },
+  };
+
+  await runCli(
+    [
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "work",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    history,
+  );
+
+  // Only the backfill itself is timed: setup is a one-question-per-lifetime cost, while this is
+  // what someone waits through on their first `snack sync` against an existing history.
+  const startedAt = process.hrtime.bigint();
+  const { stdout } = await runCli(["sync", "--full", "--json"], history);
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+  const document = JSON.parse(stdout);
+
+  // A budget met by failing fast is not a budget met, so the run has to have actually landed
+  // every prompt.
+  assert.equal(document.status, "ok", stdout.slice(0, 400));
+  const inserted = document.data.sources.reduce(
+    (/** @type {number} */ total, /** @type {{inserted: number}} */ result) =>
+      total + result.inserted,
+    0,
+  );
+  assert.equal(inserted, PROMPTS, stdout.slice(0, 400));
+  t.diagnostic(`backfill of ${PROMPTS} prompts took ${(elapsedMs / 1000).toFixed(1)}s`);
+  assert.ok(elapsedMs < 30_000, `backfill took ${(elapsedMs / 1000).toFixed(1)}s`);
+
+  // Steady state begins once that history is stored: the commands the owner runs many times a
+  // day, against a source with nothing new to read. PLAN's memory budget is written for exactly
+  // this and not for the one-time backfill above, which materializes every observation the
+  // adapter read and needs roughly 300 MB of heap at this size.
+  //
+  // Capping the child's old space turns the budget into something the process either survives
+  // or dies on, which is portable in a way that reading a peak from outside is not:
+  // `process.memoryUsage()` here would measure this test runner, not the command.
+  // ponytail: heap ceiling, not resident memory. Measure RSS per platform only if the native
+  // SQLite allocations ever become the term that grows.
+  for (const argv of [
+    ["status", "--no-sync", "--json"],
+    ["sync", "--json"],
+    ["stats", "--verbose", "--json"],
+  ]) {
+    const result = await runCli(argv, history, { heapLimitMb: 150 }).catch(
+      (/** @type {Error & {stderr?: string}} */ error) => error,
+    );
+    assert.ok(
+      !(result instanceof Error),
+      `\`snack ${argv[0]}\` did not survive a 150MB heap: ${String(result.stderr ?? result).slice(0, 300)}`,
+    );
+    // The history is deliberately old, so freshness degrades these runs; what the budget cares
+    // about is that each one completed and produced its document rather than dying under the cap.
+    assert.notEqual(JSON.parse(result.stdout).status, "error", argv.join(" "));
+  }
 });
 
 test(`backtesting the whole ${PROMPTS.toLocaleString("en-US")}-prompt history completes`, async () => {
