@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
+import { promisify } from "node:util";
 
 import Database from "better-sqlite3";
 
@@ -31,16 +34,18 @@ const now = new Date(origin + PROMPTS * 60_000);
  * Build a database holding a six-figure history, written straight through SQLite because
  * the point of this test is the read and compute path, not ingestion.
  *
- * @returns {Promise<string>}
+ * @returns {Promise<{root: string, env: NodeJS.ProcessEnv, paths: import("../src/paths.js").SnackPaths, databaseFile: string}>}
  */
 async function makeLargeHistory() {
   const root = await mkdtemp(join(tmpdir(), "snack-performance-"));
   temporaryRoots.push(root);
-  const paths = resolvePaths({
-    env: { XDG_DATA_HOME: join(root, "data"), XDG_STATE_HOME: join(root, "state") },
-    platform: "linux",
-    home: root,
-  });
+  const env = {
+    XDG_CONFIG_HOME: join(root, "config"),
+    XDG_DATA_HOME: join(root, "data"),
+    XDG_CACHE_HOME: join(root, "cache"),
+    XDG_STATE_HOME: join(root, "state"),
+  };
+  const paths = resolvePaths({ env, platform: "linux", home: root });
   await initializeDatabase(paths, { applicationVersion: "0.5.0", now: new Date(origin) });
 
   const database = new Database(paths.databaseFile);
@@ -83,7 +88,42 @@ async function makeLargeHistory() {
   } finally {
     database.close();
   }
-  return paths.databaseFile;
+  return { root, env, paths, databaseFile: paths.databaseFile };
+}
+
+const executeFile = promisify(execFile);
+const cliEntry = fileURLToPath(new URL("../src/cli.js", import.meta.url));
+
+/** @param {Awaited<ReturnType<typeof makeLargeHistory>>} history */
+async function writeStatusConfig(history) {
+  await mkdir(history.paths.configDir, { recursive: true, mode: 0o700 });
+  await writeFile(
+    history.paths.configFile,
+    `${JSON.stringify({
+      schema_version: 1,
+      sources: [
+        {
+          alias: "work",
+          installation_id: "11111111-2222-4333-8444-555555555555",
+          adapter: "opencode",
+          database: join(history.root, "opencode.db"),
+          provider: "anthropic",
+          profile: "default",
+          plan: "pro",
+          plan_profile: "generic",
+          fingerprint: "oc-sqlite-msgpart-v1",
+        },
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
+}
+
+/** @param {string[]} args @param {Awaited<ReturnType<typeof makeLargeHistory>>} history */
+async function runCli(args, history) {
+  return executeFile(process.execPath, [cliEntry, ...args], {
+    env: { ...process.env, ...history.env, HOME: history.root },
+  });
 }
 
 /**
@@ -98,7 +138,7 @@ function timed(work) {
 }
 
 test(`forecasting a ${PROMPTS.toLocaleString("en-US")}-prompt history stays inside the status budget`, async () => {
-  const databaseFile = await makeLargeHistory();
+  const { databaseFile } = await makeLargeHistory();
 
   const read = timed(() =>
     readOutcomeRows(databaseFile, "work", { limit: PREDICTION_POLICY.evidence_window_prompts }),
@@ -136,7 +176,7 @@ test(`forecasting a ${PROMPTS.toLocaleString("en-US")}-prompt history stays insi
 });
 
 test(`recategorizing a ${PROMPTS.toLocaleString("en-US")}-prompt history stays inside the sync budget`, async () => {
-  const databaseFile = await makeLargeHistory();
+  const { databaseFile } = await makeLargeHistory();
   const rows = readOutcomeRows(databaseFile, "work").map((row, index) => ({
     prompt_execution_id: row.prompt_execution_id,
     started_at: row.started_at,
@@ -166,8 +206,30 @@ test(`recategorizing a ${PROMPTS.toLocaleString("en-US")}-prompt history stays i
   );
 });
 
+test(`\`status --no-sync\` over ${PROMPTS.toLocaleString("en-US")} prompts stays inside its p95 budget`, async () => {
+  const history = await makeLargeHistory();
+  await writeStatusConfig(history);
+
+  // Spawning the real binary is the only honest measure of this budget: it is what the user
+  // waits for. Calling `run()` repeatedly in one process amortizes module loading away, which
+  // hides roughly 100 ms of startup and would pass a budget the installed command misses.
+  const samples = [];
+  for (let index = 0; index < 20; index += 1) {
+    const startedAt = process.hrtime.bigint();
+    await runCli(["status", "--no-sync", "--json"], history);
+    samples.push(Number(process.hrtime.bigint() - startedAt) / 1e6);
+  }
+  samples.sort((a, b) => a - b);
+  const p95 = samples[Math.ceil(samples.length * 0.95) - 1] ?? Infinity;
+
+  assert.ok(
+    p95 < 250,
+    `p95 ${p95.toFixed(0)}ms, p50 ${(samples[10] ?? 0).toFixed(0)}ms, min ${(samples[0] ?? 0).toFixed(0)}ms`,
+  );
+});
+
 test(`backtesting the whole ${PROMPTS.toLocaleString("en-US")}-prompt history completes`, async () => {
-  const databaseFile = await makeLargeHistory();
+  const { databaseFile } = await makeLargeHistory();
   const rows = readOutcomeRows(databaseFile, "work");
   assert.equal(rows.length, PROMPTS);
 
