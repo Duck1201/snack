@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { run } from "../src/main.js";
-import { resolvePaths } from "../src/paths.js";
 import {
   cleanupRunFixtures,
   createOpenCodeDatabase,
@@ -188,14 +187,14 @@ test("every file SNACK creates is private to its owner", async () => {
     fixture.options,
   );
 
-  const paths = resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root });
+  const paths = fixture.paths;
   for (const directory of [paths.configDir, paths.dataDir, paths.spoolDir, paths.backupDir]) {
     const mode = await stat(directory)
       .then((stats) => stats.mode & 0o777)
       .catch(() => null);
     if (mode !== null) assert.equal(mode, 0o700, directory);
   }
-  for (const file of await readEveryByte(join(fixture.root, "data-home"))) {
+  for (const file of await readEveryByte(fixture.dataHome)) {
     assert.equal((await stat(file.path)).mode & 0o777, 0o600, file.path);
   }
   for (const file of await readEveryByte(join(fixture.root, "csv-out"))) {

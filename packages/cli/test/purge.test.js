@@ -4,7 +4,6 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
-import { resolvePaths } from "../src/paths.js";
 import { purgeScope } from "../src/storage.js";
 import {
   cleanupRunFixtures,
@@ -42,7 +41,7 @@ async function makePurgeableHistory() {
   fixture.stderr.value = "";
   return {
     ...fixture,
-    resolved: resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root }),
+    resolved: fixture.paths,
   };
 }
 

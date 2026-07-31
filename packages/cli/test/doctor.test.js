@@ -5,7 +5,6 @@ import { afterEach, test } from "node:test";
 
 import { runDoctor } from "../src/doctor.js";
 import { pluginPackageSpec } from "../src/opencode-config.js";
-import { resolvePaths } from "../src/paths.js";
 import { initializeDatabase } from "../src/storage.js";
 import { cleanupRunFixtures, makeRunFixture } from "./fixtures/run-fixture.js";
 
@@ -27,7 +26,7 @@ const pluginOptions = {
  */
 async function runDoctorWithPlugins(plugins) {
   const fixture = await makeRunFixture("snack-doctor-");
-  const paths = resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root });
+  const paths = fixture.paths;
   await initializeDatabase(paths, { applicationVersion: "0.5.0", now });
 
   const openCodeDatabase = join(fixture.root, "opencode.db");

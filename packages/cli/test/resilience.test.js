@@ -8,7 +8,6 @@ import Database from "better-sqlite3";
 
 import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
-import { resolvePaths } from "../src/paths.js";
 import {
   cleanupRunFixtures,
   createOpenCodeDatabase,
@@ -45,7 +44,7 @@ async function makeWorkingInstall(prefix = "snack-resilience-") {
   fixture.stderr.value = "";
   return {
     ...fixture,
-    resolved: resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root }),
+    resolved: fixture.paths,
   };
 }
 
@@ -77,7 +76,7 @@ test("a corrupted database is diagnosed rather than half-read", async () => {
 test("a database that is not a database at all is refused", async () => {
   const fixture = await makeRunFixture("snack-notadb-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
-  const paths = resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root });
+  const paths = fixture.paths;
   await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
   await writeFile(paths.databaseFile, "this is not a SQLite file\n", { mode: 0o600 });
 
@@ -108,11 +107,11 @@ test("a database that is not a database at all is refused", async () => {
 test("storage that cannot be created fails without leaving a partial install", async () => {
   const fixture = await makeRunFixture("snack-nostorage-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
-  const paths = resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root });
+  const paths = fixture.paths;
   // A plain file where the data directory belongs. SNACK normalizes the permissions of
   // directories it owns, so a read-only mode would simply be corrected; this is a failure it
   // cannot chmod its way out of.
-  await mkdir(join(fixture.root, "data-home"), { recursive: true, mode: 0o700 });
+  await mkdir(fixture.dataHome, { recursive: true, mode: 0o700 });
   await writeFile(paths.dataDir, "not a directory\n", { mode: 0o600 });
 
   const exitCode = await run(
@@ -157,7 +156,7 @@ test("a lock abandoned by a killed command is reclaimed, not waited on forever",
 test("an interrupted setup is recovered on the next command, not left half-applied", async () => {
   const fixture = await makeRunFixture("snack-interrupted-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
-  const paths = resolvePaths({ env: fixture.options.env, platform: "linux", home: fixture.root });
+  const paths = fixture.paths;
 
   // Fail the configuration write after storage has already been initialized, which is the
   // window a crash would land in.
@@ -204,53 +203,65 @@ test("an interrupted setup is recovered on the next command, not left half-appli
   }
 });
 
-test("a failed export leaves no partial file behind for someone to read", async () => {
-  const install = await makeWorkingInstall("snack-export-io-");
-  const directory = join(install.root, "unwritable");
-  await mkdir(directory, { recursive: true, mode: 0o500 });
+// A mode bit denies nothing to uid 0, so the premise of a permission-denial test does not exist
+// there. The WSL2 job runs as root; these two skip rather than assert a failure that cannot happen.
+const runningAsRoot = process.getuid?.() === 0;
 
-  try {
-    const exitCode = await run(
-      [
-        "node",
-        "snack",
-        "export",
-        "--format",
-        "json",
-        "--output",
-        join(directory, "export.json"),
-        "--json",
-      ],
-      install.options,
-    );
+test(
+  "a failed export leaves no partial file behind for someone to read",
+  { skip: runningAsRoot },
+  async () => {
+    const install = await makeWorkingInstall("snack-export-io-");
+    const directory = join(install.root, "unwritable");
+    await mkdir(directory, { recursive: true, mode: 0o500 });
 
-    assert.equal(exitCode, ExitCode.io);
-    assert.deepEqual(await readdir(directory), []);
-  } finally {
-    await chmod(directory, 0o700);
-  }
-});
+    try {
+      const exitCode = await run(
+        [
+          "node",
+          "snack",
+          "export",
+          "--format",
+          "json",
+          "--output",
+          join(directory, "export.json"),
+          "--json",
+        ],
+        install.options,
+      );
 
-test("a purge that cannot finish leaves the history exactly as it was", async () => {
-  const install = await makeWorkingInstall("snack-purge-rollback-");
-  const before = countPrompts(install.resolved.databaseFile);
-  assert.ok(before > 0);
+      assert.equal(exitCode, ExitCode.io);
+      assert.deepEqual(await readdir(directory), []);
+    } finally {
+      await chmod(directory, 0o700);
+    }
+  },
+);
 
-  // A database that cannot be written is the failure a purge is most likely to meet halfway
-  // through, and the history must survive it untouched.
-  await chmod(install.resolved.databaseFile, 0o400);
-  try {
-    const exitCode = await run(
-      ["node", "snack", "data", "purge", "--source", "work", "--yes", "--json"],
-      install.options,
-    );
+test(
+  "a purge that cannot finish leaves the history exactly as it was",
+  { skip: runningAsRoot },
+  async () => {
+    const install = await makeWorkingInstall("snack-purge-rollback-");
+    const before = countPrompts(install.resolved.databaseFile);
+    assert.ok(before > 0);
 
-    assert.notEqual(exitCode, 0);
-    assert.equal(countPrompts(install.resolved.databaseFile), before);
-  } finally {
-    await chmod(install.resolved.databaseFile, 0o600);
-  }
-});
+    // A database that cannot be written is the failure a purge is most likely to meet halfway
+    // through, and the history must survive it untouched.
+    await chmod(install.resolved.databaseFile, 0o400);
+    try {
+      const exitCode = await run(
+        ["node", "snack", "data", "purge", "--source", "work", "--yes", "--json"],
+        install.options,
+      );
+
+      assert.notEqual(exitCode, 0);
+      assert.equal(countPrompts(install.resolved.databaseFile), before);
+    } finally {
+      await chmod(install.resolved.databaseFile, 0o600);
+    }
+  },
+);
 
 test("a spool segment that was cut mid-write is reported and skipped, not guessed at", async () => {
   const install = await makeWorkingInstall("snack-partial-spool-");

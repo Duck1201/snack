@@ -1,8 +1,10 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import Database from "better-sqlite3";
+
+import { resolvePaths } from "../../src/paths.js";
 
 /**
  * Command tests drive `run(argv, options)` against injected sinks, a temporary XDG environment,
@@ -32,25 +34,24 @@ export async function makeRunFixture(prefix = "snack-main-") {
     XDG_CACHE_HOME: join(root, "cache-home"),
     XDG_STATE_HOME: join(root, "state-home"),
   };
-  const paths = {
-    configDir: join(env.XDG_CONFIG_HOME, "snack"),
-    configFile: join(env.XDG_CONFIG_HOME, "snack", "config.jsonc"),
-    dataDir: join(env.XDG_DATA_HOME, "snack"),
-    databaseFile: join(env.XDG_DATA_HOME, "snack", "snack.sqlite3"),
-    backupDir: join(env.XDG_DATA_HOME, "snack", "backups"),
-  };
+  // Fixtures follow the platform the suite is running on rather than declaring themselves Linux.
+  // Pinning the layout made every macOS run exercise XDG paths the product never uses there, and
+  // it broke outright for the tests that spawn the real binary, which cannot be told a platform.
+  // `paths.test.js` still pins both layouts against `resolvePaths` directly.
+  const platform = process.platform;
+  const paths = resolvePaths({ env, platform, home: root });
   return {
     root,
     stdout,
     stderr,
     paths,
-    dataHome: env.XDG_DATA_HOME,
+    dataHome: dirname(paths.dataDir),
     options: {
       stdout,
       stderr,
       home: root,
       env,
-      platform: /** @type {NodeJS.Platform} */ ("linux"),
+      platform,
       nodeVersion: "24.18.1",
       now: new Date("2026-01-02T03:04:05.000Z"),
       writeConfig:
