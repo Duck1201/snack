@@ -9,15 +9,16 @@ on:
         type: string
       dist_tag:
         description: >
-          npm dist-tag to publish under. Post-MVP previews go to next; latest is the channel a plain
-          `npm install` resolves and belongs to the MVP until 1.0. See the npm Channel Policy in
-          PLAN.md.
+          npm dist-tag to publish under. Each minor takes latest, so a plain `npm install` gets the
+          newest supported product; next is for release candidates, which are not that. `stable` is
+          never set here — it moves by hand, by decision, and not by a release. See the npm Channel
+          Policy in PLAN.md.
         required: true
         type: choice
-        default: next
+        default: latest
         options:
-          - next
           - latest
+          - next
 
 permissions:
   actions: read

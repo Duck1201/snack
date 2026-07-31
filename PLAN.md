@@ -114,9 +114,9 @@ The stage version is the product and `@snack-ai/cli` version. `@snack-ai/opencod
 | `0.4.0` | Explainable analytics | `next` | Experimental contracts |
 | `0.5.0` | Calibratable prediction | `next` | MVP candidate; experimental contracts |
 | `0.6.0` | **SNACK MVP** | `latest` | Upgrade-preservation baseline begins |
-| `0.7.0` | Claude Code parity | `next` | Post-MVP development |
-| `0.8.0` | Multi-client convergence | `next` | Candidate public contracts |
-| `0.9.0` | Feature freeze and public beta | `next` | 1.0 contract candidate |
+| `0.7.0` | Claude Code parity | `latest` | Post-MVP development |
+| `0.8.0` | Multi-client convergence | `latest` | Candidate public contracts |
+| `0.9.0` | Feature freeze and public beta | `latest` | 1.0 contract candidate |
 | `1.0.0-rc.N` | Required stable candidate | `next` | No feature changes |
 | `1.0.0` | First stable release | `latest` | Strict SemVer public contracts |
 
@@ -1018,11 +1018,23 @@ Strict SemVer applies:
   [docs/release/identity.md](./docs/release/identity.md). A plain `npm install
   @snack-ai/cli` therefore installs the oldest preview until `0.6.0` moves `latest`.
 - `0.6.0 MVP`: CLI is promoted to `latest`.
-- `0.7-0.9` and `1.0.0-rc.N`: publish to `next` while MVP remains `latest`.
-- `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and replaces MVP on `latest` after checksum verification.
+- `0.7-0.9`: each minor takes `latest` on release, so a plain `npm install @snack-ai/cli` gets the
+  newest supported product rather than a version that stopped being the one under development. This
+  replaced an earlier rule that held `latest` at the MVP through `0.9`; that rule left every default
+  install on a version SNACK had moved past, and the alternative it protected — never surprising an
+  installer with pre-1.0 contract churn — is served better by an explicit channel than by a stale
+  default. `0.7.0` was the first release under this rule.
+- `stable`: points at the newest release whose surface the project is willing to hold still, which
+  is `0.6.1` until 1.0. It is the channel to pin when contract churn is unacceptable, and it moves
+  only by a deliberate decision, never by a release. Pre-1.0 minors on `latest` may evolve CLI
+  flags, JSON shapes, and config/export schemas; every release from `0.6.0` forward still preserves
+  user data through supported migrations.
+- `1.0.0-rc.N`: publishes to `next`. A release candidate is not the newest supported product.
+- `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and takes `latest` from the last pre-1.0 minor after checksum verification.
 - `@snack-ai/opencode` first published its own `0.1.0` to `next` in Stage 4 rather than Stage 3; changed pre-MVP versions remain on `next`. `latest` resolves to `0.1.0`, the manually created version without provenance, for the same npm first-publication behavior described for the CLI; `next` resolves to the attested `0.1.1`.
 - the MVP-compatible OpenCode plugin version is promoted to plugin `latest` in Stage 6; later plugin development remains on `next`.
-- CLI/plugin RCs publish to each package's `next`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then both `latest` and `next` move to stable and temporary tags are removed after checksum verification.
+- CLI/plugin RCs publish to each package's `next`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then both `latest` and `next` move to it and temporary tags are removed after checksum verification. `stable` moves to `1.0.0` at that point, because from 1.0 the newest release is also the one whose contracts are held.
+- Only `latest` and `next` are set by the release workflow, on the publish itself. `stable` and any temporary tag are moved by hand with an authenticated npm session: trusted publishing authorizes a publish request and not a `dist-tag` call, which answers `E401` even for the package just published. See [docs/release/identity.md](./docs/release/identity.md).
 
 ## Quality Budgets
 
