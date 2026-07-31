@@ -1031,8 +1031,8 @@ Strict SemVer applies:
   user data through supported migrations.
 - `1.0.0-rc.N`: publishes to `next`. A release candidate is not the newest supported product.
 - `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and takes `latest` from the last pre-1.0 minor after checksum verification.
-- `@snack-ai/opencode` first published its own `0.1.0` to `next` in Stage 4 rather than Stage 3; changed pre-MVP versions remain on `next`. `latest` resolves to `0.1.0`, the manually created version without provenance, for the same npm first-publication behavior described for the CLI; `next` resolves to the attested `0.1.1`.
-- the MVP-compatible OpenCode plugin version is promoted to plugin `latest` in Stage 6; later plugin development remains on `next`.
+- `@snack-ai/opencode` first published its own `0.1.0` to `next` in Stage 4 rather than Stage 3, and `latest` resolved to that first `0.1.0` for the same npm first-publication behavior described for the CLI until Stage 6 moved it.
+- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries no `next` while there is no release candidate for it.
 - CLI/plugin RCs publish to each package's `next`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then both `latest` and `next` move to it and temporary tags are removed after checksum verification. `stable` moves to `1.0.0` at that point, because from 1.0 the newest release is also the one whose contracts are held.
 - Only `latest` and `next` are set by the release workflow, on the publish itself. `stable` and any temporary tag are moved by hand with an authenticated npm session: trusted publishing authorizes a publish request and not a `dist-tag` call, which answers `E401` even for the package just published. See [docs/release/identity.md](./docs/release/identity.md).
 

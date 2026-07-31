@@ -237,11 +237,16 @@ cannot absorb pre-1.0 contract churn.
 
 | Package | Version | `latest` | `stable` | `next` | Attestations |
 | --- | --- | --- | --- | --- | --- |
-| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | `0.7.0` | publish + SLSA provenance |
-| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | `0.1.1` | publish + SLSA provenance |
+| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | — | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | — | publish + SLSA provenance |
 
-`latest` and `stable` were both moved with `npm dist-tag add` from an authenticated session, not
-from the workflow. Trusted publishing authorizes a publish request and not a `dist-tag` call, which
-answers `E401` even for the package just published — the workflow sets a tag only through `--tag` on
-the publish itself, and it is now an input of the dispatch rather than hardcoded. `stable` is never
-set by a release: it moves by decision.
+`latest` and `stable` were both moved with `npm dist-tag add` from an authenticated session, and
+`next` was removed from both packages with `npm dist-tag rm` in the same session. Under the new
+policy `next` carries release candidates, and there is no candidate: leaving it pointing at the
+current release would have made `@next` and `@latest` the same install while implying they are
+different channels. It stays absent until the first `1.0.0-rc.N` publish recreates it.
+
+None of that came from the workflow. Trusted publishing authorizes a publish request and not a
+`dist-tag` call, which answers `E401` even for the package just published — the workflow sets a tag
+only through `--tag` on the publish itself, and it is now an input of the dispatch rather than
+hardcoded. `stable` is never set by a release: it moves by decision.
