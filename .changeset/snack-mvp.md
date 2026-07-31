@@ -210,3 +210,22 @@ created — reading files as latin1, so a canary inside a SQLite page or a backu
 utf8 replacement. New `test/resilience.test.js` covers a corrupted database, a file that is not a
 database, storage that cannot be created, an abandoned lock, an interrupted setup, a failed export,
 a purge that cannot finish, a spool segment cut mid-write, and the future-release refusal above.
+
+The two thinnest test files are filled in. `beta.js` is the numerical kernel behind every credible
+interval and had three tests; `storage.js` had seven, all covering migrations and locking rather
+than the repository itself.
+
+`beta.test.js` gains the round-trip property — feeding a quantile back through the distribution
+function must return the probability that produced it — plus monotonicity in the shape parameters,
+the distribution-function laws, extreme-but-reachable shapes, and input rejection. It also documents
+two real limits rather than papering over them: shapes are tested from 0.5 up, which is the floor
+the bundled priors can produce, and probabilities stop a thousandth from each end, a hundred times
+wider than the 0.1 and 0.9 a delivered forecast asks for. Further out a Beta turns U-shaped, the
+density becomes singular, and the search's guaranteed relative tolerance in the quantile spans
+progressively more probability, so no fixed bound holds. Ordering and finiteness are asserted out
+there instead.
+
+`storage.test.js` gains coverage of the invariants that are stated but were untested: an ingestion
+cursor never advances past writes that did not commit, a restored setup backup undoes the
+observations and not only the configuration, and re-storing the same batch converges instead of
+duplicating.
