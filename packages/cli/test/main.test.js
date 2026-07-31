@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import Database from "better-sqlite3";
@@ -151,6 +151,9 @@ test("invalid private input is neither persisted nor echoed", async () => {
 
 test("storage failure cannot commit a prepared configuration update", async () => {
   const fixture = await makeRunFixture();
+  // A plain file where the data root belongs. On macOS that root is nested under `Library`,
+  // which nothing has created yet in a fresh temporary home.
+  await mkdir(dirname(fixture.dataHome), { recursive: true, mode: 0o700 });
   await writeFile(fixture.dataHome, "not a directory", { mode: 0o600 });
 
   const exitCode = await run(
