@@ -1036,6 +1036,17 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
 }
 
 /**
+ * Aggregate the active capacity period, which every `status` run reads.
+ *
+ * The counts describe the whole period, so the aggregate is unavoidably linear in its prompts:
+ * 37 ms at 100,000, inside the 250 ms status budget with room to spare, and about ten times that
+ * at a million. A history reaches a million prompts after years of daily use, so this stays a
+ * measured ceiling rather than a problem.
+ *
+ * ponytail: full aggregate per run. Maintain incremental counters on the capacity period, or
+ * narrow the summary to a bounded window, once `status` p95 stops meeting its budget — and not
+ * before, because either change trades a simple truth for a cache that can drift.
+ *
  * @param {string} databaseFile
  * @param {string} sourceAlias
  */
