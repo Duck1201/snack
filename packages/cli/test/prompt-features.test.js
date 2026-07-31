@@ -162,3 +162,34 @@ test("categories are identical under any permutation of the same observations", 
     { numRuns: 100 },
   );
 });
+
+// categorizeHistory answers percentile queries from an incremental index instead of
+// re-sorting; it must agree exactly with the straightforward per-prompt computation.
+test("the incremental baseline agrees with re-categorizing each prompt from scratch", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.integer({ min: 0, max: 5000 }), { minLength: 1, maxLength: 120 }),
+      (tokens) => {
+        const rows = history(tokens);
+        const fast = categorizeHistory(rows);
+
+        /** @type {number[]} */
+        const baseline = [];
+        const naive = rows.map((row) => {
+          const category = categorizePromptSize(
+            { estimated_input_tokens: row.estimated_input_tokens },
+            baseline,
+          ).category;
+          baseline.push(row.estimated_input_tokens);
+          return category;
+        });
+
+        assert.deepEqual(
+          fast.map((row) => row.size_category),
+          naive,
+        );
+      },
+    ),
+    { numRuns: 150 },
+  );
+});

@@ -109,6 +109,15 @@ No ORM is used. SQL and numbered migrations remain explicit.
 
 This layout is a starting constraint, not a requirement to create one file per concept. Small cohesive behavior stays together until a real seam emerges.
 
+In practice the CLI source is flat and the layering above is a convention, not a directory
+tree. The prediction seam is spread across four pure modules that never open SQLite:
+`beta.js` (incomplete Beta function and quantiles), `prediction.js` (the weighted
+Beta-Binomial cells, hierarchical backoff, evidence gates, and risk policy),
+`prompt-features.js` (the ephemeral input analyzer and the chronological size
+categorization), and `calibration.js` (Brier score, reliability, interval coverage, and
+rolling-origin backtesting). `status.js` assembles the domain result for output, and
+`storage.js` owns every query and write behind them.
+
 Schemas, plan profiles, and migrations are shown here at the root because they are shared
 assets. Each one physically lives inside the package that consumes and publishes it, and it
 must be listed in that package's published files, or a released tarball would validate

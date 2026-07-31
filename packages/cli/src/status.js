@@ -64,7 +64,7 @@ export function createSourceStatus(
     viability: forecast.viability,
     risk: forecast.risk,
     evidence: forecast.evidence,
-    method: { id: "bayesian-pressure-band", version: "1" },
+    method: forecast.method,
     model_policy_version: forecast.model_policy_version,
     contributors: forecast.contributors,
     pressure,

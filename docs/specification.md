@@ -291,6 +291,8 @@ Before sufficient local evidence exists, SNACK emits an initial estimate based o
 
 The interval must be broad and evidence must remain `very_low`. The UI explicitly labels the method as an initial heuristic; it must not relabel a weak prior as calibrated probability.
 
+The initial method is not a separate model but the last rung of the learned model's backoff. When no eligible local observation supports a cell, the forecast is the weak prior alone and reports the method identifier `initial-generic`; once any local evidence enters, the same calculation reports `bayesian-pressure-band` and names the backoff level it used. Below the per-cell minimum, local evidence is still preferred over the prior alone — discarding an observation would misstate the history — and the resulting uncertainty is carried by the interval width and the evidence gates instead.
+
 ### 9.2 Bayesian Pressure-band Method
 
 The first learned model uses weighted Beta-Binomial outcome estimates by pressure band and prompt-size category. It is selected because it:
@@ -310,7 +312,7 @@ Every source forecast contains at least:
 - `lower`, `point`, and `upper` viability values;
 - interval coverage target;
 - risk label;
-- evidence level;
+- evidence level, with the gates that produced it and which gate capped it;
 - method identifier;
 - model/policy version;
 - active capacity period and plan-profile version;
@@ -397,8 +399,14 @@ number whose meaning has to be inferred.
 - data freshness and completeness;
 - forecast count, Brier score, and interval coverage when meaningful.
 
-Calibration metrics are reported as not available until a prediction model exists. They are
-never reported as zero.
+Calibration metrics are reported as not available until enough delivered forecasts have been
+followed by outcomes. They are never reported as zero.
+
+Live snapshot calibration and rolling-origin backtesting are reported as two separate streams,
+each with its own sample size, beside the number of prediction snapshots and the number of
+attempts that were never delivered. Because a binary outcome is never inside an interval on
+its own, empirical interval coverage is measured per reliability bucket: the observed success
+rate of a bucket is compared with the interval that bucket's forecasts published.
 
 `--verbose` may add distributions, means, additional percentiles, EWMA, per-model breakdowns, and historical bands. It must include sample sizes and avoid statistics that cannot be interpreted from the available data.
 

@@ -86,6 +86,7 @@ export const EVIDENCE_POLICY = Object.freeze({
 /**
  * @typedef {object} Forecast
  * @property {{lower: number, point: number, upper: number, coverage_target: number}} viability
+ * @property {{id: string, version: string}} method
  * @property {{label: string, policy_version: string}} risk
  * @property {{level: string, policy_version: string, gates: EvidenceGate[]}} evidence
  * @property {string} model_policy_version
@@ -272,6 +273,12 @@ export function buildForecast(input) {
   const lower = betaQuantile(tail, alpha, beta);
 
   return {
+    // A forecast the weak prior alone produced is named as the initial heuristic it is;
+    // relabelling it as the learned method would dress a prior up as a calibrated result.
+    method:
+      level === "prior"
+        ? { id: "initial-generic", version: "1" }
+        : { id: "bayesian-pressure-band", version: "1" },
     viability: {
       lower,
       point: alpha / (alpha + beta),

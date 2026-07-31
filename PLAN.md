@@ -454,6 +454,8 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 5 - Calibratable Prediction
 
 - **Release:** `0.5.0` on npm `next`
+- **Status:** Implemented (2026-07-31); **not released**. The changeset is queued and the
+  registry still holds `0.4.0` as the newest `next` version.
 - **Effort:** 5 AI-assisted waves
 **Purpose:** Replace the purely heuristic forecast with an explainable learned baseline that can be audited and calibrated.
 
@@ -505,10 +507,30 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 **Pending items resolved**
 
-- pressure-band + size-cell policy;
-- prior strength, decay, interval, risk, and evidence parameters;
-- calibration definitions and promotion gate for future models;
-- no-future-leakage categorization/backtesting behavior.
+- pressure-band + size-cell policy, recorded as `stage5-prediction-v1`: backoff runs capacity
+  period + pressure band + size category, then period + band, then the period aggregate, then
+  the weak prior alone, with a five-effective-sample minimum per cell. A cell below that
+  minimum still prefers local evidence over the prior; only a period with no eligible outcome
+  uses the prior alone, and that case reports the method as `initial-generic`;
+- prior strength, decay, interval, risk, and evidence parameters: interval coverage target
+  `0.8`, outcome decay half-life of seven days, plan-profile `prior_strength` consumed as the
+  Beta prior at viability `0.5`. Simulation evidence at 1500 trials per rate measures
+  empirical coverage of 0.911 / 0.880 / 0.863 / 0.864 for true restriction rates of
+  0.02 / 0.05 / 0.10 / 0.25, so the declared target is a floor rather than an exact claim.
+  Evidence gates (`stage5-evidence-v1`) cap the level at the weakest of sample size,
+  restriction count, backoff relevance, and ingestion completeness; risk keeps
+  `stage2-risk-v2` unchanged;
+- calibration definitions and promotion gate for future models, recorded as
+  `stage5-calibration-v1`: Brier score, 0.1-wide reliability buckets, and empirical interval
+  coverage measured per bucket against that bucket's published interval, each reported with
+  its sample size and never as zero. Live snapshots and rolling-origin backtests remain
+  separate streams;
+- no-future-leakage categorization/backtesting behavior, recorded as `stage5-category-v1`:
+  prompts are categorized in `(started_at, source order)` order against the 25th and 75th
+  percentile of earlier observations only, with a versioned generic mapping until twenty local
+  samples exist. A backtest rebuilds each forecast from the prefix that preceded it with the
+  clock set to that prompt. Property tests assert identical categories under every permutation
+  and identical past forecasts after appending future history.
 
 **Exit criteria**
 

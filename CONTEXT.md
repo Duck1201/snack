@@ -32,9 +32,29 @@ _Avoid_: Total consumption, percentage consumed
 A relative intensity measure derived from usage-profile percentiles and initially weighted by the plan profile. It is not the fraction consumed of real capacity.
 _Avoid_: Quota utilization, capacity percentage
 
+**Prediction attempt**:
+The immutable record written when a forecast is calculated for the user, carrying the interval, the risk label, the evidence level, and every policy version behind them. An attempt whose delivery was never confirmed stays an attempt: it is an operational diagnostic and never counts as a forecast the user received.
+_Avoid_: Prediction log, forecast history, cached prediction
+
 **Prediction snapshot**:
 A delivery-confirmed immutable record of an estimate emitted for the user, including interval, evidence, method, version, and time. It allows comparison with a later outcome without recalculating the past using future information.
 _Avoid_: Current prediction, recalculated result
+
+**Evidence level**:
+How much the local history supports a forecast, on the ladder `very_low`, `low`, `moderate`, `high`. Composite versioned gates each name the highest level they support, and the weakest gate caps the result, so a long history without a single observed restriction cannot look strong.
+_Avoid_: Confidence, accuracy, certainty
+
+**Risk label**:
+A `low`, `elevated`, or `high` reading derived from the lower bound of the viability interval under a versioned threshold policy, never from the point estimate. A wide interval therefore reads conservatively. It is reported beside the evidence level, never merged with it.
+_Avoid_: Alert level, severity, confidence
+
+**Prompt size category**:
+A `small`, `typical`, or `large` classification of a prompt relative to the user's own history, derived from allowlisted non-semantic features. It is a rebuildable projection: each prompt is categorized using only observations that started earlier, and a versioned generic mapping covers the window before a personal baseline exists.
+_Avoid_: Complexity, difficulty, prompt weight
+
+**Calibration**:
+The agreement between what forecasts claimed and what later happened, reported as a Brier score, reliability by forecast bucket, and empirical interval coverage, always beside the sample size behind them. Forecasts delivered to the user and forecasts replayed from history are two separate streams and are never combined into one figure.
+_Avoid_: Accuracy, hit rate, model score
 
 **Prospective analysis**:
 Local, ephemeral processing of an unsent prompt's text to derive an allowlisted non-semantic feature vector and size category. The text is discarded and never enters usage records, logs, the spool, or prediction snapshots.

@@ -1411,12 +1411,38 @@ function buildCalibrationReport(databaseFile, alias, planProfile) {
 }
 
 /**
+ * State the same calibration facts the JSON document carries, in one line.
+ *
+ * A score without its sample size invites over-reading, so both always travel together,
+ * and the live and backtest streams are never merged into one number.
+ *
+ * @param {ReturnType<typeof buildCalibrationReport>} calibration
+ * @returns {string}
+ */
+function describeCalibration(calibration) {
+  const stream = (
+    /** @type {{status: string, brier: {value: number | null, sample_size: number}, interval: {coverage: number | null}}} */ report,
+  ) =>
+    report.status === "not_available" || report.brier.value === null
+      ? "not available"
+      : `brier ${report.brier.value.toFixed(3)} (sample ${report.brier.sample_size}` +
+        `${report.interval.coverage === null ? "" : `, coverage ${report.interval.coverage.toFixed(2)}`})`;
+  return (
+    `${calibration.snapshots} snapshots, ${calibration.undelivered_attempts} undelivered;` +
+    ` live ${stream(calibration.live)};` +
+    ` backtest ${stream(calibration.backtest)} over ${calibration.backtest.forecasts} forecasts;` +
+    ` policy ${calibration.policy_version}.`
+  );
+}
+
+/**
  * @param {ReturnType<typeof buildSourceStats>} report
  * @param {boolean} verbose
  */
 function renderStats(report, verbose) {
   let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
   text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); trend ${report.pressure.trend.status}.\n`;
+  text += `  calibration: ${describeCalibration(report.calibration)}\n`;
   for (const horizon of report.horizons) {
     const restrictions = Object.entries(horizon.restrictions.by_class);
     const tokens = Object.entries(horizon.dimensions)

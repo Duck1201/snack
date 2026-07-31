@@ -2360,3 +2360,109 @@ test("stats report a live Brier score once forecasts precede outcomes", async ()
   assert.equal(calibration.live.reliability.length, 1);
   assert.equal(calibration.live.reliability[0].sample_size, 1);
 });
+
+test("human stats describe the same calibration the JSON document reports", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  executeOpenCodeSql(
+    fixture.options.env.OPENCODE_DB,
+    insertOpenCodePrompt("parity-1", Date.parse("2026-01-02T04:00:00.000Z")),
+  );
+  fixture.options.now = new Date("2026-01-02T05:00:00.000Z");
+  await run(["node", "snack", "sync", "--source", "personal-anthropic", "--json"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const { calibration } = JSON.parse(fixture.stdout.value).data;
+  fixture.stdout.value = "";
+  await run(["node", "snack", "stats", "--source", "personal-anthropic"], fixture.options);
+  const human = fixture.stdout.value;
+
+  // Both renderings must state the same facts: how many snapshots exist, what the live
+  // score is with its sample size, and that backtesting is a separate stream.
+  assert.match(human, /calibration/iu);
+  assert.match(human, new RegExp(`${calibration.snapshots} snapshot`, "u"));
+  assert.match(human, new RegExp(`brier ${calibration.live.brier.value.toFixed(3)}`, "u"));
+  assert.match(human, new RegExp(`sample ${calibration.live.brier.sample_size}`, "u"));
+  assert.match(human, /backtest/iu);
+});
+
+test("high risk and very low evidence still exit zero", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  const exitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(document.data.risk.label, "high");
+  assert.equal(document.data.evidence.level, "very_low");
+  assert.equal(exitCode, 0);
+});
+
+test("prediction attempts, deliveries, and evaluations retain no prompt content", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  const promptFile = join(fixture.root, "canary-prompt.txt");
+  await writeFile(promptFile, Object.values(privacyCanaries).join("\n"), { mode: 0o600 });
+
+  await run(
+    [
+      "node",
+      "snack",
+      "status",
+      "--source",
+      "personal-anthropic",
+      "--no-sync",
+      "--prompt-file",
+      promptFile,
+      "--json",
+    ],
+    fixture.options,
+  );
+  executeOpenCodeSql(
+    fixture.options.env.OPENCODE_DB,
+    insertOpenCodePrompt("canary-1", Date.parse("2026-01-02T04:00:00.000Z")),
+  );
+  fixture.options.now = new Date("2026-01-02T05:00:00.000Z");
+  await run(["node", "snack", "sync", "--source", "personal-anthropic", "--json"], fixture.options);
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--verbose", "--json"],
+    fixture.options,
+  );
+
+  const database = new Database(fixture.paths.databaseFile, { readonly: true });
+  let stored = "";
+  try {
+    for (const table of ["prediction_attempt", "prediction_delivery", "prediction_evaluation"]) {
+      stored += JSON.stringify(database.prepare(`SELECT * FROM ${table}`).all());
+    }
+    assert.ok(stored.includes("stage5-prediction-v1"), "the attempt table must not be empty");
+  } finally {
+    database.close();
+  }
+
+  for (const canary of Object.values(privacyCanaries)) {
+    const pattern = new RegExp(String(canary), "u");
+    assert.doesNotMatch(stored, pattern);
+    assert.doesNotMatch(fixture.stdout.value, pattern);
+    assert.doesNotMatch(await readTree(fixture.dataHome), pattern);
+  }
+});

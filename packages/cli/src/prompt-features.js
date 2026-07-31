@@ -104,27 +104,121 @@ export const CATEGORY_POLICY = Object.freeze({
 export function categorizePromptSize(features, baseline) {
   const tokens = features.estimated_input_tokens;
   if (baseline.length < CATEGORY_POLICY.minimum_baseline_samples) {
-    return {
-      category:
-        tokens < CATEGORY_POLICY.generic_small_tokens
-          ? "small"
-          : tokens >= CATEGORY_POLICY.generic_large_tokens
-            ? "large"
-            : "typical",
-      baseline_kind: "generic",
-      baseline_sample: baseline.length,
-      policy_version: CATEGORY_POLICY.version,
-    };
+    return genericCategory(tokens, baseline.length);
   }
 
   const sorted = [...baseline].sort((left, right) => left - right);
-  const small = percentile(sorted, CATEGORY_POLICY.small_percentile);
-  const large = percentile(sorted, CATEGORY_POLICY.large_percentile);
   return {
-    category: tokens <= small ? "small" : tokens >= large ? "large" : "typical",
+    category: sizeAgainstCuts(
+      tokens,
+      percentile(sorted, CATEGORY_POLICY.small_percentile),
+      percentile(sorted, CATEGORY_POLICY.large_percentile),
+    ),
     baseline_kind: "local",
     baseline_sample: baseline.length,
     policy_version: CATEGORY_POLICY.version,
+  };
+}
+
+/**
+ * The versioned generic mapping, used only until a personal baseline exists.
+ *
+ * @param {number} tokens
+ * @param {number} sample
+ * @returns {SizeCategory}
+ */
+function genericCategory(tokens, sample) {
+  return {
+    category:
+      tokens < CATEGORY_POLICY.generic_small_tokens
+        ? "small"
+        : tokens >= CATEGORY_POLICY.generic_large_tokens
+          ? "large"
+          : "typical",
+    baseline_kind: "generic",
+    baseline_sample: sample,
+    policy_version: CATEGORY_POLICY.version,
+  };
+}
+
+/**
+ * @param {number} tokens
+ * @param {number} smallCut
+ * @param {number} largeCut
+ * @returns {"small" | "typical" | "large"}
+ */
+function sizeAgainstCuts(tokens, smallCut, largeCut) {
+  if (tokens <= smallCut) return "small";
+  if (tokens >= largeCut) return "large";
+  return "typical";
+}
+
+/**
+ * A growing multiset of token counts that answers percentile queries.
+ *
+ * Categorizing a history asks for the 25th and 75th percentile of everything seen so far,
+ * once per prompt. Re-sorting the baseline each time is O(n^2 log n) and took 274 seconds
+ * for 100,000 prompts; a Fenwick tree over the pre-known value set answers each query in
+ * O(log n) and returns exactly the same R-7 percentiles.
+ *
+ * @param {number[]} allValues Every value that will ever be inserted.
+ */
+function createPercentileIndex(allValues) {
+  const sortedValues = [...new Set(allValues)].sort((left, right) => left - right);
+  /** @type {Map<number, number>} */
+  const rankOf = new Map(sortedValues.map((value, index) => [value, index + 1]));
+  const tree = new Float64Array(sortedValues.length + 1);
+  let size = 0;
+
+  /** @param {number} rank */
+  function add(rank) {
+    for (let index = rank; index < tree.length; index += index & -index) {
+      tree[index] = (tree[index] ?? 0) + 1;
+    }
+    size += 1;
+  }
+
+  /**
+   * Value of the k-th smallest element, zero-based.
+   *
+   * @param {number} k
+   * @returns {number}
+   */
+  function select(k) {
+    let position = 0;
+    let remaining = k + 1;
+    for (let step = 1 << (31 - Math.clz32(tree.length)); step > 0; step >>= 1) {
+      const next = position + step;
+      if (next < tree.length && (tree[next] ?? 0) < remaining) {
+        position = next;
+        remaining -= tree[next] ?? 0;
+      }
+    }
+    return sortedValues[position] ?? 0;
+  }
+
+  return {
+    get size() {
+      return size;
+    },
+    /** @param {number} value */
+    insert(value) {
+      const rank = rankOf.get(value);
+      if (rank !== undefined) add(rank);
+    },
+    /**
+     * R-7 percentile, matching the analytics module's definition.
+     *
+     * @param {number} fraction
+     * @returns {number}
+     */
+    percentile(fraction) {
+      const position = (size - 1) * fraction;
+      const low = Math.floor(position);
+      const weight = position - low;
+      const lowValue = select(low);
+      return weight === 0 ? lowValue : lowValue + weight * (select(low + 1) - lowValue);
+    },
   };
 }
 
@@ -147,13 +241,28 @@ export function categorizeHistory(rows) {
       left.prompt_execution_id - right.prompt_execution_id,
   );
 
-  /** @type {number[]} */
-  const baseline = [];
+  const baseline = createPercentileIndex(
+    ordered.flatMap((row) =>
+      row.estimated_input_tokens === null ? [] : [row.estimated_input_tokens],
+    ),
+  );
   /** @type {string | null} */
   let baselineAsOf = null;
   return ordered.map((row) => {
-    const tokens = row.estimated_input_tokens;
-    const sized = categorizePromptSize({ estimated_input_tokens: tokens ?? 0 }, baseline);
+    const tokens = row.estimated_input_tokens ?? 0;
+    const sized =
+      baseline.size < CATEGORY_POLICY.minimum_baseline_samples
+        ? genericCategory(tokens, baseline.size)
+        : {
+            category: sizeAgainstCuts(
+              tokens,
+              baseline.percentile(CATEGORY_POLICY.small_percentile),
+              baseline.percentile(CATEGORY_POLICY.large_percentile),
+            ),
+            baseline_kind: /** @type {"local"} */ ("local"),
+            baseline_sample: baseline.size,
+            policy_version: CATEGORY_POLICY.version,
+          };
     const categorized = {
       ...row,
       size_category: sized.category,
@@ -161,8 +270,8 @@ export function categorizeHistory(rows) {
       category_baseline_as_of: baselineAsOf,
     };
     // An unknown token count stays unknown rather than becoming a zero-sized sample.
-    if (tokens !== null) {
-      baseline.push(tokens);
+    if (row.estimated_input_tokens !== null) {
+      baseline.insert(row.estimated_input_tokens);
       baselineAsOf = row.started_at;
     }
     return categorized;

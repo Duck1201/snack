@@ -315,3 +315,16 @@ test("backing off never reports the observations of a narrower cell as its own",
   assert.equal(result.contributors.cell.restrictions, 1);
   assert.equal(result.contributors.cell.successes, PREDICTION_POLICY.minimum_cell_samples);
 });
+
+test("a prior-only forecast names itself an initial heuristic, not the learned method", () => {
+  const priorOnly = forecast({ outcomes: [] });
+  const learned = forecast({
+    outcomes: outcomes(PREDICTION_POLICY.minimum_cell_samples + 1, "moderate", "typical"),
+  });
+
+  // Spec 9.1: a weak prior must never be relabelled as a calibrated probability, so the
+  // method identifier itself changes when nothing local supports the estimate.
+  assert.equal(priorOnly.contributors.backoff_level, "prior");
+  assert.deepEqual(priorOnly.method, { id: "initial-generic", version: "1" });
+  assert.deepEqual(learned.method, { id: "bayesian-pressure-band", version: "1" });
+});
