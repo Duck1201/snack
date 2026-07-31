@@ -562,7 +562,7 @@ export async function run(argv, options = {}) {
     .description("show observed usage, data quality, and pressure statistics")
     .option("--source <alias>", "capacity-source alias")
     .option("--horizon <duration>", "one configured analysis horizon")
-    .option("--verbose", "add per-model detail and extra percentiles")
+    .option("--verbose", "add per-dimension and per-model detail")
     .option("--json", "emit one versioned JSON document")
     .action(async function stats(commandOptions) {
       const current = await readConfig(paths.configFile);
@@ -2100,6 +2100,17 @@ function renderStats(report, verbose) {
         text += `    ${dimension}: ${"value" in value ? value.value : "unknown"} ${value.unit} (sample ${value.sample_size}, missing ${value.missing}).\n`;
       }
       text += `    cost: sample ${horizon.cost.sample_size}, missing ${horizon.cost.missing}.\n`;
+      for (const entry of horizon.by_model) {
+        const tokensByModel = Object.entries(entry.dimensions)
+          .map(([dimension, value]) => `${dimension} ${"value" in value ? value.value : "unknown"}`)
+          .join(", ");
+        const costByModel = Object.entries(entry.cost.by_currency)
+          .map(([currency, amount]) => `${currency} ${amount}`)
+          .join(", ");
+        text +=
+          `    model ${entry.model}: ${entry.slices.count} ${entry.slices.unit};` +
+          ` ${tokensByModel}; cost ${costByModel === "" ? "unknown" : costByModel}.\n`;
+      }
     }
   }
   return text;

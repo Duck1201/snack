@@ -2540,3 +2540,48 @@ test("a forecast is evaluated even when the user never syncs again", async () =>
   assert.equal(calibration.live.brier.sample_size, 1);
   assert.equal(calibration.live.status, "ok");
 });
+
+test("verbose stats break usage down by model, as the flag promises", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  fixture.stdout.value = "";
+
+  const exitCode = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--verbose"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, 0);
+  // `--verbose` advertises per-model detail; before this it only repeated the dimensions.
+  assert.match(
+    fixture.stdout.value,
+    /model claude-sonnet: 1 usage slices; input_tokens 100, output_tokens 25/u,
+  );
+});
+
+test("verbose stats report per-model usage in the JSON contract too", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  fixture.stdout.value = "";
+
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const horizon = JSON.parse(fixture.stdout.value).data.horizons.find(
+    (/** @type {{horizon: string}} */ entry) => entry.horizon === "PT5H",
+  );
+
+  assert.deepEqual(
+    horizon.by_model.map((/** @type {{model: string}} */ entry) => entry.model),
+    ["claude-sonnet"],
+  );
+  assert.equal(horizon.by_model[0].slices.count, 1);
+  assert.equal(horizon.by_model[0].slices.unit, "usage slices");
+  assert.equal(horizon.by_model[0].dimensions.input_tokens.value, 100);
+  assert.deepEqual(horizon.by_model[0].cost.by_currency, { unknown: "0.003" });
+});

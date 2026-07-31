@@ -106,6 +106,7 @@ export function summarizeUsageProfile(rows, restrictions, options) {
       TOKEN_DIMENSIONS.map((dimension) => [dimension, summarizeTokenDimension(slices, dimension)]),
     ),
     cost: summarizeCost(slices),
+    by_model: summarizeByModel(slices),
     duration: summarizeDuration(rows),
     restrictions: {
       by_class: countRestrictionClasses(restrictions),
@@ -502,6 +503,35 @@ function summarizeDuration(rows) {
   return observed.length === 0
     ? { status: "unknown", ...shared }
     : { p50: percentile(observed, 0.5), p90: percentile(observed, 0.9), ...shared };
+}
+
+/**
+ * Split observed usage by the model that produced it.
+ *
+ * The unit is usage slices rather than prompts, because one prompt can span several models and
+ * counting it once per model would report more prompts than were made. A slice whose model the
+ * source never named is grouped under an explicit `unknown`, the same way an unnamed currency
+ * is kept rather than dropped.
+ *
+ * @param {import("./storage.js").UsageSliceRow[]} slices
+ */
+function summarizeByModel(slices) {
+  /** @type {Map<string, import("./storage.js").UsageSliceRow[]>} */
+  const groups = new Map();
+  for (const slice of slices) {
+    const model = slice.model ?? "unknown";
+    groups.set(model, [...(groups.get(model) ?? []), slice]);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([model, group]) => ({
+      model,
+      slices: { count: group.length, unit: "usage slices" },
+      dimensions: Object.fromEntries(
+        TOKEN_DIMENSIONS.map((dimension) => [dimension, summarizeTokenDimension(group, dimension)]),
+      ),
+      cost: summarizeCost(group),
+    }));
 }
 
 /**

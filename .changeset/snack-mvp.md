@@ -174,3 +174,18 @@ reassurance about the one situation that deserves it least.
 `TREND_POLICY` is versioned separately as `stage6-trend-v1`. `ANALYTICS_POLICY` is stamped onto
 every stored prediction attempt, so bumping it for something that does not affect a forecast would
 put a false signal into the audit trail permanently.
+
+`snack stats --verbose` delivers the per-model detail its description promised. The flag advertised
+"per-model detail and extra percentiles" while only repeating the dimensions it had already printed.
+
+Each horizon now carries a `by_model` breakdown, in the human output under `--verbose` and in the
+JSON contract unconditionally. It counts usage slices rather than prompts, because one prompt can
+span several models and counting it once per model would report more prompts than were made. A slice
+whose model the source never named is grouped under an explicit `unknown`, the same way an unnamed
+currency is kept rather than dropped, and the per-model figures reconcile with the horizon totals.
+The breakdown reuses the same summarizers as the horizon, so every figure keeps its unit, sample
+size, and missing count instead of totalling into something that looks complete.
+
+No new query: the usage slices were already read for the horizon totals.
+
+The flag description now matches what it does.

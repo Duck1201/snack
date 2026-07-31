@@ -398,6 +398,9 @@ horizon it shows:
 - observed cost per currency, totalled in exact decimal arithmetic and never converted between currencies; a source that reports a cost without naming a currency is grouped under an explicit unknown currency rather than dropped;
 - median and p90 duration;
 - time-decayed effective sample size over eligible outcomes;
+- the same token dimensions and cost broken down by model, which `--verbose` also renders.
+
+The per-model breakdown counts usage slices rather than prompts, because one prompt can span several models and counting it once per model would report more prompts than were made. A slice whose model the source never named is grouped under an explicit `unknown`, the same way an unnamed currency is kept rather than dropped, and the per-model totals reconcile with the horizon totals.
 
 Every reported statistic carries its unit and its sample size. A statistic is never a bare
 number whose meaning has to be inferred.

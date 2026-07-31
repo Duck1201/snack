@@ -1189,3 +1189,91 @@ test("simulation: a usage trend stays steady on stationary usage and rises on a 
     );
   }
 });
+
+test("a usage profile breaks usage down by model without losing the unknowns", () => {
+  const rows = [
+    {
+      prompt_execution_id: 1,
+      capacity_period_id: 1,
+      started_at: "2026-01-02T01:00:00.000Z",
+      completed_at: "2026-01-02T01:00:05.000Z",
+      duration_ms: 5000,
+      outcome: "success",
+      slices: [
+        sliceOf({ model: "sonnet", input_tokens: 100, output_tokens: 20, cost_decimal: "0.003" }),
+        sliceOf({ model: "haiku", input_tokens: 10, output_tokens: 5, cost_decimal: "0.0001" }),
+      ],
+    },
+    {
+      prompt_execution_id: 2,
+      capacity_period_id: 1,
+      started_at: "2026-01-02T02:00:00.000Z",
+      completed_at: "2026-01-02T02:00:05.000Z",
+      duration_ms: 5000,
+      outcome: "success",
+      slices: [
+        sliceOf({ model: "sonnet", input_tokens: 300, output_tokens: null, cost_decimal: null }),
+        sliceOf({ model: null, input_tokens: 7, output_tokens: 1, cost_decimal: "0.5" }),
+      ],
+    },
+  ];
+
+  const profile = summarizeUsageProfile(rows, [], {
+    horizon: "PT5H",
+    window: { from: "2026-01-02T00:00:00.000Z", to: "2026-01-02T05:00:00.000Z" },
+    now: new Date("2026-01-02T05:00:00.000Z"),
+  });
+  const byModel = Object.fromEntries(profile.by_model.map((entry) => [entry.model, entry]));
+
+  // A prompt can span several models, so the unit is usage slices rather than prompts.
+  assert.deepEqual(Object.keys(byModel).sort(), ["haiku", "sonnet", "unknown"]);
+  assert.equal(byModel.sonnet?.slices.count, 2);
+  assert.equal(byModel.sonnet?.slices.unit, "usage slices");
+  assert.deepEqual(byModel.sonnet?.dimensions.input_tokens, {
+    value: 400,
+    unit: "tokens",
+    sample_size: 2,
+    missing: 0,
+    complete: true,
+  });
+  // A model that reported one of two output counts says so instead of totalling to a number
+  // that looks complete.
+  assert.deepEqual(byModel.sonnet?.dimensions.output_tokens, {
+    value: 20,
+    unit: "tokens",
+    sample_size: 1,
+    missing: 1,
+    complete: false,
+  });
+  assert.deepEqual(byModel.sonnet?.cost.by_currency, { unknown: "0.003" });
+  // A slice whose model the source never named is grouped explicitly, never dropped.
+  assert.equal(byModel.unknown?.slices.count, 1);
+  assert.deepEqual(byModel.unknown?.cost.by_currency, { unknown: "0.5" });
+  // The per-model totals must still add up to the profile totals.
+  const inputTokens = (/** @type {unknown} */ dimension) =>
+    Number(/** @type {{value?: number}} */ (dimension)?.value ?? 0);
+  assert.equal(
+    profile.by_model.reduce(
+      (total, entry) => total + inputTokens(entry.dimensions.input_tokens),
+      0,
+    ),
+    inputTokens(profile.dimensions.input_tokens),
+  );
+});
+
+/** @param {Partial<import("../src/storage.js").UsageSliceRow>} overrides */
+function sliceOf(overrides) {
+  return {
+    source_slice_id: `slice-${Math.random()}`,
+    provider: "anthropic",
+    model: null,
+    input_tokens: null,
+    output_tokens: null,
+    reasoning_tokens: null,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    cost_decimal: null,
+    currency: null,
+    ...overrides,
+  };
+}
