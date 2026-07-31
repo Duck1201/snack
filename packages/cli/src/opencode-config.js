@@ -14,7 +14,7 @@ const packageName = "@snack-ai/opencode";
  * specifier. Inspection deliberately does not require an exact match — see
  * `inspectPluginRegistration`.
  */
-export const pluginPackageSpec = `${packageName}@0.1.1`;
+export const pluginPackageSpec = `${packageName}@0.1.2`;
 const packageSpec = pluginPackageSpec;
 
 /**
