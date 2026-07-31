@@ -1786,6 +1786,7 @@ test("stats describes each configured analysis horizon", async () => {
     successes: 1,
     restrictions: 0,
     excluded: 0,
+    unit: "prompts",
   });
 });
 

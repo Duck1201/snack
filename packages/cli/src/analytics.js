@@ -107,13 +107,22 @@ export function summarizeUsageProfile(rows, restrictions, options) {
     ),
     cost: summarizeCost(slices),
     duration: summarizeDuration(rows),
-    restrictions_by_class: countRestrictionClasses(restrictions),
+    restrictions: {
+      by_class: countRestrictionClasses(restrictions),
+      unit: "restrictions",
+      sample_size: restrictions.length,
+    },
     freshness: summarizeFreshness(rows, now),
-    effective_sample_size: effectiveSampleSize(
-      eligible.map((row) => row.started_at),
-      now,
-      halfLifeSeconds,
-    ),
+    effective_sample_size: {
+      value: effectiveSampleSize(
+        eligible.map((row) => row.started_at),
+        now,
+        halfLifeSeconds,
+      ),
+      unit: "prompts",
+      sample_size: eligible.length,
+      half_life_seconds: halfLifeSeconds,
+    },
     policy_version: ANALYTICS_POLICY.version,
     prompts: {
       count: rows.length,
@@ -121,6 +130,7 @@ export function summarizeUsageProfile(rows, restrictions, options) {
       successes,
       restrictions: restricted,
       excluded,
+      unit: "prompts",
     },
   };
 }

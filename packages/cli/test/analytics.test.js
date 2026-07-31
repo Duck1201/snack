@@ -207,6 +207,7 @@ test("summarizeUsageProfile separates eligible outcomes from excluded ones", asy
     successes: 2,
     restrictions: 1,
     excluded: 2,
+    unit: "prompts",
   });
   assert.equal(profile.horizon, "PT5H");
   assert.deepEqual(profile.window, window);
@@ -384,7 +385,7 @@ test("summarizeUsageProfile groups observed restrictions by explicit class", asy
     { horizon: "PT5H", window },
   );
 
-  assert.deepEqual(profile.restrictions_by_class, { plan_limit: 1, rate_limit: 2 });
+  assert.deepEqual(profile.restrictions.by_class, { plan_limit: 1, rate_limit: 2 });
 });
 
 test("summarizeUsageProfile totals observed cost per currency without converting", async () => {
@@ -460,7 +461,7 @@ test("summarizeUsageProfile reports freshness and decayed eligible sample size",
   // Freshness follows the newest observation of any outcome.
   assert.deepEqual(profile.freshness, { as_of: "2026-01-02T03:00:00.000Z", age_seconds: 245 });
   // Only eligible prompts decay into evidence: 0.5 (one hour old) + 0.25 (two hours old).
-  assert.equal(profile.effective_sample_size, 0.75);
+  assert.equal(profile.effective_sample_size.value, 0.75);
 });
 
 test("a late-arriving prompt yields the same profile as in-order ingestion", async () => {
@@ -896,4 +897,87 @@ test("observed cost without a reported currency is kept under an unknown currenc
     missing: 0,
     complete: true,
   });
+});
+
+test("every reported statistic declares its unit and sample size", async () => {
+  const { databaseFile, seed } = await makeSeededDatabase();
+  seed([
+    { id: 1, started_at: "2026-01-02T01:00:00.000Z", duration_ms: 100 },
+    {
+      id: 2,
+      started_at: "2026-01-02T01:10:00.000Z",
+      outcome: "restricted",
+      restrictions: [{ class: "rate_limit" }],
+    },
+    { id: 3, started_at: "2026-01-02T01:20:00.000Z", outcome: "excluded" },
+  ]);
+  const window = { from: "2026-01-01T22:04:05.000Z", to: "2026-01-02T03:04:05.000Z" };
+
+  const profile = summarizeUsageProfile(
+    readUsageWindowRows(databaseFile, "work", window),
+    readRestrictionWindowRows(databaseFile, "work", window),
+    { horizon: "PT5H", window, now: new Date("2026-01-02T03:04:05.000Z"), halfLifeSeconds: 3600 },
+  );
+
+  assert.equal(profile.prompts.unit, "prompts");
+  assert.deepEqual(profile.restrictions, {
+    by_class: { rate_limit: 1 },
+    unit: "restrictions",
+    sample_size: 1,
+  });
+  assert.equal(profile.effective_sample_size.unit, "prompts");
+  assert.equal(profile.effective_sample_size.sample_size, 2);
+  assert.ok(profile.effective_sample_size.value < 2);
+
+  // No statistic may be a bare number without a declared unit.
+  for (const [name, value] of Object.entries(profile)) {
+    if (typeof value === "number") {
+      assert.fail(`${name} is a bare number without a unit`);
+    }
+  }
+});
+
+test("pressure contributors reproduce from the published policy", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.double({ min: 0, max: 1000, noNaN: true }), { minLength: 3, maxLength: 40 }),
+      fc.double({ min: 0, max: 1000, noNaN: true }),
+      fc.double({ min: 0, max: 1000, noNaN: true }),
+      fc.double({ min: 0, max: 500, noNaN: true }),
+      (baseline, observedPrompts, observedTokens, ess) => {
+        const pressure = computeUsagePressure({
+          current: { prompts: observedPrompts, input_tokens: observedTokens },
+          baselines: { prompts: baseline, input_tokens: baseline },
+          profileWeights: { prompts: 3, input_tokens: 1 },
+          effectiveSampleSize: ess,
+        });
+
+        // The score is exactly the sum of the published contributions.
+        const summed = pressure.contributors.reduce(
+          (total, contributor) => total + (contributor.contribution ?? 0),
+          0,
+        );
+        assert.ok(
+          Math.abs(summed - /** @type {number} */ (pressure.score)) < 1e-9,
+          `contributions ${summed} do not reproduce score ${pressure.score}`,
+        );
+
+        // The band follows from the score and the boundaries the policy publishes,
+        // independently of how the code classified it.
+        const { moderate, elevated, high } = ANALYTICS_POLICY.pressure_bands;
+        const score = /** @type {number} */ (pressure.score);
+        const expected =
+          score < moderate
+            ? "low"
+            : score < elevated
+              ? "moderate"
+              : score < high
+                ? "elevated"
+                : "high";
+        assert.equal(pressure.band, expected);
+        assert.equal(pressure.policy_version, ANALYTICS_POLICY.version);
+      },
+    ),
+    { numRuns: 200 },
+  );
 });

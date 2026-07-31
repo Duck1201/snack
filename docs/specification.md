@@ -387,9 +387,12 @@ horizon it shows:
 - prompt count and eligible/excluded outcomes;
 - observed restrictions by explicit class;
 - token dimensions as separate values, each with its own sample size and missing count;
-- observed cost per currency, totalled in exact decimal arithmetic and never converted between currencies;
+- observed cost per currency, totalled in exact decimal arithmetic and never converted between currencies; a source that reports a cost without naming a currency is grouped under an explicit unknown currency rather than dropped;
 - median and p90 duration;
 - time-decayed effective sample size over eligible outcomes;
+
+Every reported statistic carries its unit and its sample size. A statistic is never a bare
+number whose meaning has to be inferred.
 - current pressure and trend;
 - data freshness and completeness;
 - forecast count, Brier score, and interval coverage when meaningful.

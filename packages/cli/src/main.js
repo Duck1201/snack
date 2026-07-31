@@ -1131,7 +1131,7 @@ function summarizeWindow(rows, now) {
       values[dimension] = summary.value;
     }
   }
-  return { values, effectiveSampleSize: profile.effective_sample_size };
+  return { values, effectiveSampleSize: profile.effective_sample_size.value };
 }
 
 /**
@@ -1185,7 +1185,7 @@ function renderStats(report, verbose) {
   let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
   text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); trend ${report.pressure.trend.status}.\n`;
   for (const horizon of report.horizons) {
-    const restrictions = Object.entries(horizon.restrictions_by_class);
+    const restrictions = Object.entries(horizon.restrictions.by_class);
     const tokens = Object.entries(horizon.dimensions)
       .map(([dimension, value]) => `${dimension} ${"value" in value ? value.value : "unknown"}`)
       .join(", ");
@@ -1199,7 +1199,7 @@ function renderStats(report, verbose) {
       ` tokens ${tokens};` +
       ` cost ${cost === "" ? "unknown" : cost};` +
       ` duration ${"p50" in horizon.duration ? `p50 ${horizon.duration.p50}ms p90 ${horizon.duration.p90}ms` : "unknown"};` +
-      ` effective sample ${horizon.effective_sample_size.toFixed(2)};` +
+      ` effective sample ${horizon.effective_sample_size.value.toFixed(2)} ${horizon.effective_sample_size.unit};` +
       ` as_of ${horizon.freshness.as_of ?? "unknown"}.\n`;
     if (verbose) {
       for (const [dimension, value] of Object.entries(horizon.dimensions)) {
