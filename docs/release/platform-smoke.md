@@ -13,6 +13,10 @@ npm run check
 npm run pack:smoke
 ```
 
+`pack:smoke` also asserts that the native SQLite binding came from a published prebuild rather than
+a local source compile; the prebuild coverage behind that gate is recorded in
+[native-sqlite.md](./native-sqlite.md).
+
 ## Stage 1
 
 WSL gate: passed

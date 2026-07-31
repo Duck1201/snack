@@ -64,6 +64,29 @@ export function resolveOpenCodeDatabase(options = {}) {
 }
 
 /**
+ * Open OpenCode's own database read-only and query-only.
+ *
+ * Every reason an open can fail — no OpenCode installation, a missing data directory, a file
+ * SNACK may not read — is the same fact to a user: the source is unavailable. better-sqlite3
+ * reports those as different native error types, so they are classified once, here, instead of
+ * reaching the command layer as an unexplained internal failure. The message names no path.
+ *
+ * @param {string} databaseFile
+ */
+function openSource(databaseFile) {
+  try {
+    const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+    database.pragma("query_only = ON");
+    return database;
+  } catch {
+    throw new SnackError(
+      "OpenCode history is unavailable; its database could not be opened. Install OpenCode, or set OPENCODE_DB to an existing OpenCode database.",
+      { code: ExitCode.unavailable, reason: "source_unavailable" },
+    );
+  }
+}
+
+/**
  * Create the internal OpenCode source-adapter port.
  *
  * @param {{databaseFile: string}} options
@@ -71,12 +94,8 @@ export function resolveOpenCodeDatabase(options = {}) {
 export function createOpenCodeAdapter(options) {
   return {
     detect() {
-      const database = new Database(options.databaseFile, {
-        readonly: true,
-        fileMustExist: true,
-      });
+      const database = openSource(options.databaseFile);
       try {
-        database.pragma("query_only = ON");
         const versions = /** @type {{version: string}[]} */ (
           database.prepare("SELECT DISTINCT version FROM session ORDER BY version").all()
         ).map((row) => row.version);
@@ -86,12 +105,8 @@ export function createOpenCodeAdapter(options) {
       }
     },
     fingerprint() {
-      const database = new Database(options.databaseFile, {
-        readonly: true,
-        fileMustExist: true,
-      });
+      const database = openSource(options.databaseFile);
       try {
-        database.pragma("query_only = ON");
         const supported = hasSupportedStructure(database);
         return {
           adapter: "opencode-sqlite",
@@ -123,12 +138,8 @@ export function createOpenCodeAdapter(options) {
       }
     },
     readAll() {
-      const database = new Database(options.databaseFile, {
-        readonly: true,
-        fileMustExist: true,
-      });
+      const database = openSource(options.databaseFile);
       try {
-        database.pragma("query_only = ON");
         if (!hasSupportedStructure(database)) {
           throw new SnackError("The OpenCode database fingerprint is unsupported.", {
             code: ExitCode.unavailable,
@@ -142,12 +153,8 @@ export function createOpenCodeAdapter(options) {
     },
     /** @param {{time_updated: number, message_id: string} | null} cursor */
     readSince(cursor) {
-      const database = new Database(options.databaseFile, {
-        readonly: true,
-        fileMustExist: true,
-      });
+      const database = openSource(options.databaseFile);
       try {
-        database.pragma("query_only = ON");
         if (!hasSupportedStructure(database)) {
           throw new SnackError("The OpenCode database fingerprint is unsupported.", {
             code: ExitCode.unavailable,

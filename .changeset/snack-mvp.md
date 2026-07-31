@@ -229,3 +229,13 @@ there instead.
 cursor never advances past writes that did not commit, a restored setup backup undoes the
 observations and not only the configuration, and re-storing the same batch converges instead of
 duplicating.
+
+`snack setup opencode` on a machine without OpenCode reported `internal_error` and exit `10`. Every
+OpenCode read opened the source database itself, and better-sqlite3 raises a bare `TypeError` when
+the parent directory is absent — the shape of the very first run. The four read entry points now
+share one open that classifies any failure as `source_unavailable` with exit `4` and names the
+`OPENCODE_DB` override, so an absent source reads as an unavailable source instead of a SNACK bug.
+
+`npm run pack:smoke` now asserts that `better-sqlite3` resolved a published prebuild instead of
+compiling from source, so a platform without a prebuild fails the gate rather than silently
+requiring a compiler toolchain from every user of that platform.

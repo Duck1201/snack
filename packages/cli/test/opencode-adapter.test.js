@@ -42,6 +42,35 @@ test("rejects an unknown OpenCode SQLite fingerprint", async () => {
   });
 });
 
+test("reports an unavailable source when OpenCode is not installed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "snack-opencode-missing-"));
+  temporaryRoots.push(root);
+  // The absent directory is the first-run case: no OpenCode installation at all. better-sqlite3
+  // raises a TypeError there and a SqliteError for an absent file inside an existing directory;
+  // both must classify the same way instead of surfacing as an internal failure.
+  for (const databaseFile of [
+    join(root, "no-such-directory", "opencode.db"),
+    join(root, "opencode.db"),
+  ]) {
+    const adapter = createOpenCodeAdapter({ databaseFile });
+    for (const read of [
+      () => adapter.detect(),
+      () => adapter.fingerprint(),
+      () => adapter.readAll(),
+      () => adapter.readSince(null),
+    ]) {
+      assert.throws(
+        read,
+        (error) =>
+          error instanceof SnackError &&
+          error.reason === "source_unavailable" &&
+          error.exitCode === 4,
+      );
+    }
+    assert.equal(adapter.health().status, "inaccessible");
+  }
+});
+
 test("reads one completed prompt without exposing content", async () => {
   const databaseFile = await createFixtureDatabase("supported-v1.sql");
   executeSql(
