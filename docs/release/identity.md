@@ -156,3 +156,46 @@ tags:
 
 `npm install -g @snack-ai/cli` therefore installs the MVP, and OpenCode resolves the
 MVP-compatible plugin by default. The registry is the evidence, not the workflow's colour.
+
+## Tags this workflow does not set
+
+`npm publish --tag latest` is the only registry write the release workflow performs. A separate
+`npm dist-tag add` is not authenticated by trusted publishing and answers E401 — even for the
+package just published, in the same step, moments after the publish succeeded:
+
+```text
++ @snack-ai/cli@0.6.1
+npm error code E401
+npm error Unable to authenticate, your authentication token seems to be invalid.
+```
+
+Two releases learned this the hard way. On `0.6.0` the failing call was the plugin's, which looked
+like a per-package credential problem; the CLI's own call in the same run had appeared to succeed
+only because npm no-ops when the tag already points at that version. On `0.6.1` the CLI's call
+failed straight after its own publish, which settles it: the credential authorizes the publish
+request, not the session.
+
+So `latest` is set by the publish, and every other tag is moved by hand from an authenticated npm
+login when the owner wants it moved:
+
+```bash
+npm dist-tag add @snack-ai/cli@0.6.1 next
+npm dist-tag add @snack-ai/opencode@0.1.2 next
+```
+
+`next` is the pre-release channel. Between pre-releases it has no work to do, and it is allowed to
+lag `latest` until someone moves it; what must never happen is a default install resolving to
+anything other than the released version, and that is what the workflow verifies.
+
+## 0.6.1 publication
+
+`@snack-ai/cli@0.6.1` was published from commit `16fbb8e650e3859a4a72e489496f5f8b80bd3eab` by
+protected release run
+[30628093385](https://github.com/Duck1201/snack/actions/runs/30628093385), with provenance recorded
+in the Sigstore transparency log at index `2300727520`. The registry resolves
+`@snack-ai/cli@latest` to `0.6.1`.
+
+That run is recorded as a failure, and it is one: it aborted on the `dist-tag` call described above,
+before reaching the plugin, so `@snack-ai/opencode@0.1.2` was not published. Re-running the workflow
+after that call is removed publishes the plugin and skips the CLI, which is already on the registry.
+

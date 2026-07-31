@@ -1,0 +1,31 @@
+name: Idea or change request
+description: Something SNACK could do, or should do differently
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. Two things worth knowing before you write, so the answer is not a
+        surprise:
+
+        - SNACK treats real provider capacity as unknown. Anything that would report a quota
+          percentage, a balance, or a count of prompts remaining is out of scope by design, not by
+          omission.
+        - It is local-only: no network calls, no telemetry, no service.
+
+        [PLAN.md](https://github.com/Duck1201/snack/blob/main/PLAN.md) holds the roadmap, including
+        what is deliberately deferred past 1.0.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where SNACK gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: A shape is enough; it does not need to be a design.
+    validations:
+      required: true
