@@ -1,7 +1,6 @@
 # Claude Code Support Matrix
 
-Status: the matrix below is settled and every command group answers for a Claude source;
-cross-platform runtime validation is pending.
+Status: cross-platform runtime validation pending.
 
 SNACK `0.7.x` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
 read-only backfill. There is no live-capture path for Claude Code and no SNACK hook is registered in

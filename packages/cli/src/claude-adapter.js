@@ -82,10 +82,19 @@ export function createClaudeAdapter(options) {
       };
     },
     readAll() {
-      return read(options.projectsDirectory, null);
+      return this.readSince(null);
     },
     /** @param {{sessions: Record<string, number>} | null} cursor */
     readSince(cursor) {
+      // Setup checks the fingerprint once; the client keeps shipping afterwards. Every read has to
+      // check it too, or a release that moves a usage field turns the next sync into a history
+      // stored with null tokens -- partial, plausible-looking data.
+      if (!hasSupportedStructure(options.projectsDirectory)) {
+        throw new SnackError("The Claude Code history fingerprint is unsupported.", {
+          code: ExitCode.unavailable,
+          reason: "source_schema_unsupported",
+        });
+      }
       return read(options.projectsDirectory, cursor);
     },
     health() {
@@ -122,7 +131,7 @@ export function createClaudeAdapter(options) {
  */
 function hasSupportedStructure(projectsDirectory) {
   let recognized = 0;
-  for (const sessionFile of listSessionFiles(projectsDirectory)) {
+  for (const sessionFile of listReadableFiles(projectsDirectory)) {
     let inspected = 0;
     for (const record of readRecords(sessionFile)) {
       if (record.type !== "user" && record.type !== "assistant") continue;
@@ -157,6 +166,8 @@ function isSupportedTurnRecord(record) {
  */
 function read(projectsDirectory, cursor) {
   const observations = [];
+  /** @type {{segment: string, line_offset: number}[]} */
+  const rejected = [];
   /** @type {Record<string, number>} */
   const sessions = {};
   for (const sessionFile of listSessionFiles(projectsDirectory)) {
@@ -164,15 +175,17 @@ function read(projectsDirectory, cursor) {
     // cursor is written to SNACK's database. The name is reduced to an opaque key so that storing
     // where a reader stopped never stores where the user was working.
     const key = hashPath(relative(projectsDirectory, sessionFile));
+    /** @param {string} file */
+    const records = (file) => readRecords(file, rejected);
     const writtenAt = modifiedAt(sessionFile);
     sessions[key] = writtenAt;
     if (cursor !== null && (cursor.sessions?.[key] ?? -1) >= writtenAt) continue;
     /** @type {Set<string>} */
     const linked = new Set();
     observations.push(
-      ...readSessionObservations(readRecords(sessionFile), (agentId) => {
+      ...readSessionObservations(records(sessionFile), (agentId) => {
         linked.add(agentId);
-        return readRecords(subagentFile(sessionFile, agentId));
+        return records(subagentFile(sessionFile, agentId));
       }),
     );
     // An agent interrupted before it reported back leaves a transcript the session never links.
@@ -181,10 +194,10 @@ function read(projectsDirectory, cursor) {
     // read twice.
     for (const [agentId, agentFile] of listSubagentFiles(sessionFile)) {
       if (linked.has(agentId)) continue;
-      observations.push(...readSessionObservations(readRecords(agentFile), () => []));
+      observations.push(...readSessionObservations(records(agentFile), () => []));
     }
   }
-  return { observations, cursor: { sessions } };
+  return { observations, rejected, cursor: { sessions } };
 }
 
 /**
@@ -194,7 +207,7 @@ function read(projectsDirectory, cursor) {
  * @returns {[string, string][]}
  */
 function listSubagentFiles(sessionFile) {
-  const directory = join(sessionFile.replace(/\.jsonl$/u, ""), "subagents");
+  const directory = subagentDirectory(sessionFile);
   try {
     return readdirSync(directory, { withFileTypes: true })
       .filter((entry) => entry.isFile() && /^agent-.+\.jsonl$/u.test(entry.name))
@@ -526,6 +539,21 @@ function listSessionFiles(projectsDirectory) {
 }
 
 /**
+ * Every file the adapter reads usage out of: session histories and the subagent transcripts beside
+ * them. The fingerprint and the reader must agree on this list, or a family would be decided from
+ * files that are not the ones being parsed.
+ *
+ * @param {string} projectsDirectory
+ * @returns {string[]}
+ */
+function listReadableFiles(projectsDirectory) {
+  return listSessionFiles(projectsDirectory).flatMap((sessionFile) => [
+    sessionFile,
+    ...listSubagentFiles(sessionFile).map(([, agentFile]) => agentFile),
+  ]);
+}
+
+/**
  * Locate the transcript of one subagent spawned by a session.
  *
  * Claude Code keeps subagent turns out of the session file entirely, in
@@ -537,7 +565,12 @@ function listSessionFiles(projectsDirectory) {
  * @param {string} agentId
  */
 function subagentFile(sessionFile, agentId) {
-  return join(sessionFile.replace(/\.jsonl$/, ""), "subagents", `agent-${agentId}.jsonl`);
+  return join(subagentDirectory(sessionFile), `agent-${agentId}.jsonl`);
+}
+
+/** @param {string} sessionFile */
+function subagentDirectory(sessionFile) {
+  return join(sessionFile.replace(/\.jsonl$/u, ""), "subagents");
 }
 
 /**
@@ -551,9 +584,11 @@ function subagentFile(sessionFile, agentId) {
  * dropped instead of failing the file.
  *
  * @param {string} sessionFile
+ * @param {{segment: string, line_offset: number}[]} [rejected] collects the lines that would not
+ *   parse, so a quietly incomplete read is reported rather than silently accepted
  * @returns {Record<string, unknown>[]}
  */
-function readRecords(sessionFile) {
+function readRecords(sessionFile, rejected = undefined) {
   /** @type {Record<string, unknown>[]} */
   const records = [];
   let content;
@@ -564,12 +599,17 @@ function readRecords(sessionFile) {
     // history. The prompt that spawned it is still real and still carries its own usage.
     return records;
   }
-  for (const line of content.split("\n")) {
+  const lines = content.split("\n");
+  for (const [index, line] of lines.entries()) {
     if (line === "") continue;
     try {
       records.push(JSON.parse(line));
     } catch {
-      continue;
+      // The last line of a file that does not end in a newline is a session Claude Code is
+      // writing right now. Any other unparseable line is damage the file has already moved past,
+      // and dropping it without a word would make a history quietly incomplete.
+      if (index === lines.length - 1) continue;
+      rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
     }
   }
   return records;

@@ -872,6 +872,28 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           counts.excluded += 1;
       }
 
+      // Records the backfill adapter could not parse are ingestion issues of the backfill path,
+      // the same way an invalid spool event is one of the spool path. Counting them is what keeps
+      // a quietly incomplete history from looking like a complete one.
+      if (options.path !== "spool" && (options.rejected ?? []).length > 0) {
+        const saveBackfillIssue = database.prepare(
+          `INSERT INTO ingestion_issue
+             (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+           VALUES (?, 'backfill', 'invalid_source_record', ?, ?, ?, ?, 1)
+           ON CONFLICT(source_alias, path, reason, segment, line_offset) DO UPDATE SET
+             last_seen_at = excluded.last_seen_at, occurrences = ingestion_issue.occurrences + 1`,
+        );
+        for (const issue of options.rejected ?? []) {
+          saveBackfillIssue.run(
+            source.alias,
+            issue.segment,
+            issue.line_offset,
+            timestamp,
+            timestamp,
+          );
+        }
+      }
+
       if (options.path === "spool") {
         const saveCursor = database.prepare(
           `INSERT INTO spool_cursor (source_alias, segment, byte_offset, committed_at)
@@ -971,13 +993,7 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
     )
-    .run(
-      source.installation_id,
-      source.adapter === "claude" ? "claude" : "opencode",
-      source.installation_id,
-      timestamp,
-      timestamp,
-    );
+    .run(source.installation_id, source.adapter, source.installation_id, timestamp, timestamp);
   database
     .prepare(
       `INSERT INTO source_binding

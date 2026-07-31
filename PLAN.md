@@ -679,11 +679,11 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 - `StopFailure` distinguishes error classes including `rate_limit`, `overloaded`, authentication, billing, server, output-token, and unknown failures;
 - hook settings can be user-scoped, and their exact merge/rollback behavior must be tested rather than assumed.
 
-**Wave 1: Claude schema and hook contract**
+**Wave 1: Claude schema contract**
 
 - derive content-free JSONL fixtures and schema fingerprints;
 - verify prompt boundaries, model/provider identity, token/cost granularity, subagent treatment, and revision/finality behavior;
-- validate hook stdin schemas and exact supported Claude Code versions;
+- record a fixture for each supported Claude Code version, and decide from the observed data whether a hook path is needed at all;
 - define classification rules that preserve rate-limit versus operational errors.
 
 **Wave 2: Claude backfill adapter**
@@ -693,12 +693,19 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 - exclude content and hash project/session identities locally;
 - prove no Claude types cross into domain/prediction modules.
 
-**Wave 3: Claude live capture**
+**Wave 3: Client-neutral core** (revised; superseded the planned live-capture wave)
 
-- implement user-scoped hook registration with dry-run/diff/backup/rollback;
-- capture `UserPromptSubmit`, `Stop`, and `StopFailure` through the existing content-free event path;
-- run history-independent ephemeral features only with existing explicit consent;
-- keep hook failures fail-open and diagnosable.
+Live capture was dropped by [ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md):
+Claude Code appends its JSONL as the session runs and records a refusal there as a structured
+field, so hooks would deliver a second copy of a signal backfill already carries, in exchange for
+writing into a user-owned settings file. The wave was spent instead on the client leakage that had
+no owner:
+
+- remove the constraints and cursor columns that named OpenCode from the schema, preserving `0.6`
+  data through the upgrade;
+- accept a second client in the configuration schema without changing what a `0.6` configuration
+  means;
+- add `setup claude`, and choose the reader for a source in one place instead of at every call.
 
 **Wave 4: Full product parity**
 
@@ -715,15 +722,16 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 **Deliverables**
 
-- Claude Code backfill and live hooks with MVP feature parity;
+- Claude Code backfill with MVP feature parity, and no hook registered in the client's own settings;
 - second-client proof of the internal adapter seam;
 - Node 24 runtime validation across both clients.
 
 **Pending items resolved**
 
 - Claude JSONL schema and token granularity;
-- exact hook payloads and rate-limit semantics;
-- user-scoped hook setup/rollback;
+- structured rate-limit semantics, read from the history rather than from a hook;
+- whether live capture earns its cost for this client at all — answered no, with the conditions
+  that would reopen it recorded in ADR-0006;
 - cross-client domain neutrality.
 
 **Exit criteria**
@@ -1037,7 +1045,7 @@ These are release gates from MVP onward, not cross-device guarantees. Regression
 | OpenCode live events and restrictions | Plugin event families documented; exact payloads pending | Stage 3 | Strict spool schema and live error fixtures |
 | Plugin setup/rollback | Configuration approach specified | Stage 3 | Idempotent diff/backup/rollback integration tests |
 | Pressure/model parameters | Model family chosen; constants intentionally unset | Stages 4-5 | Simulation + sanitized-history evidence and versioned policy |
-| Claude history and lifecycle | Local JSONL histories and official per-turn hooks confirmed | Stage 7 | Backfill/hook fixtures and feature parity |
+| Claude history and lifecycle | Local JSONL histories confirmed; hooks deferred by ADR-0006 | Stage 7 | Backfill fixtures per supported version and feature parity |
 | Multi-client abstraction | Architectural seam designed but unproven | Stage 8 | No client leakage and shared-source convergence tests |
 | Stable public contracts | Public contract surfaces identified in prose; executable candidate schemas do not yet exist | Stages 8-10 | Executable schemas/compatibility tests, 0.9 freeze, and RC audit |
 

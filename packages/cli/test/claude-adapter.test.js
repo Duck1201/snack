@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { createClaudeAdapter } from "../src/claude-adapter.js";
+import { SnackError } from "../src/errors.js";
 
 /** @type {string[]} */
 const temporaryRoots = [];
@@ -465,6 +466,41 @@ test("a subagent that never reported back still reports what it consumed", async
   assert.equal(linked.usage_slices.length, 3);
 });
 
+test("a drifted Claude history is refused by every read, not only by setup", async () => {
+  const projectsDirectory = await createFixtureProjects("drifted-usage.jsonl");
+  const adapter = createClaudeAdapter({ projectsDirectory });
+
+  // `setup` checks the fingerprint once, years before the client changes. Every read has to check
+  // it too, or a Claude Code release that moves a usage field turns the next `sync` into a hundred
+  // thousand prompts stored with null tokens — partial, plausible-looking data, which is exactly
+  // what failing closed exists to prevent.
+  for (const read of [() => adapter.readAll(), () => adapter.readSince(null)]) {
+    assert.throws(
+      read,
+      (error) =>
+        error instanceof SnackError &&
+        error.reason === "source_schema_unsupported" &&
+        error.exitCode === 4,
+    );
+  }
+});
+
+test("drift inside a subagent transcript fails closed too", async () => {
+  const projectsDirectory = await createFixtureProjects("subagent-parent.jsonl", {
+    subagents: { f1f1f1f1f1f1f1f1: "drifted-usage.jsonl" },
+  });
+  const adapter = createClaudeAdapter({ projectsDirectory });
+
+  // Subagent transcripts are read for their usage exactly like session files, so they are part of
+  // the family being fingerprinted. Checking only the session file would leave the one path that
+  // contributes most of the slices unguarded.
+  assert.equal(adapter.fingerprint().supported, false);
+  assert.throws(
+    () => adapter.readAll(),
+    (error) => error instanceof SnackError && error.reason === "source_schema_unsupported",
+  );
+});
+
 /**
  * Build a throwaway Claude projects directory from a JSONL fixture.
  *
@@ -503,3 +539,56 @@ async function createFixtureProjects(fixtureName, placement = {}) {
 function readFixture(fixtureName) {
   return readFile(new URL(`./fixtures/claude/${fixtureName}`, import.meta.url), "utf8");
 }
+
+test("a corrupt record mid-file is reported, not silently skipped", async () => {
+  const projectsDirectory = await createFixtureProjects("version-2-1-220.jsonl");
+  const sessionFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  );
+  const lines = (await readFile(sessionFile, "utf8")).split("\n");
+  lines.splice(2, 0, "{ this is not json");
+  await writeFile(sessionFile, lines.join("\n"), { mode: 0o600 });
+
+  const { rejected } = createClaudeAdapter({ projectsDirectory }).readAll();
+
+  // A trailing partial line is a session being written right now. A line the file has already
+  // moved past is damage, and dropping it without a word makes a history quietly incomplete —
+  // which is the one thing SNACK must not do with observations.
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0]);
+  assert.equal(rejected[0].line_offset, 3);
+  // The segment names a file whose directory Claude Code derived from the user's working
+  // directory, so it is reported hashed.
+  assert.match(rejected[0].segment, /^[0-9a-f]{64}$/u);
+});
+
+test("supports every documented Claude Code version fixture in the turn-tree family", async () => {
+  // `docs/claude-support.md` publishes a support matrix, and a row in it is a claim. Each claimed
+  // version needs a fixture that proves the claim, or the matrix is documentation of a hope.
+  const versions = ["2.1.207", "2.1.220"];
+  const results = [];
+  for (const version of versions) {
+    const projectsDirectory = await createFixtureProjects(
+      `version-${version.replaceAll(".", "-")}.jsonl`,
+    );
+    const adapter = createClaudeAdapter({ projectsDirectory });
+    results.push({
+      versions: adapter.detect().versions,
+      family: adapter.fingerprint().family,
+      supported: adapter.fingerprint().supported,
+      prompts: adapter.readAll().observations.length,
+    });
+  }
+
+  assert.deepEqual(
+    results,
+    versions.map((version) => ({
+      versions: [version],
+      family: "cc-jsonl-turntree-v1",
+      supported: true,
+      prompts: 1,
+    })),
+  );
+});

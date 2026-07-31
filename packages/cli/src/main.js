@@ -8,6 +8,7 @@ import { Command, CommanderError } from "commander";
 import {
   defaultConfig,
   getConfigValue,
+  isConfiguredSource,
   prepareConfigValue,
   prepareConfigValues,
   readConfig,
@@ -32,6 +33,7 @@ import {
   exportJsonChunks,
 } from "./export.js";
 import { createClaudeAdapter, resolveClaudeProjectsDirectory } from "./claude-adapter.js";
+import { createSourceAdapter } from "./source-adapter.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
   preparePluginRegistration,
@@ -217,147 +219,37 @@ export async function run(argv, options = {}) {
       /** @type {{content: string, change: {target: string, package: string, action: string, prospective_analysis: boolean}} | null} */
       let pluginRegistration = null;
       if (resolved.dryRun !== true) {
-        await withStorageOperationLock(paths, async () => {
-          recoveredSetupJournal = await recoverSetupJournal(paths);
-          await withConfigLock(paths.configFile, async () => {
-            /** @type {Record<string, unknown>} */
-            let current = { ...defaultConfig };
-            try {
-              current = await readConfig(paths.configFile);
-            } catch (error) {
-              if (!(error instanceof SnackError) || error.reason !== "config_missing") throw error;
-            }
-            const sources = /** @type {unknown[]} */ (
-              Array.isArray(current.sources) ? current.sources : []
-            );
-            const ambiguousMapping = sources.some(
-              (source) =>
-                typeof source === "object" &&
-                source !== null &&
-                "alias" in source &&
-                source.alias !== configuredSource.alias &&
-                "database" in source &&
-                source.database === databaseFile &&
-                "provider" in source &&
-                source.provider === configuredSource.provider &&
-                "profile" in source &&
-                source.profile === configuredSource.profile,
-            );
-            if (ambiguousMapping) {
-              throw new SnackError(
-                "A provider/profile combination can map to only one capacity source per OpenCode installation.",
-                {
-                  code: ExitCode.config,
-                  reason: "source_mapping_ambiguous",
-                },
-              );
-            }
-            const merged = mergeConfiguredSource(
-              /** @type {Record<string, unknown>[]} */ (
-                sources.filter((source) => typeof source === "object" && source !== null)
-              ),
-              configuredSource,
-              "database",
-            );
-            configuredSource = merged.source;
-            const updatedSources = merged.sources;
-            /** @type {[string, unknown][]} */
-            const configUpdates = [["sources", updatedSources]];
-            if (resolved.enableProspectiveAnalysis === true) {
-              configUpdates.push(["prospective_analysis.enabled", true]);
-            }
-            const prepared = await prepareConfigValues(paths.configFile, configUpdates);
-            let previousSnackConfig = null;
-            try {
-              previousSnackConfig = await readFile(paths.configFile, "utf8");
-            } catch (error) {
-              if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-                throw error;
-            }
-            let registration = null;
-            let pluginConfigFile = null;
-            if (resolved.installPlugin === true) {
-              pluginConfigFile = resolveOpenCodeConfig({
-                ...(options.env ? { env: options.env } : {}),
-                ...(options.home ? { home: options.home } : {}),
-              });
-              registration = await preparePluginRegistration(pluginConfigFile, {
-                installation_id: configuredSource.installation_id,
-                spool_directory: paths.spoolDir,
-                prospective_analysis: resolved.enableProspectiveAnalysis === true,
-                source_bindings: pluginBindings(
-                  updatedSources,
-                  configuredSource.installation_id,
-                  paths,
-                ),
-              });
-            }
-            const existed = (await inspectDatabase(paths.databaseFile)).exists;
-            const databaseBackupFile =
-              registration === null ? null : await createSetupDatabaseBackup(paths);
-            let pluginRegistrationWritten = false;
-            try {
-              if (registration !== null && pluginConfigFile !== null) {
-                await writeSetupJournal(paths, {
-                  opencode_config_file: pluginConfigFile,
-                  config_existed: registration.config_existed,
-                  plugin_property_existed: registration.plugin_property_existed,
-                  previous_plugin: registration.previous_plugin,
-                  previous_plugin_index: registration.previous_plugin_index,
-                  installed_plugin_hash: registration.installed_plugin_hash,
-                  previous_snack_config: previousSnackConfig,
-                  database_backup_file: databaseBackupFile,
-                });
-              }
-              await initializeDatabase(paths, {
-                applicationVersion: packageJson.version,
-                now,
-              });
-              if (registration !== null && pluginConfigFile !== null) {
-                await prepareSpoolDirectories(paths, registration);
-                await writePluginRegistration(
-                  pluginConfigFile,
-                  registration.content,
-                  registration.previous_content,
-                );
-                pluginRegistrationWritten = true;
-              }
-              await (options.writeConfig ?? writePrivateAtomic)(
-                paths.configFile,
-                prepared.content,
-                {
-                  backup: true,
-                },
-              );
-              ensureCapacityPeriod(
-                paths.databaseFile,
-                configuredSource,
-                now,
-                resolvePlanProfile(configuredSource).profile,
-              );
-              pluginRegistration = registration;
-              await clearSetupJournal(paths);
-              if (databaseBackupFile !== null) {
-                await rm(databaseBackupFile, { force: true }).catch(() => {});
-              }
-            } catch (error) {
-              if (registration !== null) {
-                if (!pluginRegistrationWritten && pluginConfigFile !== null) {
-                  try {
-                    pluginRegistrationWritten =
-                      (await readFile(pluginConfigFile, "utf8")) === registration.content;
-                  } catch {
-                    pluginRegistrationWritten = false;
-                  }
+        const committed = await commitConfiguredSource({
+          paths,
+          now,
+          source: configuredSource,
+          locationKey: "database",
+          enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
+          writeConfig: options.writeConfig,
+          registerPlugin:
+            resolved.installPlugin === true
+              ? async (updatedSources, installationId) => {
+                  const configFile = resolveOpenCodeConfig({
+                    ...(options.env ? { env: options.env } : {}),
+                    ...(options.home ? { home: options.home } : {}),
+                  });
+                  return {
+                    configFile,
+                    registration: await preparePluginRegistration(configFile, {
+                      installation_id: installationId,
+                      spool_directory: paths.spoolDir,
+                      prospective_analysis: resolved.enableProspectiveAnalysis === true,
+                      source_bindings: pluginBindings(updatedSources, installationId, paths),
+                    }),
+                  };
                 }
-                await recoverSetupJournal(paths, { restorePlugin: pluginRegistrationWritten });
-              } else if (previousSnackConfig === null) await rm(paths.configFile, { force: true });
-              else await writePrivateAtomic(paths.configFile, previousSnackConfig);
-              await rollbackDatabaseInitialization(paths, existed);
-              throw error;
-            }
-          });
+              : undefined,
         });
+        configuredSource = /** @type {typeof configuredSource} */ (committed.source);
+        pluginRegistration = /** @type {typeof pluginRegistration} */ (
+          committed.pluginRegistration
+        );
+        recoveredSetupJournal = committed.recoveredSetupJournal;
       } else if (resolved.installPlugin === true) {
         const configFile = resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
@@ -463,14 +355,17 @@ export async function run(argv, options = {}) {
       const committed =
         resolved.dryRun === true
           ? configuredSource
-          : await commitConfiguredSource({
-              paths,
-              now,
-              source: configuredSource,
-              locationKey: "projects",
-              enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
-              writeConfig: options.writeConfig,
-            });
+          : (
+              await commitConfiguredSource({
+                paths,
+                now,
+                source: configuredSource,
+                locationKey: "projects",
+                enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
+                writeConfig: options.writeConfig,
+                registerPlugin: undefined,
+              })
+            ).source;
       const data = {
         source: {
           alias: committed.alias,
@@ -682,12 +577,17 @@ export async function run(argv, options = {}) {
       await withStorageOperationLock(paths, async () => {
         await recoverSetupJournal(paths);
         const current = await readConfig(paths.configFile);
-        const configuredSources = byCapacitySource(
-          Array.isArray(current.sources) ? current.sources.filter(isConfiguredSource) : [],
-        );
-        const selected = commandOptions.source
+        // Two lists, because they answer two different questions. Ingestion reads a client, so it
+        // needs every configured client; reporting describes a capacity source, so it needs one
+        // entry per lineage. Using the collapsed list for both left the second client of a shared
+        // source unread until someone ran `sync` by hand.
+        const configuredSources = Array.isArray(current.sources)
+          ? current.sources.filter(isConfiguredSource)
+          : [];
+        const inScope = commandOptions.source
           ? configuredSources.filter((source) => source.alias === commandOptions.source)
           : configuredSources;
+        const selected = byCapacitySource(inScope);
         if (selected.length === 0) {
           throw new SnackError("The requested capacity source is unavailable or ambiguous.", {
             code: ExitCode.unavailable,
@@ -703,13 +603,21 @@ export async function run(argv, options = {}) {
           let synchronization = { performed: false, status: "not_requested" };
           if (commandOptions.sync !== false) {
             try {
-              const syncResults = await synchronizeSource({
-                paths,
-                source,
-                full: false,
-                now,
-                mappings: providerMappings(configuredSources, source.installation_id),
-              });
+              /** @type {Awaited<ReturnType<typeof synchronizeSource>>} */
+              const syncResults = [];
+              // Every client feeding this capacity source, one at a time: they write to the same
+              // storage, so there is nothing to win by overlapping them.
+              for (const client of inScope.filter((entry) => entry.alias === source.alias)) {
+                syncResults.push(
+                  ...(await synchronizeSource({
+                    paths,
+                    source: client,
+                    full: false,
+                    now,
+                    mappings: providerMappings(configuredSources, client.installation_id),
+                  })),
+                );
+              }
               synchronization = {
                 performed: true,
                 status: syncResults.some((result) => result.failed > 0) ? "failed" : "ok",
@@ -1123,21 +1031,6 @@ async function prepareSpoolDirectories(paths, registration) {
 }
 
 /**
- * Choose the reader for a configured source.
- *
- * This is the one place in the command layer that knows which client wrote a source. Every other
- * caller works through the adapter contract, which is what makes the second client a new adapter
- * rather than a branch in the product.
- *
- * @param {{adapter: string, database?: string, projects?: string}} source
- */
-function createSourceAdapter(source) {
-  return source.adapter === "claude"
-    ? createClaudeAdapter({ projectsDirectory: String(source.projects) })
-    : createOpenCodeAdapter({ databaseFile: String(source.database) });
-}
-
-/**
  * @param {{paths: import("./paths.js").SnackPaths, source: {alias: string, installation_id: string, database?: string, projects?: string, fingerprint: string, provider: string, profile: string, plan: string, adapter: string}, full: boolean, now: Date, mappings: {mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}} options
  */
 async function synchronizeSource(options) {
@@ -1155,13 +1048,12 @@ async function synchronizeSource(options) {
       : readIngestionCursor(options.paths.databaseFile, options.source.alias);
     const backfill = options.full ? adapter.readAll() : adapter.readSince(cursor);
     results.push(
-      storeObservations(
-        options.paths.databaseFile,
-        options.source,
-        backfill,
-        options.now,
-        mappings,
-      ),
+      storeObservations(options.paths.databaseFile, options.source, backfill, options.now, {
+        ...mappings,
+        // Records the adapter could not parse travel with the batch, so a quietly incomplete
+        // read is reported rather than looking like a complete one.
+        ...("rejected" in backfill ? { rejected: backfill.rejected } : {}),
+      }),
     );
   } catch {
     results.push(emptySyncResult(options.source.alias, "backfill", 1));
@@ -1411,11 +1303,19 @@ async function readConfiguredSources(configFile) {
  *   locationKey: string,
  *   enableProspectiveAnalysis: boolean,
  *   writeConfig: typeof writePrivateAtomic | undefined,
+ *   registerPlugin: ((sources: Record<string, unknown>[], installationId: string) => Promise<{
+ *     configFile: string,
+ *     registration: Awaited<ReturnType<typeof preparePluginRegistration>>,
+ *   } | null>) | undefined,
  * }} input
+ * @returns {Promise<{source: Record<string, string>, pluginRegistration: unknown, recoveredSetupJournal: boolean}>}
  */
 async function commitConfiguredSource(input) {
   let configuredSource = input.source;
+  let pluginRegistration = null;
+  let recoveredSetupJournal = false;
   await withStorageOperationLock(input.paths, async () => {
+    recoveredSetupJournal = await recoverSetupJournal(input.paths);
     await withConfigLock(input.paths.configFile, async () => {
       /** @type {Record<string, unknown>} */
       let current = { ...defaultConfig };
@@ -1444,12 +1344,39 @@ async function commitConfiguredSource(input) {
       } catch (error) {
         if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       }
+      // A client that registers something in its host's own configuration hands it over here, so
+      // the journal, the pre-change backup and the rollback stay in one place rather than being
+      // written a second time per client.
+      const plugin = await input.registerPlugin?.(updatedSources, configuredSource.installation_id);
       const existed = (await inspectDatabase(input.paths.databaseFile)).exists;
+      const databaseBackupFile = plugin ? await createSetupDatabaseBackup(input.paths) : null;
+      let pluginWritten = false;
       try {
+        if (plugin) {
+          await writeSetupJournal(input.paths, {
+            opencode_config_file: plugin.configFile,
+            config_existed: plugin.registration.config_existed,
+            plugin_property_existed: plugin.registration.plugin_property_existed,
+            previous_plugin: plugin.registration.previous_plugin,
+            previous_plugin_index: plugin.registration.previous_plugin_index,
+            installed_plugin_hash: plugin.registration.installed_plugin_hash,
+            previous_snack_config: previousSnackConfig,
+            database_backup_file: databaseBackupFile,
+          });
+        }
         await initializeDatabase(input.paths, {
           applicationVersion: packageJson.version,
           now: input.now,
         });
+        if (plugin) {
+          await prepareSpoolDirectories(input.paths, plugin.registration);
+          await writePluginRegistration(
+            plugin.configFile,
+            plugin.registration.content,
+            plugin.registration.previous_content,
+          );
+          pluginWritten = true;
+        }
         await (input.writeConfig ?? writePrivateAtomic)(input.paths.configFile, prepared.content, {
           backup: true,
         });
@@ -1459,15 +1386,33 @@ async function commitConfiguredSource(input) {
           input.now,
           resolvePlanProfile(configuredSource).profile,
         );
+        pluginRegistration = plugin?.registration ?? null;
+        await clearSetupJournal(input.paths);
+        if (databaseBackupFile !== null) {
+          await rm(databaseBackupFile, { force: true }).catch(() => {});
+        }
       } catch (error) {
-        if (previousSnackConfig === null) await rm(input.paths.configFile, { force: true });
-        else await writePrivateAtomic(input.paths.configFile, previousSnackConfig);
+        if (plugin) {
+          if (!pluginWritten) {
+            try {
+              pluginWritten =
+                (await readFile(plugin.configFile, "utf8")) === plugin.registration.content;
+            } catch {
+              pluginWritten = false;
+            }
+          }
+          await recoverSetupJournal(input.paths, { restorePlugin: pluginWritten });
+        } else if (previousSnackConfig === null) {
+          await rm(input.paths.configFile, { force: true });
+        } else {
+          await writePrivateAtomic(input.paths.configFile, previousSnackConfig);
+        }
         await rollbackDatabaseInitialization(input.paths, existed);
         throw error;
       }
     });
   });
-  return configuredSource;
+  return { source: configuredSource, pluginRegistration, recoveredSetupJournal };
 }
 
 /**
@@ -2000,6 +1945,22 @@ function isConfiguredOpenCodeSource(value) {
  */
 function mergeConfiguredSource(sources, configuredSource, locationKey) {
   const location = configuredSource[locationKey];
+  // One history behind two capacity sources would be read twice and counted twice, inventing usage
+  // that never happened. This belongs to the mapping rather than to a client, so both setups get it.
+  const ambiguous = sources.some(
+    (source) =>
+      source.alias !== configuredSource.alias &&
+      source.adapter === configuredSource.adapter &&
+      source[locationKey] === location &&
+      source.provider === configuredSource.provider &&
+      source.profile === configuredSource.profile,
+  );
+  if (ambiguous) {
+    throw new SnackError(
+      "A provider/profile combination can map to only one capacity source per client installation.",
+      { code: ExitCode.config, reason: "source_mapping_ambiguous" },
+    );
+  }
   const existingBinding = sources.find(
     (source) =>
       source.alias === configuredSource.alias && source.adapter === configuredSource.adapter,
@@ -2051,37 +2012,6 @@ function byCapacitySource(sources) {
     if (!unique.has(source.alias)) unique.set(source.alias, source);
   }
   return [...unique.values()];
-}
-
-/**
- * Recognize a configured capacity source of any supported client.
- *
- * Only the paths that touch OpenCode's own plugin and spool need to know which client wrote a
- * source. Everywhere else — synchronizing, reporting, exporting, purging — a source is a source,
- * and narrowing to one client there is exactly the leak this release exists to remove.
- *
- * @param {unknown} value
- * @returns {value is {alias: string, installation_id: string, adapter: "opencode" | "claude", database?: string, projects?: string, provider: string, profile: string, plan: string, fingerprint: string}}
- */
-function isConfiguredSource(value) {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "alias" in value &&
-    typeof value.alias === "string" &&
-    "installation_id" in value &&
-    typeof value.installation_id === "string" &&
-    "adapter" in value &&
-    (value.adapter === "opencode" || value.adapter === "claude") &&
-    "provider" in value &&
-    typeof value.provider === "string" &&
-    "profile" in value &&
-    typeof value.profile === "string" &&
-    "plan" in value &&
-    typeof value.plan === "string" &&
-    "fingerprint" in value &&
-    typeof value.fingerprint === "string"
-  );
 }
 
 /**
@@ -2502,7 +2432,7 @@ function renderStats(report, verbose) {
 function providerMappings(sources, installationId) {
   const providerMappingCounts = new Map();
   for (const source of sources) {
-    if (!isConfiguredOpenCodeSource(source) || source.installation_id !== installationId) continue;
+    if (!isConfiguredSource(source) || source.installation_id !== installationId) continue;
     providerMappingCounts.set(
       source.provider,
       (providerMappingCounts.get(source.provider) ?? 0) + 1,

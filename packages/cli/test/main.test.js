@@ -2917,3 +2917,40 @@ test("a refusal one client saw survives another client succeeding on the same so
   assert.deepEqual(outcomes, ["restricted", "success"]);
   assert.equal(tables.capacity_periods.length, 1);
 });
+
+test("status synchronizes every client behind a shared capacity source", async () => {
+  const fixture = await makeRunFixture("snack-status-shared-sync-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  for (const client of ["opencode", "claude"]) {
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        "work",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+      ],
+      fixture.options,
+    );
+  }
+
+  // `status` is the command people actually run, and it synchronizes on the way. Reporting one row
+  // per capacity source is right; reading one client per capacity source is not — the other
+  // client's prompts would only ever arrive if someone thought to run `sync` by hand.
+  await run(["node", "snack", "status"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+  const tables = JSON.parse(fixture.stdout.value).data.tables;
+  assert.equal(tables.prompts.length, 2);
+  assert.equal(tables.usage_slices.length, 3);
+});

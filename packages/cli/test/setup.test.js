@@ -344,3 +344,39 @@ test("interrupting the questions cancels setup instead of reporting a crash", as
   assert.match(fixture.stdout.value, /cancelled/iu);
   await assert.rejects(readFile(fixture.paths.configFile, "utf8"));
 });
+
+test("one Claude history cannot be bound to two capacity sources", async () => {
+  const fixture = await makeRunFixture("snack-claude-ambiguous-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  /** @param {string} alias */
+  const setup = (alias) =>
+    run(
+      [
+        "node",
+        "snack",
+        "setup",
+        "claude",
+        "--non-interactive",
+        "--source",
+        alias,
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+        "--json",
+      ],
+      fixture.options,
+    );
+
+  assert.equal(await setup("work"), 0);
+
+  // The same history behind two capacity sources would be read twice and counted twice, inventing
+  // usage that never happened. OpenCode already refuses this; the rule belongs to the mapping, not
+  // to one client.
+  fixture.stdout.value = "";
+  const exitCode = await setup("personal");
+  assert.equal(exitCode, 3);
+  assert.equal(JSON.parse(fixture.stdout.value).errors[0].code, "source_mapping_ambiguous");
+});

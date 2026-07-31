@@ -2,10 +2,9 @@ import { Buffer } from "node:buffer";
 import { access, constants, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { readConfig } from "./config.js";
+import { isConfiguredSource, readConfig } from "./config.js";
 import { SnackError } from "./errors.js";
-import { createClaudeAdapter } from "./claude-adapter.js";
-import { createOpenCodeAdapter } from "./opencode-adapter.js";
+import { createSourceAdapter } from "./source-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { setupJournalFile } from "./setup-journal.js";
@@ -131,10 +130,7 @@ export async function runDoctor(paths, options = {}) {
     checks.push(planProfileCheck(source, now));
     const client = source.adapter === "claude" ? "Claude Code" : "OpenCode";
     try {
-      const fingerprint =
-        source.adapter === "claude"
-          ? createClaudeAdapter({ projectsDirectory: String(source.projects) }).fingerprint()
-          : createOpenCodeAdapter({ databaseFile: String(source.database) }).fingerprint();
+      const fingerprint = createSourceAdapter(source).fingerprint();
       checks.push(
         fingerprint.supported && fingerprint.family === source.fingerprint
           ? pass(`source_fingerprint:${source.alias}`, `${client} schema fingerprint is supported.`)
@@ -414,26 +410,4 @@ function warn(id, message) {
 /** @param {string} id @param {string} message @returns {DoctorCheck} */
 function fail(id, message) {
   return { id, status: "fail", message };
-}
-
-/** @param {unknown} value */
-function isConfiguredSource(value) {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "alias" in value &&
-    typeof value.alias === "string" &&
-    "installation_id" in value &&
-    typeof value.installation_id === "string" &&
-    "provider" in value &&
-    typeof value.provider === "string" &&
-    "adapter" in value &&
-    (value.adapter === "opencode" || value.adapter === "claude") &&
-    // Where a client keeps its history is the client's own business: a database file for OpenCode,
-    // a projects directory for Claude Code.
-    (("database" in value && typeof value.database === "string") ||
-      ("projects" in value && typeof value.projects === "string")) &&
-    "fingerprint" in value &&
-    typeof value.fingerprint === "string"
-  );
 }
