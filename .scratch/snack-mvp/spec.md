@@ -1,7 +1,8 @@
 # Stage 6 — SNACK MVP
 
 Status: released Release: `@snack-ai/cli@0.6.0` and `@snack-ai/opencode@0.1.1` on npm `latest`,
-published 2026-07-31, tag `v0.6.0`, GitHub release **SNACK MVP**.
+published 2026-07-31, tag `v0.6.0`, GitHub release **SNACK MVP**. `0.6.1` and plugin `0.1.2`
+followed the same day with the rewritten package documentation, tagged `v0.6.1`.
 
 Completes, hardens, documents, and publishes the technical MVP for OpenCode. Product contracts live
 in `docs/specification.md` and `docs/architecture.md`; this file records what was decided while

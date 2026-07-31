@@ -19,8 +19,8 @@ category typical; as_of 2026-07-31T10:41:55.000Z; sync ok.
 Caveat: Real provider capacity is unknown.
 ```
 
-Requires Node.js 24, on Linux, macOS, or Windows through WSL2. `0.6.0` is the MVP and supports
-OpenCode; Claude Code follows in `0.7`.
+Requires Node.js 24, on Linux, macOS, or Windows through WSL2. The `0.6` line is the MVP and
+supports OpenCode; Claude Code follows in `0.7`.
 
 ## What it will not tell you
 

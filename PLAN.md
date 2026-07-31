@@ -561,6 +561,15 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 6 - SNACK MVP
 
 - **Release:** `0.6.0`, tag `v0.6.0`, release title **SNACK MVP**, npm `latest`
+- **Status:** Complete (2026-07-31). `@snack-ai/cli@0.6.0` published to `latest` with a SLSA
+  provenance attestation, tagged `v0.6.0`, released as **SNACK MVP**; `@snack-ai/opencode@0.1.1`
+  promoted to `latest` alongside it. `0.6.1` and plugin `0.1.2` followed the same day, carrying the
+  rewritten package documentation that npm serves from the tarball rather than from the repository.
+  Independent reviewer and tester passes ran against the complete MVP diff: thirteen findings, three
+  of them P1, all fixed before release with a failing test written first for each. Verified against
+  the registry rather than the workflow's own status; the evidence is in
+  [docs/release/identity.md](./docs/release/identity.md) and
+  [docs/release/platform-smoke.md](./docs/release/platform-smoke.md).
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Complete, harden, document, and publish the technical MVP for OpenCode.
 
