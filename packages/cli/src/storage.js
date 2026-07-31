@@ -2206,8 +2206,21 @@ export function isTombstoned(tombstones, startedAt) {
  */
 export async function assertReadableStorage(databaseFile) {
   if (!(await pathExists(databaseFile))) return;
-  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  /** @type {import("better-sqlite3").Database | undefined} */
+  let database;
   try {
+    // Opening is part of reading, so a path that is a directory, or a file this build cannot open
+    // at all, has to answer as a storage failure rather than escape as an internal one.
+    database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+    // A database that exists but carries no migration history was never initialized — a truncating
+    // crash or a full disk leaves exactly that. An empty applied set satisfies the checksum
+    // comparison below, so it is refused explicitly instead of failing at the first real query.
+    if (!hasMigrationTable(database)) {
+      throw new SnackError("Storage exists but was never initialized.", {
+        code: ExitCode.storage,
+        reason: "storage_not_initialized",
+      });
+    }
     verifyAppliedMigrations(
       readAppliedMigrations(database),
       await loadMigrations(migrationDirectory),
@@ -2220,6 +2233,6 @@ export async function assertReadableStorage(databaseFile) {
       cause: error,
     });
   } finally {
-    database.close();
+    database?.close();
   }
 }

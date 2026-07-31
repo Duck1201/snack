@@ -28,7 +28,7 @@ const PLAN_PROFILE_STALE_DAYS = 365;
 
 /**
  * @param {import("./paths.js").SnackPaths} paths
- * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string}} [options]
+ * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string}} [options]
  * @returns {Promise<{status: "ok" | "degraded" | "error", checks: DoctorCheck[]}>}
  */
 export async function runDoctor(paths, options = {}) {
@@ -117,6 +117,10 @@ export async function runDoctor(paths, options = {}) {
   }
   for (const source of sources) {
     if (!isConfiguredSource(source)) continue;
+    // Narrowing touches the per-source checks only: runtime, permissions, storage and plugin
+    // registration are properties of the installation, and hiding them would answer a narrower
+    // question than the one `doctor` exists to answer.
+    if (options.source !== undefined && source.alias !== options.source) continue;
     checks.push(planProfileCheck(source, now));
     try {
       const fingerprint = createOpenCodeAdapter({ databaseFile: source.database }).fingerprint();

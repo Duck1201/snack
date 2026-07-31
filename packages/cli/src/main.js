@@ -563,7 +563,7 @@ export async function run(argv, options = {}) {
     .command("stats")
     .description("show observed usage, data quality, and pressure statistics")
     .option("--source <alias>", "capacity-source alias")
-    .option("--horizon <duration>", "one configured analysis horizon")
+    .option("--horizon <duration|all>", "one configured analysis horizon, or all of them")
     .option("--verbose", "add per-dimension and per-model detail")
     .option("--json", "emit one versioned JSON document")
     .action(async function stats(commandOptions) {
@@ -585,7 +585,12 @@ export async function run(argv, options = {}) {
         ? /** @type {string[]} */ (analysis.horizons)
         : defaultConfig.analysis.horizons;
       await assertReadableStorage(paths.databaseFile);
-      const horizons = commandOptions.horizon ? [commandOptions.horizon] : configuredHorizons;
+      // `all` is the documented way to ask for every configured horizon in one report, which is
+      // also the default; naming it explicitly is what makes a script's intent readable.
+      const horizons =
+        commandOptions.horizon && commandOptions.horizon !== "all"
+          ? [commandOptions.horizon]
+          : configuredHorizons;
       /** @type {{code: string, message: string}[]} */
       const statsWarnings = [];
       const reports = selected.map((source) => {
@@ -752,7 +757,7 @@ export async function run(argv, options = {}) {
       } else {
         for (const status of statuses) {
           stdout.write(
-            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence.level}; method ${status.method.id}@${status.method.version}; pressure ${status.pressure.band}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
+            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence.level}; method ${status.method.id}@${status.method.version}; period ${status.source.active_period.started_at ?? "unknown"}; pressure ${status.pressure.band}; contributors ${describeContributors(status.pressure.contributors ?? [])}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
           );
           for (const caveat of status.caveats) stdout.write(`Caveat: ${caveat}\n`);
         }
@@ -812,12 +817,14 @@ export async function run(argv, options = {}) {
   program
     .command("doctor")
     .description("diagnose local structure without changing it")
+    .option("--source <alias>", "narrow the source checks to one capacity source")
     .option("--json", "emit one versioned JSON document")
-    .action(async function doctor() {
+    .action(async function doctor(commandOptions) {
       const result = await runDoctor(paths, {
         nodeVersion: options.nodeVersion,
         platform: options.platform,
         now,
+        ...(typeof commandOptions.source === "string" ? { source: commandOptions.source } : {}),
         opencodeConfigFile: resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
           ...(options.home ? { home: options.home } : {}),
@@ -883,10 +890,25 @@ export async function run(argv, options = {}) {
       if (commandOptions.dryRun !== true && commandOptions.yes !== true) {
         // Prompting is impossible without a terminal, and impossible in JSON mode without
         // breaking the one-document contract. Refuse rather than delete unasked.
-        throw new SnackError(
-          "Purge permanently deletes records; re-run with --yes to confirm, or --dry-run to preview.",
-          { code: ExitCode.usage, reason: "confirmation_required" },
-        );
+        if (json || options.prompt === undefined) {
+          throw new SnackError(
+            "Purge permanently deletes records; re-run with --yes to confirm, or --dry-run to preview.",
+            { code: ExitCode.usage, reason: "confirmation_required" },
+          );
+        }
+        // Typing the scope back, rather than a keystroke, is what makes this a decision instead
+        // of a reflex: the records it removes are not restorable.
+        const expected = scope.source ?? "all";
+        const answer = await options.prompt({
+          id: "purge_confirmation",
+          message: `This permanently deletes ${preview.counts.prompts} prompts and ${preview.counts.predictions} prediction snapshots${
+            scope.source === undefined ? " across every source" : ` for ${scope.source}`
+          }. Type ${expected} to confirm:`,
+        });
+        if (answer.trim() !== expected) {
+          stdout.write("Purge cancelled; nothing was deleted.\n");
+          return;
+        }
       }
 
       const result =
@@ -1196,6 +1218,29 @@ function emptySyncResult(alias, path, failed) {
 /** @param {Command} command @param {boolean} configuredJson */
 function wantsJson(command, configuredJson) {
   return command.optsWithGlobals().json === true || configuredJson;
+}
+
+/**
+ * Name the dimensions that put the pressure band where it is, strongest first.
+ *
+ * Specification §12.3 asks the default human detail for the top contributors. Only ranked
+ * dimensions carry the score, so an unranked one is absent here rather than reported as a
+ * contribution of zero, which would read as evidence of light usage.
+ *
+ * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
+ */
+function describeContributors(contributors) {
+  const ranked = contributors
+    .filter((contributor) => contributor.contribution !== null)
+    .sort((left, right) => Number(right.contribution) - Number(left.contribution))
+    .slice(0, 2);
+  if (ranked.length === 0) return "none ranked";
+  return ranked
+    .map(
+      (contributor) =>
+        `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`,
+    )
+    .join(", ");
 }
 
 /**

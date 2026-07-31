@@ -77,6 +77,10 @@ function openSource(databaseFile) {
   try {
     const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
     database.pragma("query_only = ON");
+    // SQLite validates the file header on the first read, not on open, so a file that is not a
+    // database survives the constructor and fails inside whichever query runs first. Forcing that
+    // read here keeps every way of not being a readable source classified in one place.
+    database.pragma("schema_version");
     return database;
   } catch {
     throw new SnackError(

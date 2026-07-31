@@ -284,3 +284,38 @@ test("--include-config drops the source but leaves capture to setup to undo", as
     JSON.stringify(document.warnings),
   );
 });
+
+test("with a terminal, purge asks for the alias typed back", async () => {
+  const fixture = await makePurgeableHistory();
+  /** @type {{id: string, message: string}[]} */
+  const asked = [];
+  /** @param {string} value */
+  const answerWith =
+    (value) =>
+    /** @param {{id: string, message: string}} question */
+    async (question) => {
+      asked.push(question);
+      return value;
+    };
+
+  // Specification §12.8: confirmation is the source alias typed back rather than a keystroke.
+  // A terminal is exactly what `cli.js` reports by passing a prompt port at all.
+  const refused = await run(["node", "snack", "data", "purge", "--source", "work"], {
+    ...fixture.options,
+    prompt: answerWith("nope"),
+  });
+
+  assert.equal(refused, 0);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0]?.message ?? "", /work/u);
+  assert.equal(count(fixture.resolved.databaseFile, "prompt_execution"), 1);
+
+  fixture.stdout.value = "";
+  const applied = await run(["node", "snack", "data", "purge", "--source", "work"], {
+    ...fixture.options,
+    prompt: answerWith("work"),
+  });
+
+  assert.equal(applied, 0);
+  assert.equal(count(fixture.resolved.databaseFile, "prompt_execution"), 0);
+});

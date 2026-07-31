@@ -349,3 +349,30 @@ test("cleanup keeps a pre-migration backup when migrating an existing database",
   await rm(install.resolved.backupDir, { recursive: true, force: true });
   assert.equal(await run(["node", "snack", "doctor"], install.options), 0);
 });
+
+test("storage that was never migrated is refused as storage, not as a crash", async () => {
+  // A zero-byte database is what a truncating crash or a full disk leaves behind. It opens
+  // cleanly and holds no migration history, so the read guard used to let it through and the
+  // first real query failed far from anything that could explain it.
+  for (const make of [
+    /** @param {string} file */ async (file) => writeFile(file, "", { mode: 0o600 }),
+    /** @param {string} file */ async (file) => mkdir(file, { recursive: true, mode: 0o700 }),
+  ]) {
+    const install = await makeWorkingInstall("snack-unmigrated-");
+    const fixture = install;
+    await rm(fixture.resolved.databaseFile, { recursive: true, force: true });
+    await make(fixture.resolved.databaseFile);
+
+    for (const argv of [
+      ["status", "--no-sync"],
+      ["stats"],
+      ["export", "--format", "json", "--output", "-"],
+      ["data", "purge", "--all", "--dry-run"],
+    ]) {
+      fixture.stdout.value = "";
+      fixture.stderr.value = "";
+      const exitCode = await run(["node", "snack", ...argv, "--json"], fixture.options);
+      assert.equal(exitCode, ExitCode.storage, argv.join(" "));
+    }
+  }
+});

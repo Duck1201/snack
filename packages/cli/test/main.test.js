@@ -1747,12 +1747,38 @@ test("human status includes every required uncertainty field", async () => {
 
   assert.match(
     fixture.stdout.value,
-    /risk high; evidence very_low; method bayesian-pressure-band@1; pressure unknown; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
+    /risk high; evidence very_low; method bayesian-pressure-band@1; period 2026-01-02T03:05:00.000Z; pressure unknown; contributors none ranked; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
   );
   assert.match(
     fixture.stdout.value,
     /Caveat: Sparse history; the weak plan-profile prior still dominates/u,
   );
+});
+
+test("human status names the period it describes and what moved the pressure band", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  const human = fixture.stdout.value;
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const status = JSON.parse(fixture.stdout.value).data;
+
+  // Specification §12.3: the default human detail includes the active period and the top pressure
+  // contributors. A forecast whose scope and drivers are only in `--json` is two contracts.
+  assert.match(human, new RegExp(`period ${status.source.active_period.started_at}`, "u"));
+  const ranked = status.pressure.contributors.filter(
+    (/** @type {{percentile: number | null}} */ contributor) => contributor.percentile !== null,
+  );
+  if (ranked.length > 0) {
+    assert.match(human, new RegExp(`contributors[^\\n]*${ranked[0].dimension}`, "u"));
+  } else {
+    assert.match(human, /contributors none ranked/u);
+  }
 });
 
 /** @param {string} root */
@@ -2623,3 +2649,65 @@ test("every warning the JSON document carries is also spoken to stderr", async (
 function escapeForPattern(value) {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
+
+test("the flags the specification documents are the flags the CLI accepts", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  // §12.4 documents `--horizon <duration|all>`; `all` asks for every configured horizon at once,
+  // which is what a source with several of them makes worth asking for.
+  fixture.stdout.value = "";
+  const statsExit = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--horizon", "all", "--json"],
+    fixture.options,
+  );
+  const stats = JSON.parse(fixture.stdout.value);
+  assert.equal(statsExit, 0, fixture.stdout.value.slice(0, 200));
+  assert.ok(stats.data.horizons.length > 1, JSON.stringify(stats.data.horizons));
+
+  // §12.6 documents `snack doctor [--source <alias>]`, which narrows the report to one source's
+  // checks rather than every configured one.
+  fixture.stdout.value = "";
+  const doctorExit = await run(
+    ["node", "snack", "doctor", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const doctor = JSON.parse(fixture.stdout.value);
+  assert.notEqual(doctorExit, 2, fixture.stdout.value.slice(0, 200));
+  assert.ok(
+    doctor.data.checks.some((/** @type {{id: string}} */ check) =>
+      check.id.endsWith(":personal-anthropic"),
+    ),
+    JSON.stringify(doctor.data.checks.map((/** @type {{id: string}} */ check) => check.id)),
+  );
+});
+
+test("a history the prior no longer dominates is not described as sparse", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  // Fifty successful prompts against a prior worth one pseudo-observation: whatever the forecast
+  // backed off to, the plan-profile prior is a rounding error in that posterior. Saying it still
+  // dominates is a statement the same document contradicts.
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  const baseMs = Date.parse("2026-01-02T03:00:00.000Z");
+  let sql = "";
+  for (let index = 1; index <= 50; index += 1) {
+    sql += insertOpenCodePrompt(`bulk-${index}`, baseMs - index * 60_000);
+  }
+  executeOpenCodeSql(fixture.options.env.OPENCODE_DB, sql);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const status = JSON.parse(fixture.stdout.value).data;
+
+  const priorMass = status.contributors.prior.alpha + status.contributors.prior.beta;
+  const posteriorMass =
+    status.contributors.evidence_window.alpha + status.contributors.evidence_window.beta;
+  assert.ok(priorMass * 2 < posteriorMass, `prior ${priorMass} of ${posteriorMass}`);
+  assert.ok(
+    !status.caveats.some((/** @type {string} */ caveat) => caveat.includes("still dominates")),
+    JSON.stringify(status.caveats),
+  );
+});

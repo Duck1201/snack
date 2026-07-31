@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -69,6 +69,32 @@ test("reports an unavailable source when OpenCode is not installed", async () =>
     }
     assert.equal(adapter.health().status, "inaccessible");
   }
+});
+
+test("a file that is not a database at all is an unavailable source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "snack-opencode-notadb-"));
+  temporaryRoots.push(root);
+  const databaseFile = join(root, "opencode.db");
+  // SQLite validates the header on the first read, not on open, so this failure arrives from a
+  // different place than a missing file and used to escape the classifier as an internal failure.
+  await writeFile(databaseFile, "this is not a database at all\n", { mode: 0o600 });
+  const adapter = createOpenCodeAdapter({ databaseFile });
+
+  for (const read of [
+    () => adapter.detect(),
+    () => adapter.fingerprint(),
+    () => adapter.readAll(),
+    () => adapter.readSince(null),
+  ]) {
+    assert.throws(
+      read,
+      (error) =>
+        error instanceof SnackError &&
+        error.reason === "source_unavailable" &&
+        error.exitCode === 4,
+    );
+  }
+  assert.equal(adapter.health().status, "inaccessible");
 });
 
 test("reads one completed prompt without exposing content", async () => {
