@@ -230,27 +230,6 @@ export async function run(argv, options = {}) {
             const sources = /** @type {unknown[]} */ (
               Array.isArray(current.sources) ? current.sources : []
             );
-            const existingAlias = sources.find(
-              (source) =>
-                typeof source === "object" &&
-                source !== null &&
-                "alias" in source &&
-                source.alias === configuredSource.alias,
-            );
-            if (
-              typeof existingAlias === "object" &&
-              existingAlias !== null &&
-              "database" in existingAlias &&
-              existingAlias.database !== databaseFile
-            ) {
-              throw new SnackError(
-                "A capacity-source alias cannot be rebound to another database.",
-                {
-                  code: ExitCode.config,
-                  reason: "source_rebind_rejected",
-                },
-              );
-            }
             const ambiguousMapping = sources.some(
               (source) =>
                 typeof source === "object" &&
@@ -273,36 +252,15 @@ export async function run(argv, options = {}) {
                 },
               );
             }
-            const existingInstallation = sources.find(
-              (source) =>
-                typeof source === "object" &&
-                source !== null &&
-                "database" in source &&
-                source.database === databaseFile &&
-                "installation_id" in source &&
-                typeof source.installation_id === "string",
-            );
-            if (
-              typeof existingInstallation === "object" &&
-              existingInstallation !== null &&
-              "installation_id" in existingInstallation &&
-              typeof existingInstallation.installation_id === "string"
-            ) {
-              configuredSource = {
-                ...configuredSource,
-                installation_id: existingInstallation.installation_id,
-              };
-            }
-            const updatedSources = [
-              ...sources.filter(
-                (source) =>
-                  typeof source !== "object" ||
-                  source === null ||
-                  !("alias" in source) ||
-                  source.alias !== configuredSource.alias,
+            const merged = mergeConfiguredSource(
+              /** @type {Record<string, unknown>[]} */ (
+                sources.filter((source) => typeof source === "object" && source !== null)
               ),
               configuredSource,
-            ];
+              "database",
+            );
+            configuredSource = merged.source;
+            const updatedSources = merged.sources;
             /** @type {[string, unknown][]} */
             const configUpdates = [["sources", updatedSources]];
             if (resolved.enableProspectiveAnalysis === true) {
@@ -660,9 +618,9 @@ export async function run(argv, options = {}) {
     .option("--json", "emit one versioned JSON document")
     .action(async function stats(commandOptions) {
       const current = await readConfig(paths.configFile);
-      const configuredSources = Array.isArray(current.sources)
-        ? current.sources.filter(isConfiguredSource)
-        : [];
+      const configuredSources = byCapacitySource(
+        Array.isArray(current.sources) ? current.sources.filter(isConfiguredSource) : [],
+      );
       const selected = commandOptions.source
         ? configuredSources.filter((source) => source.alias === commandOptions.source)
         : configuredSources;
@@ -724,9 +682,9 @@ export async function run(argv, options = {}) {
       await withStorageOperationLock(paths, async () => {
         await recoverSetupJournal(paths);
         const current = await readConfig(paths.configFile);
-        const configuredSources = Array.isArray(current.sources)
-          ? current.sources.filter(isConfiguredSource)
-          : [];
+        const configuredSources = byCapacitySource(
+          Array.isArray(current.sources) ? current.sources.filter(isConfiguredSource) : [],
+        );
         const selected = commandOptions.source
           ? configuredSources.filter((source) => source.alias === commandOptions.source)
           : configuredSources;
@@ -1457,7 +1415,6 @@ async function readConfiguredSources(configFile) {
  */
 async function commitConfiguredSource(input) {
   let configuredSource = input.source;
-  const location = /** @type {Record<string, unknown>} */ (input.source)[input.locationKey];
   await withStorageOperationLock(input.paths, async () => {
     await withConfigLock(input.paths.configFile, async () => {
       /** @type {Record<string, unknown>} */
@@ -1472,27 +1429,9 @@ async function commitConfiguredSource(input) {
           (source) => typeof source === "object" && source !== null,
         )
       );
-      const existingAlias = sources.find((source) => source.alias === configuredSource.alias);
-      if (existingAlias && existingAlias[input.locationKey] !== location) {
-        throw new SnackError("A capacity-source alias cannot be rebound to another history.", {
-          code: ExitCode.config,
-          reason: "source_rebind_rejected",
-        });
-      }
-      const existingInstallation = sources.find(
-        (source) =>
-          source[input.locationKey] === location && typeof source.installation_id === "string",
-      );
-      if (typeof existingInstallation?.installation_id === "string") {
-        configuredSource = {
-          ...configuredSource,
-          installation_id: existingInstallation.installation_id,
-        };
-      }
-      const updatedSources = [
-        ...sources.filter((source) => source.alias !== configuredSource.alias),
-        configuredSource,
-      ];
+      const merged = mergeConfiguredSource(sources, configuredSource, input.locationKey);
+      configuredSource = merged.source;
+      const updatedSources = merged.sources;
       /** @type {[string, unknown][]} */
       const configUpdates = [["sources", updatedSources]];
       if (input.enableProspectiveAnalysis) {
@@ -2042,6 +1981,76 @@ function commandName(argv) {
  */
 function isConfiguredOpenCodeSource(value) {
   return isConfiguredSource(value) && value.adapter === "opencode" && "database" in value;
+}
+
+/**
+ * Place one configured source into the list of configured sources.
+ *
+ * Both setup commands route through this, because the rule they have to agree on is subtle and
+ * they already drifted apart once: a capacity source is a lineage, not a client, so two clients
+ * that talk to the same provider, account, and plan share an alias on purpose and neither may
+ * evict the other. What stays refused is the same client's alias being pointed at a different
+ * history, which would silently reinterpret every observation already stored under it.
+ *
+ * @template {Record<string, unknown>} T
+ * @param {Record<string, unknown>[]} sources
+ * @param {T} configuredSource
+ * @param {string} locationKey the field naming where this client keeps its history
+ * @returns {{source: T, sources: Record<string, unknown>[]}}
+ */
+function mergeConfiguredSource(sources, configuredSource, locationKey) {
+  const location = configuredSource[locationKey];
+  const existingBinding = sources.find(
+    (source) =>
+      source.alias === configuredSource.alias && source.adapter === configuredSource.adapter,
+  );
+  if (existingBinding && existingBinding[locationKey] !== location) {
+    throw new SnackError("A capacity-source alias cannot be rebound to another history.", {
+      code: ExitCode.config,
+      reason: "source_rebind_rejected",
+    });
+  }
+  // One client installation keeps one identity however many capacity sources it feeds, so a
+  // history already known under another alias contributes its identity rather than a new one.
+  const existingInstallation = sources.find(
+    (source) => source[locationKey] === location && typeof source.installation_id === "string",
+  );
+  const source =
+    typeof existingInstallation?.installation_id === "string"
+      ? { ...configuredSource, installation_id: existingInstallation.installation_id }
+      : configuredSource;
+  return {
+    source,
+    sources: [
+      ...sources.filter(
+        (candidate) =>
+          candidate.alias !== configuredSource.alias ||
+          candidate.adapter !== configuredSource.adapter,
+      ),
+      source,
+    ],
+  };
+}
+
+/**
+ * Reduce configured sources to one entry per capacity source.
+ *
+ * Configuration records one entry per client feeding a capacity source, because each client has
+ * its own installation identity and its own history to find. Reporting is about the capacity
+ * source: usage from every client behind one lineage is already combined in storage, so listing
+ * the lineage twice would describe two capacities that do not exist.
+ *
+ * @template {{alias: string}} T
+ * @param {T[]} sources
+ * @returns {T[]}
+ */
+function byCapacitySource(sources) {
+  /** @type {Map<string, T>} */
+  const unique = new Map();
+  for (const source of sources) {
+    if (!unique.has(source.alias)) unique.set(source.alias, source);
+  }
+  return [...unique.values()];
 }
 
 /**

@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { runDoctor } from "../src/doctor.js";
+import { run } from "../src/main.js";
 import { pluginPackageSpec } from "../src/opencode-config.js";
 import { initializeDatabase } from "../src/storage.js";
-import { cleanupRunFixtures, makeRunFixture } from "./fixtures/run-fixture.js";
+import { cleanupRunFixtures, createClaudeHistory, makeRunFixture } from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
 
@@ -88,4 +89,40 @@ test("doctor fails a plugin registration SNACK cannot work with", async () => {
   const check = await runDoctorWithPlugins([[pluginPackageSpec, { unknown_option: true }]]);
 
   assert.equal(check.status, "fail");
+});
+
+test("a Claude-only installation is not told about the OpenCode plugin", async () => {
+  const fixture = await makeRunFixture("snack-doctor-claude-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const document = JSON.parse(fixture.stdout.value);
+
+  // Reporting an unregistered OpenCode plugin to someone who never configured OpenCode answers a
+  // question they did not ask, and degrades a healthy installation for it.
+  const ids = document.data.checks.map((/** @type {{id: string}} */ check) => check.id);
+  assert.ok(!ids.includes("opencode_plugin"), ids.join(", "));
+  assert.ok(ids.includes("source_fingerprint:claude"));
+  assert.equal(document.status, "ok");
 });

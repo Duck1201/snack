@@ -21,3 +21,9 @@ Databases upgrade from `0.6` in place. The two constraints that named OpenCode, 
 cursor columns that spelled out OpenCode's own concepts, are replaced by ones that name a set of
 clients and an adapter-owned cursor; an existing OpenCode cursor keeps its place rather than forcing
 a full re-read.
+
+Two clients can share one capacity source. Giving OpenCode and Claude Code the same alias, provider,
+profile, and plan puts them behind one lineage, because that is what they are when they talk to the
+same provider account: one usage profile and one capacity period rather than two halves of a
+capacity that does not exist. A restriction stays attributed to the client that was refused even
+when the other client succeeds afterwards.

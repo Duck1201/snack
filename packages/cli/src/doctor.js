@@ -100,7 +100,13 @@ export async function runDoctor(paths, options = {}) {
   if (backupFiles) checks.push(backupFiles);
 
   const sources = Array.isArray(config?.sources) ? config.sources : [];
-  if (sources.some(isConfiguredSource) && options.opencodeConfigFile) {
+  // Only an installation that actually configured OpenCode has any reason to hear about the
+  // OpenCode capture plugin. Telling a Claude-only user their OpenCode plugin is unregistered is
+  // an answer to a question they did not ask.
+  const configuredOpenCode = sources.some(
+    (source) => isConfiguredSource(source) && source.adapter === "opencode",
+  );
+  if (configuredOpenCode && options.opencodeConfigFile) {
     const registration = await inspectPluginRegistration(options.opencodeConfigFile);
     checks.push(
       registration === "compatible"

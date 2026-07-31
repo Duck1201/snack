@@ -962,41 +962,33 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
     )
     .run(source.alias, timestamp);
 
-  const binding = database
-    .prepare("SELECT installation_id FROM source_binding WHERE source_alias = ?")
-    .get(source.alias);
-  if (typeof binding !== "object" || binding === null || !("installation_id" in binding)) {
-    database
-      .prepare(
-        `INSERT INTO client_installation
-           (id, client_kind, local_fingerprint, created_at, last_seen_at)
-         VALUES (?, 'opencode', ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
-      )
-      .run(source.installation_id, source.installation_id, timestamp, timestamp);
-    database
-      .prepare(
-        `INSERT INTO source_binding
-           (source_alias, installation_id, adapter, provider, profile)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(source.alias, source.installation_id, source.adapter, source.provider, source.profile);
-  } else {
-    database
-      .prepare(
-        `UPDATE client_installation
-         SET last_seen_at = ?
-         WHERE id = ?`,
-      )
-      .run(timestamp, binding.installation_id);
-    database
-      .prepare(
-        `UPDATE source_binding
-         SET provider = ?, profile = ?
-         WHERE source_alias = ?`,
-      )
-      .run(source.provider, source.profile, source.alias);
-  }
+  // A capacity source can be fed by more than one client installation, so the binding is keyed by
+  // the pair. The client kind comes from the source's own adapter rather than being assumed.
+  database
+    .prepare(
+      `INSERT INTO client_installation
+         (id, client_kind, local_fingerprint, created_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
+    )
+    .run(
+      source.installation_id,
+      source.adapter === "claude" ? "claude" : "opencode",
+      source.installation_id,
+      timestamp,
+      timestamp,
+    );
+  database
+    .prepare(
+      `INSERT INTO source_binding
+         (source_alias, installation_id, adapter, provider, profile)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(source_alias, installation_id) DO UPDATE SET
+         adapter = excluded.adapter,
+         provider = excluded.provider,
+         profile = excluded.profile`,
+    )
+    .run(source.alias, source.installation_id, source.adapter, source.provider, source.profile);
 
   let period = database
     .prepare(

@@ -1,6 +1,7 @@
 # Claude Code Support Matrix
 
-Status: in progress.
+Status: the matrix below is settled and every command group answers for a Claude source;
+cross-platform runtime validation is pending.
 
 SNACK `0.7.x` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
 read-only backfill. There is no live-capture path for Claude Code and no SNACK hook is registered in
@@ -78,6 +79,22 @@ offers no plugin question, because there is no plugin to register.
 Claude Code and OpenCode sources can be configured side by side. A source records where its client
 keeps its history — a `database` for OpenCode, a `projects` directory for Claude Code — and the
 configuration schema refuses a source that claims the other client's shape.
+
+## Sharing one capacity source
+
+Giving both clients the same `--source` alias, provider, profile, and plan puts them behind one
+capacity source. That is the honest description when they talk to the same provider account: they
+compete for the same real capacity, so their usage is one usage profile and one capacity period
+rather than two halves of a capacity that does not exist. Configuration records one entry per
+client, because each has its own installation identity and its own history to find; `status` and
+`stats` report the capacity source, not the clients feeding it.
+
+An observed restriction stays attributed to the client that was refused. Getting an answer from the
+other client afterwards does not mean the provider did not say no, and combining usage must never
+combine away the scarcest evidence a forecast has.
+
+Pointing the same client's alias at a different history is still refused: it would silently
+reinterpret every observation already stored under it.
 
 Incremental `sync` skips session files Claude Code has not written to. The cursor is a document the
 adapter owns, keyed by a hash of each session file's location: Claude Code names its project

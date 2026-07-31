@@ -340,13 +340,13 @@ test("upgrading a 0.6 database to 0.7 keeps every row it already held", async ()
 
   const upgrade = await initializeDatabase(paths, { applicationVersion: "0.7.0", now });
 
-  assert.deepEqual(upgrade.applied, [10]);
+  assert.deepEqual(upgrade.applied, [10, 11]);
   assert.equal(upgrade.backupCreated, true);
   const after = tableCounts(paths.databaseFile);
   // The migration history is the one table an upgrade is supposed to grow. Every other table has
   // to come out the far side holding exactly what it held, including the ones the migration
   // rebuilds from scratch.
-  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 1);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 2);
   assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
   assert.deepEqual(await inspectDatabase(paths.databaseFile), {
     exists: true,

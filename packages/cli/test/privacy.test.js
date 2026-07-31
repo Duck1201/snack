@@ -7,6 +7,7 @@ import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
+  createClaudeCanaryHistory,
   createOpenCodeDatabase,
   executeOpenCodeSql,
   makeRunFixture,
@@ -225,4 +226,76 @@ test("every file SNACK creates is private to its owner", async () => {
     assert.equal((await stat(file.path)).mode & 0o777, 0o600, file.path);
   }
   assert.equal((await stat(join(fixture.root, "export.json"))).mode & 0o777, 0o600);
+});
+
+test("no command writes or prints what a Claude history says about the user", async () => {
+  const fixture = await makeRunFixture("snack-privacy-claude-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeCanaryHistory(
+    fixture.root,
+    privacyCanaries,
+  );
+
+  /** @type {string[][]} */
+  const invocations = [
+    [
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    ["sync", "--full"],
+    ["status"],
+    ["stats", "--verbose"],
+    ["doctor"],
+    ["config", "get"],
+    ["export", "--format", "json", "--output", "-"],
+    ["export", "--format", "csv", "--output", join(fixture.root, "claude-csv-out")],
+    ["data", "purge", "--source", "claude", "--prevent-reimport", "--yes"],
+    ["sync", "--full"],
+  ];
+
+  /** @type {string[]} */
+  const transcript = [];
+  for (const argv of invocations) {
+    for (const json of [false, true]) {
+      fixture.stdout.value = "";
+      fixture.stderr.value = "";
+      await run(["node", "snack", ...argv, ...(json ? ["--json"] : [])], fixture.options);
+      transcript.push(fixture.stdout.value, fixture.stderr.value);
+    }
+  }
+
+  // Guard against a vacuous pass: the canaries have to really be in the history SNACK read, and
+  // SNACK has to really have read it.
+  const history = await readEveryByte(
+    join(String(fixture.options.env.CLAUDE_CONFIG_DIR), "projects"),
+  );
+  assert.ok(history.some((file) => file.content.includes(privacyCanaries.prompt)));
+  assert.ok(transcript.join("").includes("claude"), "no command named the configured source");
+
+  const files = await readEveryByte(fixture.root);
+  const snackFiles = files.filter(
+    (file) => !file.path.startsWith(String(fixture.options.env.CLAUDE_CONFIG_DIR)),
+  );
+  assert.ok(
+    snackFiles.some((file) => file.path.endsWith("snack.sqlite3")),
+    "the storage database was never created",
+  );
+
+  for (const [name, canary] of Object.entries(privacyCanaries)) {
+    const pattern = new RegExp(String(canary), "u");
+    for (const [index, output] of transcript.entries()) {
+      assert.doesNotMatch(output, pattern, `${name} reached output ${index}`);
+    }
+    for (const file of snackFiles) {
+      assert.doesNotMatch(file.content, pattern, `${name} reached ${file.path}`);
+    }
+  }
 });

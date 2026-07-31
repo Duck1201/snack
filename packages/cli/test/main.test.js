@@ -12,6 +12,7 @@ import { classifyRisk } from "../src/prediction.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
 import {
   cleanupRunFixtures,
+  createClaudeHistory,
   createOpenCodeDatabase,
   executeOpenCodeSql,
   makeRunFixture,
@@ -37,7 +38,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -2758,4 +2759,161 @@ test("SNACK_DEBUG explains an unexpected failure without changing what it report
   assert.deepEqual(verboseDocument.errors, quietDocument.errors);
   assert.match(fixture.stderr.value, /DIAGNOSTIC_CANARY/u);
   assert.doesNotMatch(fixture.stdout.value, /DIAGNOSTIC_CANARY/u);
+});
+
+test("every command group answers for a Claude-only capacity source", async () => {
+  const fixture = await makeRunFixture("snack-claude-parity-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  // The exit criterion is the same conformance the MVP demanded, answered for the second client:
+  // a source is a source, and no command group is allowed to be OpenCode-only.
+  /** @type {[string, string[]][]} */
+  const invocations = [
+    ["sync", ["sync"]],
+    ["status", ["status", "--no-sync"]],
+    ["stats", ["stats"]],
+    ["doctor", ["doctor"]],
+    ["config get", ["config", "get"]],
+    ["export", ["export", "--format", "json", "--output", "-"]],
+    ["data purge", ["data", "purge", "--source", "claude", "--dry-run"]],
+  ];
+  for (const [name, argv] of invocations) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(["node", "snack", ...argv, "--json"], fixture.options);
+    assert.equal(
+      exitCode,
+      0,
+      `snack ${argv.join(" ")} exited ${exitCode}: ${fixture.stderr.value}`,
+    );
+    const document = JSON.parse(fixture.stdout.value);
+    assert.notEqual(document.status, "error", `snack ${argv.join(" ")} reported an error`);
+    assert.equal(document.schema_version, "1", name);
+  }
+
+  // Export is the document that has to actually carry the observations, not merely succeed.
+  fixture.stdout.value = "";
+  await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+  const exported = JSON.parse(fixture.stdout.value);
+  assert.equal(exported.data.tables.prompts.length, 1);
+  assert.equal(exported.data.tables.usage_slices.length, 2);
+});
+
+test("two clients behind one capacity source add up instead of splitting", async () => {
+  const fixture = await makeRunFixture("snack-shared-source-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  /** @param {string} client */
+  const setup = (client) =>
+    run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        "work",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+        "--json",
+      ],
+      fixture.options,
+    );
+
+  assert.equal(await setup("opencode"), 0);
+  assert.equal(await setup("claude"), 0, fixture.stderr.value);
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+  const exported = JSON.parse(fixture.stdout.value).data.tables;
+
+  // One provider, one profile, one plan: the two clients compete for the same real capacity, so
+  // their usage belongs to one lineage. Splitting it would describe a developer who used half as
+  // much through each of two capacities that do not exist.
+  assert.equal(exported.prompts.length, 2);
+  assert.equal(exported.usage_slices.length, 3);
+  assert.equal(
+    new Set(exported.prompts.map((/** @type {{source_alias: string}} */ p) => p.source_alias)).size,
+    1,
+  );
+  assert.equal(exported.capacity_periods.length, 1);
+
+  // And it is one capacity source to the user, not two rows that happen to share a name.
+  fixture.stdout.value = "";
+  await run(["node", "snack", "stats", "--json"], fixture.options);
+  // One document, not one per configured client: `stats` reports the capacity source, and the
+  // clients feeding it are an ingestion detail the user did not ask about.
+  const stats = JSON.parse(fixture.stdout.value);
+  assert.equal(stats.data.source.alias, "work");
+  assert.equal(fixture.stdout.value.match(/"command": "stats"/gu)?.length, 1);
+});
+
+test("a refusal one client saw survives another client succeeding on the same source", async () => {
+  const fixture = await makeRunFixture("snack-shared-restriction-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(
+    fixture.root,
+    "restricted-turn.jsonl",
+  );
+  for (const client of ["claude", "opencode"]) {
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        "work",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+      ],
+      fixture.options,
+    );
+  }
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+  const tables = JSON.parse(fixture.stdout.value).data.tables;
+
+  // Falling back to another client and getting an answer does not mean the first client was not
+  // refused. Combining the usage of a shared capacity source must not combine away the evidence
+  // that the provider said no, which is the scarcest thing a forecast learns from.
+  assert.equal(tables.restrictions.length, 1);
+  assert.equal(tables.restrictions[0].class, "rate_limit");
+  const outcomes = tables.prompts
+    .map((/** @type {{outcome: string}} */ prompt) => prompt.outcome)
+    .sort();
+  assert.deepEqual(outcomes, ["restricted", "success"]);
+  assert.equal(tables.capacity_periods.length, 1);
 });
