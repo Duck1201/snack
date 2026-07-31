@@ -26,12 +26,27 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.16.0
+      # A release publishes only a commit whose CI has finished and passed. Dispatching while that
+      # run is still going is an ordinary thing to do — the 0.6.1 release did it — and failing
+      # immediately taught nothing except to wait and try again, so this waits instead. It is a
+      # gate on the result, never a substitute for it: an unfinished run after the timeout, a
+      # failure, or no run at all all stop the release.
       - name: Verify CI passed for this commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run:
-          test "$(gh run list --workflow CI --branch main --commit "$GITHUB_SHA" --status completed
-          --limit 1 --json conclusion --jq '.[0].conclusion')" = success
+        run: |
+          for attempt in $(seq 1 30); do
+            conclusion="$(gh run list --workflow CI --branch main --commit "$GITHUB_SHA" \
+              --status completed --limit 1 --json conclusion --jq '.[0].conclusion')"
+            if [ -n "${conclusion}" ]; then
+              test "${conclusion}" = success
+              exit $?
+            fi
+            echo "CI for ${GITHUB_SHA} has not finished yet; waiting (${attempt}/30)."
+            sleep 20
+          done
+          echo "::error::CI for ${GITHUB_SHA} did not finish within ten minutes"
+          exit 1
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run check

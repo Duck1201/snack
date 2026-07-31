@@ -39,7 +39,7 @@ and reads no credentials.
 
 ### Install
 
-Requires Node.js 24. `0.6.0` is the MVP and the default install:
+Requires Node.js 24. The MVP is published and is the default install:
 
 ```bash
 npm install -g @snack-ai/cli
@@ -119,7 +119,7 @@ não envia telemetria e não lê credenciais.
 
 ### Instalação
 
-Requer Node.js 24. A `0.6.0` é o MVP e a instalação padrão:
+Requer Node.js 24. O MVP está publicado e é a instalação padrão:
 
 ```bash
 npm install -g @snack-ai/cli

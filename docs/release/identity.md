@@ -196,6 +196,29 @@ in the Sigstore transparency log at index `2300727520`. The registry resolves
 `@snack-ai/cli@latest` to `0.6.1`.
 
 That run is recorded as a failure, and it is one: it aborted on the `dist-tag` call described above,
-before reaching the plugin, so `@snack-ai/opencode@0.1.2` was not published. Re-running the workflow
-after that call is removed publishes the plugin and skips the CLI, which is already on the registry.
+before reaching the plugin, so `@snack-ai/opencode@0.1.2` was not published.
+
+Two more runs were needed, and neither failed on publishing. Run
+[30629146283](https://github.com/Duck1201/snack/actions/runs/30629146283) stopped at its own
+`npm run check`, on a performance budget that a shared runner missed by three per cent; that budget
+now reports on CI and asserts off it, like the others. Run
+[30629734229](https://github.com/Duck1201/snack/actions/runs/30629734229) stopped at the CI gate,
+because it was dispatched while CI for the same commit was still running and the gate only accepted
+a completed run — correct, and now patient enough to wait for one.
+
+Stage 6 publication: passed
+
+`@snack-ai/opencode@0.1.2` was published from commit `bac5f5d` by protected release run
+[30629996001](https://github.com/Duck1201/snack/actions/runs/30629996001), with provenance recorded
+in the Sigstore transparency log at index `2300989264`. The CLI step skipped, `0.6.1` already being
+on the registry.
+
+| Package | Version | `latest` | Attestations |
+| --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.6.1` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | publish + SLSA provenance |
+
+`next` still resolves to `0.6.0` and `0.1.1`. That is the documented consequence of publishing being
+the only registry write this workflow makes, and it is corrected by hand when there is reason to;
+`latest`, which a default install resolves, is what the release guarantees.
 
