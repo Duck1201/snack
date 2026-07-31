@@ -1,6 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import Database from "better-sqlite3";
 
 /**
  * Command tests drive `run(argv, options)` against injected sinks, a temporary XDG environment,
@@ -59,6 +61,19 @@ export async function makeRunFixture(prefix = "snack-main-") {
   };
 }
 
+/** @param {string} root @param {string} [filename] */
+export async function createOpenCodeDatabase(root, filename = "opencode.db") {
+  const databaseFile = join(root, filename);
+  const sql = await readFile(new URL("./opencode/supported-v1.sql", import.meta.url), "utf8");
+  const database = new Database(databaseFile);
+  try {
+    database.exec(sql);
+  } finally {
+    database.close();
+  }
+  return databaseFile;
+}
+
 export function sink() {
   return {
     value: "",
@@ -67,4 +82,14 @@ export function sink() {
       this.value += chunk;
     },
   };
+}
+
+/** @param {string} databaseFile @param {string} sql */
+export function executeOpenCodeSql(databaseFile, sql) {
+  const database = new Database(databaseFile);
+  try {
+    database.exec(sql);
+  } finally {
+    database.close();
+  }
 }

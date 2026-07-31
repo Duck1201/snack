@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 
 import { assignPressureBands } from "../src/analytics.js";
 import { backtest } from "../src/calibration.js";
+import { exportJsonChunks } from "../src/export.js";
 import { resolvePaths } from "../src/paths.js";
 import { PREDICTION_POLICY, buildForecast } from "../src/prediction.js";
 import { categorizeHistory } from "../src/prompt-features.js";
@@ -246,4 +247,38 @@ test(`backtesting the whole ${PROMPTS.toLocaleString("en-US")}-prompt history co
   // takes well under a second, and a rolling origin that rescanned the prefix at every
   // step would put a six-figure history out of reach entirely.
   assert.ok(replay.elapsedMs < 30_000, `backtest took ${replay.elapsedMs.toFixed(0)}ms`);
+});
+
+test(`exporting ${PROMPTS.toLocaleString("en-US")} prompts stays inside the memory budget`, async () => {
+  const history = await makeLargeHistory();
+
+  const before = process.memoryUsage().rss;
+  let peak = before;
+  let bytes = 0;
+  let rows = 0;
+
+  // Consuming the generator without joining the chunks is the point. Absolute resident memory
+  // is a property of the whole process and carries whatever earlier tests left behind, so the
+  // assertion is on growth instead: the export must cost less memory than the document it
+  // produces, which is only possible if it never holds that document. Buffering the same
+  // export measured about four times its own size.
+  const chunks = exportJsonChunks(
+    history.databaseFile,
+    {},
+    { command: "export", now, provenance: {} },
+  );
+  let step = chunks.next();
+  while (step.done !== true) {
+    bytes += step.value.length;
+    if ((rows += 1) % 5_000 === 0) peak = Math.max(peak, process.memoryUsage().rss);
+    step = chunks.next();
+  }
+  peak = Math.max(peak, process.memoryUsage().rss);
+
+  assert.equal(step.value.prompts, PROMPTS);
+  assert.ok(bytes > 10_000_000, `export produced only ${bytes} bytes`);
+  assert.ok(
+    peak - before < bytes,
+    `export grew resident memory by ${((peak - before) / 1024 / 1024).toFixed(0)}MB while producing ${(bytes / 1024 / 1024).toFixed(0)}MB`,
+  );
 });

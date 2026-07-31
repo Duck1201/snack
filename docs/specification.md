@@ -508,11 +508,20 @@ Doctor never prints credentials, prompt text, response text, or raw sensitive so
 ### 12.7 `snack export`
 
 ```text
-snack export --format <json|csv> --output <path|->
+snack export --format json --output <path|->
+snack export --format csv  --output <directory>
              [--source <alias>] [--since <time>] [--until <time>]
 ```
 
 Export is the only intentional path for data to leave SNACK storage. JSON includes schema version and sufficient plan/model provenance to interpret predictions. CSV is a flattened usage/prediction representation and may require separate files when one-to-many relationships cannot be represented safely.
+
+Both formats carry the same flat tables joined by key — `capacity_periods`, `prompts`, `usage_slices`, `restrictions`, `predictions`, `prediction_evaluations` — rather than one nesting and the other flattening. Each table declares its columns, so a later migration cannot widen an export by adding one. Operational tables are excluded, including `pending_spool_observation`, whose payload column is the one place an unreviewed field from a future capture schema could reach an export; live events that have not yet been reconciled therefore do not appear until a synchronization commits them.
+
+`--since` is inclusive and `--until` exclusive, the same half-open convention the analysis horizons use.
+
+An export carries two levels of provenance. Row-level versions come from the rows and are never re-stamped with the exporting build's values. A document-level block names the exporting build — CLI version, export schema version, envelope schema version — and the plan profile each source resolved to. The export schema version is independent of the envelope `schema_version` because it freezes as a public contract at 1.0 on its own timeline.
+
+`--format csv --output -` is refused with exit `2`. Six related tables cannot share one stream without either repeating prompt columns per usage slice or introducing a separator no CSV reader understands, and both invite a silent miscount; CSV writes one file per table in a directory, beside a `manifest.json` carrying the provenance and per-table row counts.
 
 No export contains credentials or text content. Opaque identifiers remain opaque.
 

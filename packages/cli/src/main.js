@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Command, CommanderError } from "commander";
@@ -23,6 +23,12 @@ import {
 } from "./analytics.js";
 import { runDoctor } from "./doctor.js";
 import { ExitCode, SnackError } from "./errors.js";
+import {
+  EXPORT_SCHEMA_VERSION,
+  EXPORT_TABLES,
+  exportCsvChunks,
+  exportJsonChunks,
+} from "./export.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
   preparePluginRegistration,
@@ -818,6 +824,57 @@ export async function run(argv, options = {}) {
       commandExitCode = doctorExitCode(result.checks);
     });
 
+  program
+    .command("export")
+    .description("write observed usage and predictions to an interpretable file")
+    .requiredOption("--format <json|csv>", "export format")
+    .requiredOption("--output <path>", "destination path, or - for stdout in JSON")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--since <time>", "include records at or after this time")
+    .option("--until <time>", "include records before this time")
+    .action(async function exportData(commandOptions) {
+      if (commandOptions.format !== "json" && commandOptions.format !== "csv") {
+        throw new SnackError("Export format must be json or csv.", {
+          code: ExitCode.usage,
+          reason: "export_format_unsupported",
+        });
+      }
+      const config = await readConfig(paths.configFile);
+      const scope = buildExportScope(commandOptions, config);
+      const provenance = await buildExportProvenance(config, scope);
+      const context = { command: "export", now, provenance };
+
+      if (commandOptions.format === "csv" && commandOptions.output === "-") {
+        // Six related tables cannot share one stream without either repeating prompt columns
+        // per usage slice or inventing a separator no CSV reader understands. Both invite a
+        // silent miscount, so CSV requires a directory instead.
+        throw new SnackError("CSV export requires a directory; use --output <dir>.", {
+          code: ExitCode.usage,
+          reason: "csv_stream_unsupported",
+        });
+      }
+
+      if (commandOptions.output === "-") {
+        for (const chunk of exportJsonChunks(paths.databaseFile, scope, context)) {
+          stdout.write(chunk);
+        }
+        return;
+      }
+
+      const counts =
+        commandOptions.format === "json"
+          ? await writeJsonExport(paths.databaseFile, scope, context, commandOptions.output)
+          : await writeCsvExport(paths.databaseFile, scope, context, commandOptions.output);
+      const data = { output: commandOptions.output, format: commandOptions.format, counts };
+      if (wantsJson(this, configuredJson)) {
+        stdout.write(formatJson(createEnvelope("export", data, { now })));
+      } else {
+        stdout.write(
+          `Exported ${Object.values(counts).reduce((total, count) => total + count, 0)} records to ${commandOptions.output}.\n`,
+        );
+      }
+    });
+
   try {
     if (argv.length <= 2) {
       program.outputHelp();
@@ -1064,6 +1121,185 @@ function formatHumanValue(value) {
   if (typeof value === "string") return `${value}\n`;
   if (value === null || typeof value !== "object") return `${String(value)}\n`;
   return formatJson(value);
+}
+
+/**
+ * Write a JSON export to a file, one chunk at a time.
+ *
+ * The chunks are written through an open handle rather than joined into a string, so the
+ * memory a six-figure export needs stays independent of how much history it covers.
+ *
+ * @param {string} databaseFile
+ * @param {import("./export.js").ExportScope} scope
+ * @param {{command: string, now: Date, provenance: unknown}} context
+ * @param {string} target
+ */
+async function writeJsonExport(databaseFile, scope, context, target) {
+  /** @type {Record<string, number>} */
+  let counts = {};
+  await withExportFile(target, async (handle) => {
+    // Counting as the rows stream past keeps the file to a single pass over the history.
+    const chunks = exportJsonChunks(databaseFile, scope, context);
+    let step = chunks.next();
+    while (step.done !== true) {
+      await handle.write(step.value);
+      step = chunks.next();
+    }
+    counts = step.value;
+  });
+  return counts;
+}
+
+/**
+ * Write one CSV file per exported table, plus the manifest that makes them interpretable.
+ *
+ * @param {string} databaseFile
+ * @param {import("./export.js").ExportScope} scope
+ * @param {{command: string, now: Date, provenance: unknown}} context
+ * @param {string} directory
+ */
+async function writeCsvExport(databaseFile, scope, context, directory) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  /** @type {Record<string, number>} */
+  const counts = {};
+  for (const table of EXPORT_TABLES) {
+    await withExportFile(join(directory, `${table.name}.csv`), async (handle) => {
+      const chunks = exportCsvChunks(databaseFile, scope, table);
+      let step = chunks.next();
+      while (step.done !== true) {
+        await handle.write(step.value);
+        step = chunks.next();
+      }
+      counts[table.name] = step.value;
+    });
+  }
+  await withExportFile(join(directory, "manifest.json"), async (handle) => {
+    await handle.write(
+      formatJson({
+        export_schema_version: EXPORT_SCHEMA_VERSION,
+        generated_at: context.now.toISOString(),
+        scope,
+        provenance: context.provenance,
+        tables: EXPORT_TABLES.map((table) => ({
+          name: table.name,
+          file: `${table.name}.csv`,
+          columns: table.columns,
+          rows: counts[table.name] ?? 0,
+        })),
+      }),
+    );
+  });
+  return counts;
+}
+
+/**
+ * Create one private export file, reporting a failed write as an export I/O failure.
+ *
+ * @param {string} target
+ * @param {(handle: import("node:fs/promises").FileHandle) => Promise<void>} write
+ */
+async function withExportFile(target, write) {
+  let handle;
+  try {
+    handle = await open(target, "w", 0o600);
+  } catch (error) {
+    throw new SnackError(`Export destination '${target}' could not be opened.`, {
+      code: ExitCode.io,
+      reason: "export_write_error",
+      cause: error,
+    });
+  }
+  try {
+    await write(handle);
+    await handle.sync();
+  } catch (error) {
+    throw new SnackError(`Export to '${target}' could not be completed.`, {
+      code: ExitCode.io,
+      reason: "export_write_error",
+      cause: error,
+    });
+  } finally {
+    await handle.close();
+    await chmod(target, 0o600).catch(() => {});
+  }
+}
+
+/**
+ * Resolve which records an export covers.
+ *
+ * `--since` is inclusive and `--until` exclusive, the same half-open convention `horizonWindow`
+ * uses, so adjacent exports neither drop nor duplicate a record on the boundary.
+ *
+ * @param {{source?: string, since?: string, until?: string}} commandOptions
+ * @param {Record<string, unknown>} config
+ * @returns {import("./export.js").ExportScope}
+ */
+function buildExportScope(commandOptions, config) {
+  const sources = Array.isArray(config.sources) ? config.sources : [];
+  if (
+    commandOptions.source !== undefined &&
+    !sources.some(
+      (source) => isConfiguredOpenCodeSource(source) && source.alias === commandOptions.source,
+    )
+  ) {
+    throw new SnackError(`Capacity source '${commandOptions.source}' is not configured.`, {
+      code: ExitCode.unavailable,
+      reason: "source_not_configured",
+    });
+  }
+  return {
+    ...(commandOptions.source === undefined ? {} : { source: commandOptions.source }),
+    ...(commandOptions.since === undefined
+      ? {}
+      : { since: parseExportBound(commandOptions.since, "--since") }),
+    ...(commandOptions.until === undefined
+      ? {}
+      : { until: parseExportBound(commandOptions.until, "--until") }),
+  };
+}
+
+/** @param {string} raw @param {string} flag */
+function parseExportBound(raw, flag) {
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new SnackError(`${flag} is not a valid time.`, {
+      code: ExitCode.usage,
+      reason: "export_bound_invalid",
+    });
+  }
+  return parsed.toISOString();
+}
+
+/**
+ * Describe the build that produced an export, without re-stamping the rows.
+ *
+ * Row-level versions already record how each record was produced and must survive unchanged.
+ * This block only says which SNACK wrote the file and which plan profile each source resolved
+ * to, so a reader can interpret the priors behind the exported predictions.
+ *
+ * @param {Record<string, unknown>} config
+ * @param {import("./export.js").ExportScope} scope
+ */
+async function buildExportProvenance(config, scope) {
+  const sources = (Array.isArray(config.sources) ? config.sources : [])
+    .filter(isConfiguredOpenCodeSource)
+    .filter((source) => scope.source === undefined || source.alias === scope.source);
+  return {
+    cli_version: packageJson.version,
+    export_schema_version: EXPORT_SCHEMA_VERSION,
+    envelope_schema_version: "1",
+    plan_profiles: sources.map((source) => {
+      const { profile } = resolvePlanProfile(source);
+      return {
+        source: source.alias,
+        id: profile.id,
+        version: profile.version,
+        provenance: profile.provenance,
+        as_of: profile.as_of,
+      };
+    }),
+  };
 }
 
 /** @param {{id: string, status: "pass" | "warn" | "fail"}[]} checks */

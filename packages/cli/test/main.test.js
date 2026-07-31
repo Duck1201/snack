@@ -10,7 +10,13 @@ import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
 import { classifyRisk } from "../src/prediction.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
-import { cleanupRunFixtures, makeRunFixture, sink } from "./fixtures/run-fixture.js";
+import {
+  cleanupRunFixtures,
+  createOpenCodeDatabase,
+  executeOpenCodeSql,
+  makeRunFixture,
+  sink,
+} from "./fixtures/run-fixture.js";
 
 const privacyCanaries = JSON.parse(
   await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url), "utf8"),
@@ -1743,32 +1749,6 @@ test("human status includes every required uncertainty field", async () => {
     /Caveat: Sparse history; the weak plan-profile prior still dominates/u,
   );
 });
-
-/** @param {string} root @param {string} [filename] */
-async function createOpenCodeDatabase(root, filename = "opencode.db") {
-  const databaseFile = join(root, filename);
-  const sql = await readFile(
-    new URL("./fixtures/opencode/supported-v1.sql", import.meta.url),
-    "utf8",
-  );
-  const database = new Database(databaseFile);
-  try {
-    database.exec(sql);
-  } finally {
-    database.close();
-  }
-  return databaseFile;
-}
-
-/** @param {string} databaseFile @param {string} sql */
-function executeOpenCodeSql(databaseFile, sql) {
-  const database = new Database(databaseFile);
-  try {
-    database.exec(sql);
-  } finally {
-    database.close();
-  }
-}
 
 /** @param {string} root */
 async function readTree(root) {
