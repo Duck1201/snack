@@ -75,9 +75,30 @@ npm error code E404
 npm error 404 Not Found - PUT https://registry.npmjs.org/@snack-ai%2fopencode
 ```
 
-On a `PUT`, that status means the authenticated identity may not create the package, not that
-the package is missing. Creating `@snack-ai/opencode` for the first time is therefore an open
-release gate: either the scope's trusted publisher must cover this package for this repository
-and workflow, or the package must be created once by an authorized manual publication. Until
-then, `@snack-ai/cli@0.4.0` documents a capture plugin that cannot be installed, and live
-capture is unavailable to anyone installing from `next`.
+On a `PUT`, that status means the request was not authorized to create the package, not that
+the package is missing. npm cannot bind a trusted publisher to a package that does not exist,
+so the package had to be created once by an authorized manual publication.
+
+`@snack-ai/opencode@0.1.0` was published manually on 2026-07-31 to create the package. A local
+publish cannot produce an attestation, and `publishConfig.provenance` makes npm refuse the
+publish outright with `EUSAGE ... provider: null`, so that publication used `--no-provenance`
+and carries no attestation. npm assigned it `latest`, as it does for any package's first
+version.
+
+Stage 4 publication: passed
+
+With the package created, the scope's trusted publisher was configured for it, and
+`@snack-ai/opencode@0.1.1` was published to `next` from commit
+`04d4141` by protected release run
+[30598743858](https://github.com/Duck1201/snack/actions/runs/30598743858), with provenance
+recorded in the Sigstore transparency log at index `2298046236`.
+
+The registry confirms both released artifacts carry SLSA provenance attestations:
+`@snack-ai/cli@0.4.0` and `@snack-ai/opencode@0.1.1`. `next` resolves to `0.4.0` and `0.1.1`
+respectively.
+
+That run is nonetheless recorded as a failure. Both publications succeeded, and the
+verification step then queried the registry immediately and did not yet see the just-published
+plugin version. The step now retries before concluding a version is missing. This was a false
+negative in the gate, not a failed release — which is the inverse of the Stage 3 problem and a
+reminder that the registry, not a workflow's colour, is the evidence.

@@ -66,7 +66,17 @@ jobs:
           plugin_version="$(node -p "require('./packages/opencode/package.json').version")"
           failed=0
           for spec in "@snack-ai/cli@${cli_version}" "@snack-ai/opencode@${plugin_version}"; do
-            if npm view "${spec}" version > /dev/null 2>&1; then
+            # A freshly published version takes a moment to become readable, so a single
+            # immediate lookup reports a version that was in fact published.
+            found=0
+            for attempt in 1 2 3 4 5 6; do
+              if npm view "${spec}" version > /dev/null 2>&1; then
+                found=1
+                break
+              fi
+              sleep 10
+            done
+            if [ "${found}" -eq 1 ]; then
               echo "verified ${spec}" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "::error::${spec} is not on the registry after publishing"

@@ -379,10 +379,10 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 4 - Explainable Analytics
 
 - **Release:** `0.4.0` on npm `next`
-- **Status:** Implemented and partially released (2026-07-30). `@snack-ai/cli@0.4.0` is
-  published to `next` with provenance. `@snack-ai/opencode` is **not published**: npm
-  rejects its first publication with `404 on PUT`, which is the account lacking permission
-  to create that package. The stage closes when the plugin reaches `next`.
+- **Status:** Complete (2026-07-31). `@snack-ai/cli@0.4.0` and `@snack-ai/opencode@0.1.1`
+  are published to `next`, both carrying SLSA provenance attestations. The plugin's
+  `0.1.0` was published manually to create the package and carries no attestation; `0.1.1`
+  supersedes it on `next`.
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Make observed usage, relative pressure, data quality, and plan assumptions useful before introducing a learned predictor.
 
@@ -963,7 +963,7 @@ Strict SemVer applies:
 - `0.6.0 MVP`: CLI is promoted to `latest`.
 - `0.7-0.9` and `1.0.0-rc.N`: publish to `next` while MVP remains `latest`.
 - `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and replaces MVP on `latest` after checksum verification.
-- `@snack-ai/opencode` first publishes its own `0.1.0` to `next`; changed pre-MVP versions remain on `next`. This was planned for Stage 3 and has not happened yet: the package does not exist on the registry, and creating it is blocked on npm permissions.
+- `@snack-ai/opencode` first published its own `0.1.0` to `next` in Stage 4 rather than Stage 3; changed pre-MVP versions remain on `next`. `latest` resolves to `0.1.0`, the manually created version without provenance, for the same npm first-publication behavior described for the CLI; `next` resolves to the attested `0.1.1`.
 - the MVP-compatible OpenCode plugin version is promoted to plugin `latest` in Stage 6; later plugin development remains on `next`.
 - CLI/plugin RCs publish to each package's `next`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then both `latest` and `next` move to stable and temporary tags are removed after checksum verification.
 
