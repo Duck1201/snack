@@ -260,3 +260,15 @@ layer instead of being refused as storage; `data purge` never asked for confirma
 terminal; `--horizon all` and `doctor --source` were documented but rejected; human `status` omitted
 the active period and the pressure contributors the specification requires; and a forecast built
 from tens of thousands of prompts still described itself as sparse history dominated by the prior.
+
+Three smaller defects from the same pass are fixed too. A purge that did not reach the ingestion
+watermark still reset it, because the watermark is epoch milliseconds and the scope bounds are ISO
+timestamps, which SQLite compares by type before value. A window whose `--until` is at or before its
+`--since` selects nothing by construction and now exits `2` instead of reporting an empty success.
+And a CSV export stages every artifact before publishing the set together, so an interrupted run
+leaves `.partial` files rather than plausible CSVs missing the manifest that makes them
+interpretable.
+
+`SNACK_DEBUG` is new: setting it to any value prints the underlying error of an unexpected internal
+failure to stderr, so there is something to attach to a bug report. It never enters the JSON
+document, stdout, or any file.
