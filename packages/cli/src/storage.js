@@ -296,14 +296,23 @@ export function readIngestionCursor(databaseFile, sourceAlias) {
   try {
     const row = database
       .prepare(
-        `SELECT time_updated, message_id
+        `SELECT time_updated, message_id, cursor_json
          FROM ingestion_cursor
          WHERE source_alias = ?`,
       )
       .get(sourceAlias);
+    if (typeof row !== "object" || row === null) return null;
+    // What a cursor means belongs to the adapter that wrote it, so it comes back exactly as it went
+    // in. The original columns are the fallback for a cursor written before 0.7, which is what
+    // keeps an upgraded installation from re-reading its whole history once.
+    if ("cursor_json" in row && typeof row.cursor_json === "string") {
+      try {
+        return JSON.parse(row.cursor_json);
+      } catch {
+        return null;
+      }
+    }
     if (
-      typeof row !== "object" ||
-      row === null ||
       !("time_updated" in row) ||
       !("message_id" in row) ||
       typeof row.time_updated !== "number" ||
@@ -363,7 +372,9 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
 /**
  * @param {string} databaseFile
  * @param {ConfiguredOpenCodeSource} source
- * @param {{observations: Observation[], cursor: {time_updated: number, message_id: string} | null}} batch
+ * @param {{observations: Observation[], cursor: unknown}} batch An adapter's cursor is opaque
+ *   here: storage records where a reader stopped and hands it back, and only the adapter that
+ *   wrote it knows what it means.
  * @param {Date} now
  * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null}} [options]
  */
@@ -885,19 +896,23 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         database
           .prepare(
             `INSERT INTO ingestion_cursor
-                (source_alias, fingerprint, time_updated, message_id, committed_at)
-              VALUES (?, ?, ?, ?, ?)
+                (source_alias, fingerprint, time_updated, message_id, cursor_json, committed_at)
+              VALUES (?, ?, ?, ?, ?, ?)
               ON CONFLICT(source_alias) DO UPDATE SET
                 fingerprint = excluded.fingerprint,
                 time_updated = excluded.time_updated,
                 message_id = excluded.message_id,
+                cursor_json = excluded.cursor_json,
                 committed_at = excluded.committed_at`,
           )
           .run(
             source.alias,
             source.fingerprint,
-            batch.cursor?.time_updated ?? null,
-            batch.cursor?.message_id ?? null,
+            legacyCursorField(batch.cursor, "time_updated", "number"),
+            legacyCursorField(batch.cursor, "message_id", "string"),
+            batch.cursor === null || batch.cursor === undefined
+              ? null
+              : JSON.stringify(batch.cursor),
             timestamp,
           );
       }
@@ -1455,6 +1470,21 @@ export function readPendingSpoolObservations(databaseFile, source) {
   } finally {
     database.close();
   }
+}
+
+/**
+ * Read one field of the pre-0.7 cursor columns, when the adapter that wrote the cursor happens to
+ * fill them. They are kept written so a database that moves back to a 0.6 binary still knows where
+ * its OpenCode reader stopped.
+ *
+ * @param {unknown} cursor
+ * @param {string} field
+ * @param {"number" | "string"} expected
+ */
+function legacyCursorField(cursor, field, expected) {
+  if (typeof cursor !== "object" || cursor === null) return null;
+  const value = /** @type {Record<string, unknown>} */ (cursor)[field];
+  return typeof value === expected ? value : null;
 }
 
 /** @param {string} value */

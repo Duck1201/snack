@@ -71,9 +71,9 @@ Claude Code reaches full MVP-feature parity after the OpenCode-only MVP:
 
 1. `snack setup claude` discovers local JSONL histories without reading prompt/response content into SNACK storage.
 2. The user maps Claude provider/profile observations to the same capacity-source model used by OpenCode.
-3. Setup offers user-scoped `UserPromptSubmit`, `Stop`, and `StopFailure` hook registration with dry-run, diff, backup, confirmation, and rollback.
-4. JSONL backfill and hooks reconcile into the same canonical prompt/source records.
-5. `StopFailure` classes such as `rate_limit` remain distinct from overloaded, authentication, billing, server, output-token, and unknown operational failures.
+3. Setup registers no hook and writes nothing into Claude Code's own settings; see [ADR-0006](./adr/0006-claude-jsonl-backfill-without-hooks.md). Claude Code records a refusal in the JSONL it is already writing, so the hook path would duplicate a signal backfill already carries.
+4. JSONL backfill reconciles into the same canonical prompt/source records, including turns continued from a resumed session and subagent transcripts the session never linked.
+5. Structured error classes such as `rate_limit` remain distinct from overloaded, authentication, billing, server, output-token, and unknown operational failures.
 6. Every MVP command works for Claude-only and shared OpenCode+Claude capacity sources before 1.0.
 
 ## 4. Prompt and Outcome Semantics
@@ -458,7 +458,7 @@ Responsibilities:
 - initialize/migrate SNACK storage;
 - test source/spool permissions and report next steps.
 
-The MVP accepts `opencode`; `claude` is added in 0.7. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
+The MVP accepts `opencode`; `claude` is accepted from 0.7. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
 
 Setup is guided by default and asks only for what it cannot observe. The source database, its schema fingerprint, the providers present in it, any already-configured sources, and the current plugin registration are all discovered. An unsupported fingerprint fails closed before the first question, so nobody is walked through a questionnaire that cannot lead anywhere. The local account or profile alias is deliberately asked rather than discovered: OpenCode does not expose account identity, and SNACK never reads credentials.
 

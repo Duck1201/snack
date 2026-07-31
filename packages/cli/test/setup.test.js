@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
+  createClaudeHistory,
   createOpenCodeDatabase,
   executeOpenCodeSql,
   makeRunFixture,
@@ -45,6 +47,86 @@ const defaultAnswers = {
   install_plugin: "no",
   confirm: "yes",
 };
+
+test("setup claude configures a source and sync reads its history", async () => {
+  const fixture = await makeRunFixture("snack-setup-claude-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    fixture.options,
+  );
+  const configured = JSON.parse(fixture.stdout.value);
+
+  assert.equal(configured.status, "ok");
+  assert.equal(configured.command, "setup claude");
+  assert.equal(configured.data.source.adapter, "claude");
+  assert.equal(configured.data.fingerprint.family, "cc-jsonl-turntree-v1");
+  // Claude Code has no separate account identity in its history, so the one mapping OpenCode
+  // cannot discover is the same one a Claude user still has to name.
+  assert.equal(configured.data.source.provider, "anthropic");
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "sync", "--full", "--json"], fixture.options);
+  const synced = JSON.parse(fixture.stdout.value);
+
+  assert.equal(synced.status, "ok");
+  assert.equal(synced.data.sources[0].inserted, 1);
+
+  // The configuration written for a Claude source has to be the one the schema accepts, or every
+  // later command fails on a configuration SNACK wrote itself.
+  const config = await readFile(fixture.paths.configFile, "utf8");
+  assert.match(config, /"adapter": "claude"/u);
+  assert.doesNotMatch(config, /"database"/u);
+});
+
+test("setup claude fails closed when no Claude history is there to read", async () => {
+  const fixture = await makeRunFixture("snack-setup-claude-missing-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = join(fixture.root, "no-such-claude-home");
+
+  const exitCode = await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  // No Claude Code installation is a fact about the source, not a SNACK failure, and it must not
+  // leave a configured source pointing at a history that is not there.
+  assert.equal(document.status, "error");
+  assert.equal(document.errors[0].code, "source_unavailable");
+  assert.equal(exitCode, 4);
+  await assert.rejects(readFile(fixture.paths.configFile, "utf8"));
+});
 
 test("guided setup writes what the equivalent flags would have written", async () => {
   const guided = await makeRunFixture("snack-setup-guided-");

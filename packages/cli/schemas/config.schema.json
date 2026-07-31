@@ -18,11 +18,32 @@
           "alias",
           "installation_id",
           "adapter",
-          "database",
           "provider",
           "profile",
           "plan",
           "fingerprint"
+        ],
+        "oneOf": [
+          {
+            "description": "OpenCode reads one SQLite database.",
+            "properties": {
+              "adapter": { "const": "opencode" },
+              "fingerprint": { "const": "oc-sqlite-msgpart-v1" },
+              "database": true,
+              "projects": false
+            },
+            "required": ["adapter", "database"]
+          },
+          {
+            "description": "Claude Code reads a directory of JSONL session histories.",
+            "properties": {
+              "adapter": { "const": "claude" },
+              "fingerprint": { "const": "cc-jsonl-turntree-v1" },
+              "projects": true,
+              "database": false
+            },
+            "required": ["adapter", "projects"]
+          }
         ],
         "properties": {
           "alias": {
@@ -34,11 +55,17 @@
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
           },
           "adapter": {
-            "const": "opencode"
+            "enum": ["opencode", "claude"]
           },
           "database": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "OpenCode's own SQLite database."
+          },
+          "projects": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Claude Code's projects directory of JSONL session histories."
           },
           "provider": {
             "$ref": "#/$defs/localIdentifier"
@@ -55,7 +82,7 @@
             "description": "Bundled plan-profile id, or a path to a local user-defined profile."
           },
           "fingerprint": {
-            "const": "oc-sqlite-msgpart-v1"
+            "enum": ["oc-sqlite-msgpart-v1", "cc-jsonl-turntree-v1"]
           }
         }
       }

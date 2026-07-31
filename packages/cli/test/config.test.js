@@ -36,6 +36,52 @@ test("a missing configuration points at setup, the command that actually creates
   });
 });
 
+test("a configured source names one client and the fingerprint family that client writes", () => {
+  const openCodeSource = {
+    alias: "work",
+    installation_id: "11111111-2222-4333-8444-555555555555",
+    adapter: "opencode",
+    database: "/tmp/opencode.db",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "oc-sqlite-msgpart-v1",
+  };
+  const claudeSource = {
+    alias: "claude",
+    installation_id: "22222222-3333-4444-8555-666666666666",
+    adapter: "claude",
+    projects: "/home/user/.claude/projects",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "cc-jsonl-turntree-v1",
+  };
+  /** @param {unknown[]} sources */
+  const validate = (sources) =>
+    parseAndValidateConfig(JSON.stringify({ schema_version: 1, sources }));
+
+  // A configuration written by 0.6 keeps validating untouched: the second client is added to the
+  // schema, it does not replace the first.
+  assert.ok(validate([openCodeSource]));
+  assert.ok(validate([claudeSource]));
+  assert.ok(validate([openCodeSource, claudeSource]));
+
+  // Claude Code has no single database file, and OpenCode has no projects directory. Accepting a
+  // source that claims the other client's shape would let setup record a source nothing can read.
+  for (const invalid of [
+    { ...claudeSource, fingerprint: "oc-sqlite-msgpart-v1" },
+    { ...openCodeSource, adapter: "claude" },
+    { ...claudeSource, database: "/tmp/opencode.db" },
+    { ...claudeSource, adapter: "nothing-we-ship" },
+  ]) {
+    assert.throws(
+      () => validate([invalid]),
+      (error) => error instanceof SnackError && error.reason === "config_schema_error",
+    );
+  }
+});
+
 test("creates private configuration and preserves comments on update", async () => {
   const root = await makeRoot();
   const file = join(root, "config", "config.jsonc");

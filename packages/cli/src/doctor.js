@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { readConfig } from "./config.js";
 import { SnackError } from "./errors.js";
+import { createClaudeAdapter } from "./claude-adapter.js";
 import { createOpenCodeAdapter } from "./opencode-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
 import { resolvePlanProfile } from "./plan-profile.js";
@@ -122,18 +123,22 @@ export async function runDoctor(paths, options = {}) {
     // question than the one `doctor` exists to answer.
     if (options.source !== undefined && source.alias !== options.source) continue;
     checks.push(planProfileCheck(source, now));
+    const client = source.adapter === "claude" ? "Claude Code" : "OpenCode";
     try {
-      const fingerprint = createOpenCodeAdapter({ databaseFile: source.database }).fingerprint();
+      const fingerprint =
+        source.adapter === "claude"
+          ? createClaudeAdapter({ projectsDirectory: String(source.projects) }).fingerprint()
+          : createOpenCodeAdapter({ databaseFile: String(source.database) }).fingerprint();
       checks.push(
         fingerprint.supported && fingerprint.family === source.fingerprint
-          ? pass(`source_fingerprint:${source.alias}`, "OpenCode schema fingerprint is supported.")
+          ? pass(`source_fingerprint:${source.alias}`, `${client} schema fingerprint is supported.`)
           : fail(
               `source_fingerprint:${source.alias}`,
-              "OpenCode schema fingerprint is unsupported.",
+              `${client} schema fingerprint is unsupported.`,
             ),
       );
     } catch {
-      checks.push(fail(`source_fingerprint:${source.alias}`, "OpenCode source is inaccessible."));
+      checks.push(fail(`source_fingerprint:${source.alias}`, `${client} source is inaccessible.`));
     }
     try {
       const pending = readPendingMappingCount(paths.databaseFile, source);
@@ -416,8 +421,12 @@ function isConfiguredSource(value) {
     typeof value.installation_id === "string" &&
     "provider" in value &&
     typeof value.provider === "string" &&
-    "database" in value &&
-    typeof value.database === "string" &&
+    "adapter" in value &&
+    (value.adapter === "opencode" || value.adapter === "claude") &&
+    // Where a client keeps its history is the client's own business: a database file for OpenCode,
+    // a projects directory for Claude Code.
+    (("database" in value && typeof value.database === "string") ||
+      ("projects" in value && typeof value.projects === "string")) &&
     "fingerprint" in value &&
     typeof value.fingerprint === "string"
   );

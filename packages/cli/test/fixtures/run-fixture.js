@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -27,7 +27,7 @@ export async function makeRunFixture(prefix = "snack-main-") {
   temporaryRoots.push(root);
   const stdout = sink();
   const stderr = sink();
-  /** @type {{XDG_CONFIG_HOME: string, XDG_DATA_HOME: string, XDG_CACHE_HOME: string, XDG_STATE_HOME: string, OPENCODE_DB?: string}} */
+  /** @type {{XDG_CONFIG_HOME: string, XDG_DATA_HOME: string, XDG_CACHE_HOME: string, XDG_STATE_HOME: string, OPENCODE_DB?: string, CLAUDE_CONFIG_DIR?: string}} */
   const env = {
     XDG_CONFIG_HOME: join(root, "config-home"),
     XDG_DATA_HOME: join(root, "data-home"),
@@ -73,6 +73,27 @@ export async function createOpenCodeDatabase(root, filename = "opencode.db") {
     database.close();
   }
   return databaseFile;
+}
+
+/**
+ * Plant a Claude Code configuration directory holding one session history.
+ *
+ * Claude Code keeps its histories under `<config>/projects/<slugified working directory>`, and
+ * honours `CLAUDE_CONFIG_DIR`, which is what lets a test point SNACK at a throwaway tree.
+ *
+ * @param {string} root
+ * @param {string} [fixtureName]
+ */
+export async function createClaudeHistory(root, fixtureName = "version-2-1-220.jsonl") {
+  const configDir = join(root, "claude-home");
+  const project = join(configDir, "projects", "-fixture-project");
+  await mkdir(project, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(project, "aaaaaaaa-0000-4000-8000-000000000001.jsonl"),
+    await readFile(new URL(`./claude/${fixtureName}`, import.meta.url), "utf8"),
+    { mode: 0o600 },
+  );
+  return configDir;
 }
 
 export function sink() {

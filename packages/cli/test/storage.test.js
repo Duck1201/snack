@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -12,6 +12,7 @@ import {
   createSetupDatabaseBackup,
   initializeDatabase,
   inspectDatabase,
+  migrationDirectory,
   readIngestionCursor,
   restoreSetupDatabaseBackup,
   storeObservations,
@@ -318,6 +319,141 @@ function countPrompts(databaseFile) {
 /** @param {number} timeUpdated */
 function cursorAt(timeUpdated) {
   return { time_updated: timeUpdated, message_id: `message-${timeUpdated}` };
+}
+
+test("upgrading a 0.6 database to 0.7 keeps every row it already held", async () => {
+  // The MVP is the first guaranteed migration baseline, so this is the gate the whole stage hangs
+  // from: 0.6 data survives 0.7 or 0.7 does not ship. The 0.7 migration rebuilds tables that other
+  // tables point at, which is the one shape of migration SQLite cannot express as an alteration.
+  const { paths } = await makeStorage();
+  const baseline = await copyMigrationsThrough(9);
+  await initializeDatabase(paths, {
+    migrationsDir: baseline,
+    applicationVersion: "0.6.0",
+    now,
+  });
+  // Seeded with the SQL a 0.6 binary would have written, rather than through today's write path:
+  // this database has to be what 0.6 actually left behind, including a cursor in the columns 0.6
+  // used before the cursor became an opaque document.
+  seedZeroSixDatabase(paths.databaseFile);
+  const before = tableCounts(paths.databaseFile);
+
+  const upgrade = await initializeDatabase(paths, { applicationVersion: "0.7.0", now });
+
+  assert.deepEqual(upgrade.applied, [10]);
+  assert.equal(upgrade.backupCreated, true);
+  const after = tableCounts(paths.databaseFile);
+  // The migration history is the one table an upgrade is supposed to grow. Every other table has
+  // to come out the far side holding exactly what it held, including the ones the migration
+  // rebuilds from scratch.
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 1);
+  assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
+  assert.deepEqual(await inspectDatabase(paths.databaseFile), {
+    exists: true,
+    integrity: "ok",
+    migrations: "current",
+  });
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
+});
+
+/**
+ * Fill a database at the 0.6 schema with one of every row an upgrade has to preserve, including
+ * the two tables migration 010 rebuilds from scratch and the cursor columns it supersedes.
+ *
+ * @param {string} databaseFile
+ */
+function seedZeroSixDatabase(databaseFile) {
+  const database = new Database(databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    database.exec(`
+      INSERT INTO capacity_source (alias, created_at) VALUES ('work', '${now.toISOString()}');
+      INSERT INTO client_installation (id, client_kind, local_fingerprint, created_at, last_seen_at)
+        VALUES ('11111111-2222-4333-8444-555555555555', 'opencode', 'fingerprint-1',
+                '${now.toISOString()}', '${now.toISOString()}');
+      INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+        VALUES ('work', '11111111-2222-4333-8444-555555555555', 'opencode', 'anthropic', 'default');
+      INSERT INTO ambiguous_profile_mapping
+          (installation_id, source_prompt_id, provider, model, first_seen_at)
+        VALUES ('11111111-2222-4333-8444-555555555555', 'prompt-9', 'anthropic', 'claude-sonnet',
+                '${now.toISOString()}');
+      INSERT INTO pending_spool_observation
+          (installation_id, source_prompt_id, provider, revision, observation_json, first_seen_at)
+        VALUES ('11111111-2222-4333-8444-555555555555', 'prompt-8', 'anthropic', '1', '{}',
+                '${now.toISOString()}');
+      INSERT INTO capacity_period (id, source_alias, provider, profile, plan, started_at)
+        VALUES (1, 'work', 'anthropic', 'default', 'pro', '${now.toISOString()}');
+      INSERT INTO prompt_execution
+          (id, source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+           source_revision, observation_hash, revision_domain, parser_version, started_at,
+           completed_at, duration_ms, completion, first_observed_at, last_observed_at)
+        VALUES (1, 'work', 1, 'prompt-1', 'session-hash', '1', 'hash-1', 'opencode-message-v1',
+                'opencode-session-v1', '2026-01-02T01:00:00.000Z', '2026-01-02T01:00:01.000Z',
+                1000, 'completed', '${now.toISOString()}', '${now.toISOString()}');
+      INSERT INTO prompt_usage_slice
+          (prompt_execution_id, source_slice_id, provider, model, input_tokens, output_tokens,
+           reasoning_tokens, cache_read_tokens, cache_write_tokens, cost_decimal, currency)
+        VALUES (1, 'slice-1', 'anthropic', 'claude-sonnet', 10, 20, NULL, 30, 40, '0.01', 'USD');
+      INSERT INTO prompt_source_outcome (prompt_execution_id, outcome, policy_version)
+        VALUES (1, 'restricted', 'stage2-outcome-v1');
+      INSERT INTO restriction_observation
+          (prompt_execution_id, class, source_code, observed_at, classifier_version, provenance)
+        VALUES (1, 'rate_limit', 'http_429', '2026-01-02T01:00:01.000Z', 'opencode-error-v1',
+                'backfill');
+      INSERT INTO ingestion_cursor
+          (source_alias, fingerprint, time_updated, message_id, committed_at)
+        VALUES ('work', 'oc-sqlite-msgpart-v1', 2000, 'message-2000', '${now.toISOString()}');
+    `);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Copy the released migrations up to a version, so an older database can be built to upgrade from.
+ *
+ * @param {number} through
+ */
+async function copyMigrationsThrough(through) {
+  const root = await mkdtemp(join(tmpdir(), "snack-storage-baseline-"));
+  temporaryRoots.push(root);
+  const directory = join(root, "migrations");
+  await mkdir(directory, { mode: 0o700 });
+  for (const name of (await readdir(migrationDirectory)).sort()) {
+    if (Number(name.slice(0, 3)) > through) continue;
+    await writeFile(join(directory, name), await readFile(join(migrationDirectory, name), "utf8"));
+  }
+  return directory;
+}
+
+/**
+ * Count the rows of every table the database holds, so an upgrade can be compared against them.
+ *
+ * @param {string} databaseFile
+ */
+function tableCounts(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const tables = /** @type {{name: string}[]} */ (
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all()
+    );
+    return Object.fromEntries(
+      tables.map((table) => [
+        table.name,
+        Number(
+          /** @type {{total: number}} */ (
+            database.prepare(`SELECT COUNT(*) AS total FROM "${table.name}"`).get()
+          ).total,
+        ),
+      ]),
+    );
+  } finally {
+    database.close();
+  }
 }
 
 /** @param {string} databaseFile */

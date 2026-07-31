@@ -31,6 +31,7 @@ import {
   exportCsvChunks,
   exportJsonChunks,
 } from "./export.js";
+import { createClaudeAdapter, resolveClaudeProjectsDirectory } from "./claude-adapter.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
   preparePluginRegistration,
@@ -448,6 +449,97 @@ export async function run(argv, options = {}) {
       }
     });
 
+  setup
+    .command("claude")
+    .description("configure read-only Claude Code history")
+    .option("--non-interactive", "require all setup values as flags")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--provider <identifier>", "provider identifier")
+    .option("--profile <alias>", "local account/profile alias")
+    .option("--plan <identifier>", "how you refer to your plan; a label, not a lookup key")
+    .option("--plan-profile <identifier>", "bundled or custom plan profile to use as the prior")
+    .option("--dry-run", "validate and show the proposal without mutation")
+    .option("--enable-prospective-analysis", "enable allowlisted ephemeral prompt features")
+    .option("--json", "emit one versioned JSON document")
+    .action(async function setupClaude(commandOptions) {
+      const projectsDirectory = resolveClaudeProjectsDirectory({
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.home ? { home: options.home } : {}),
+      });
+      const adapter = createClaudeAdapter({ projectsDirectory });
+      // Reading the history is what proves it is there and readable, so it comes before any
+      // question: a guided setup must never walk someone through a questionnaire that cannot lead
+      // anywhere. An absent directory throws `source_unavailable` from here.
+      const fingerprint = adapter.fingerprint();
+      if (!fingerprint.supported || fingerprint.family === null) {
+        throw new SnackError("The Claude Code history fingerprint is unsupported.", {
+          code: ExitCode.unavailable,
+          reason: "source_schema_unsupported",
+        });
+      }
+      const dryRun = adapter.readAll();
+      const resolved = await resolveSetupValues({
+        commandOptions,
+        observations: dryRun.observations,
+        existingSources: await readConfiguredSources(paths.configFile),
+        prompt: options.prompt,
+        stdout,
+        // Claude Code registers no plugin, so the question that would offer one is not asked.
+        offerPluginInstall: false,
+      });
+      if (resolved === null) {
+        stdout.write("Setup cancelled; nothing was changed.\n");
+        return;
+      }
+      const configuredSource = {
+        alias: resolved.source,
+        installation_id: randomUUID(),
+        adapter: "claude",
+        projects: projectsDirectory,
+        provider: resolved.provider,
+        profile: resolved.profile,
+        plan: resolved.plan,
+        plan_profile: resolved.planProfile ?? "generic",
+        fingerprint: fingerprint.family,
+      };
+      const committed =
+        resolved.dryRun === true
+          ? configuredSource
+          : await commitConfiguredSource({
+              paths,
+              now,
+              source: configuredSource,
+              locationKey: "projects",
+              enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
+              writeConfig: options.writeConfig,
+            });
+      const data = {
+        source: {
+          alias: committed.alias,
+          installation_id: committed.installation_id,
+          adapter: committed.adapter,
+          provider: committed.provider,
+          profile: committed.profile,
+          plan: committed.plan,
+          plan_profile: committed.plan_profile,
+        },
+        fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
+        dry_run: {
+          observations: dryRun.observations.length,
+          ...(resolved.dryRun === true ? { applied: false } : {}),
+        },
+      };
+      if (wantsJson(this, configuredJson)) {
+        stdout.write(formatJson(createEnvelope("setup claude", data, { now })));
+      } else {
+        stdout.write(
+          resolved.dryRun === true
+            ? `Validated Claude Code source ${committed.alias}; no changes applied.\n`
+            : `Configured Claude Code source ${committed.alias}.\n`,
+        );
+      }
+    });
+
   config
     .command("path")
     .description("show the SNACK configuration path")
@@ -493,11 +585,11 @@ export async function run(argv, options = {}) {
         }
         await initializeDatabase(paths, { applicationVersion: packageJson.version, now });
         for (const candidate of selected) {
-          if (!isConfiguredOpenCodeSource(candidate)) continue;
+          if (!isConfiguredSource(candidate)) continue;
           const mappings = providerMappings(configuredSources, candidate.installation_id);
           try {
             results.push(
-              ...(await synchronizeOpenCodeSource({
+              ...(await synchronizeSource({
                 paths,
                 source: candidate,
                 full: commandOptions.full === true,
@@ -569,7 +661,7 @@ export async function run(argv, options = {}) {
     .action(async function stats(commandOptions) {
       const current = await readConfig(paths.configFile);
       const configuredSources = Array.isArray(current.sources)
-        ? current.sources.filter(isConfiguredOpenCodeSource)
+        ? current.sources.filter(isConfiguredSource)
         : [];
       const selected = commandOptions.source
         ? configuredSources.filter((source) => source.alias === commandOptions.source)
@@ -633,7 +725,7 @@ export async function run(argv, options = {}) {
         await recoverSetupJournal(paths);
         const current = await readConfig(paths.configFile);
         const configuredSources = Array.isArray(current.sources)
-          ? current.sources.filter(isConfiguredOpenCodeSource)
+          ? current.sources.filter(isConfiguredSource)
           : [];
         const selected = commandOptions.source
           ? configuredSources.filter((source) => source.alias === commandOptions.source)
@@ -653,7 +745,7 @@ export async function run(argv, options = {}) {
           let synchronization = { performed: false, status: "not_requested" };
           if (commandOptions.sync !== false) {
             try {
-              const syncResults = await synchronizeOpenCodeSource({
+              const syncResults = await synchronizeSource({
                 paths,
                 source,
                 full: false,
@@ -1073,9 +1165,24 @@ async function prepareSpoolDirectories(paths, registration) {
 }
 
 /**
- * @param {{paths: import("./paths.js").SnackPaths, source: {alias: string, installation_id: string, database: string, fingerprint: string, provider: string, profile: string, plan: string, adapter: string}, full: boolean, now: Date, mappings: {mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}} options
+ * Choose the reader for a configured source.
+ *
+ * This is the one place in the command layer that knows which client wrote a source. Every other
+ * caller works through the adapter contract, which is what makes the second client a new adapter
+ * rather than a branch in the product.
+ *
+ * @param {{adapter: string, database?: string, projects?: string}} source
  */
-async function synchronizeOpenCodeSource(options) {
+function createSourceAdapter(source) {
+  return source.adapter === "claude"
+    ? createClaudeAdapter({ projectsDirectory: String(source.projects) })
+    : createOpenCodeAdapter({ databaseFile: String(source.database) });
+}
+
+/**
+ * @param {{paths: import("./paths.js").SnackPaths, source: {alias: string, installation_id: string, database?: string, projects?: string, fingerprint: string, provider: string, profile: string, plan: string, adapter: string}, full: boolean, now: Date, mappings: {mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}} options
+ */
+async function synchronizeSource(options) {
   const results = [];
   // Every write path must agree on the active plan profile, otherwise storing
   // observations would reopen the capacity period the resolved profile just stamped.
@@ -1084,7 +1191,7 @@ async function synchronizeOpenCodeSource(options) {
     planProfile: resolvePlanProfile(options.source).profile,
   };
   try {
-    const adapter = createOpenCodeAdapter({ databaseFile: options.source.database });
+    const adapter = createSourceAdapter(options.source);
     const cursor = options.full
       ? null
       : readIngestionCursor(options.paths.databaseFile, options.source.alias);
@@ -1101,6 +1208,9 @@ async function synchronizeOpenCodeSource(options) {
   } catch {
     results.push(emptySyncResult(options.source.alias, "backfill", 1));
   }
+  // The spool is OpenCode's capture plugin writing into it. Claude Code registers no plugin and
+  // has no spool of its own, so a Claude source simply has nothing to read here.
+  if (options.source.adapter !== "opencode") return results;
   try {
     const retained = readPendingSpoolObservations(options.paths.databaseFile, options.source);
     if (retained.length > 0) {
@@ -1320,11 +1430,105 @@ const PLAN_PROFILE_CHOICES = [
 async function readConfiguredSources(configFile) {
   try {
     const config = await readConfig(configFile);
-    return (Array.isArray(config.sources) ? config.sources : []).filter(isConfiguredOpenCodeSource);
+    return (Array.isArray(config.sources) ? config.sources : []).filter(isConfiguredSource);
   } catch {
     // A missing or unreadable configuration simply means there is nothing to propose.
     return [];
   }
+}
+
+/**
+ * Write one configured source into the configuration and open the storage behind it.
+ *
+ * This is the part of setup that has nothing to do with which client is being configured, and the
+ * part where the two clients must never drift: the alias-rebind refusal, reusing the installation
+ * identity a source at the same location already has, and the rollback that leaves nothing behind
+ * when any of it fails. `locationKey` names the field that says where a client's history lives —
+ * a database file for OpenCode, a projects directory for Claude Code.
+ *
+ * @param {{
+ *   paths: import("./paths.js").SnackPaths,
+ *   now: Date,
+ *   source: {alias: string, installation_id: string, adapter: string, provider: string, profile: string, plan: string, plan_profile: string, fingerprint: string, database?: string, projects?: string},
+ *   locationKey: string,
+ *   enableProspectiveAnalysis: boolean,
+ *   writeConfig: typeof writePrivateAtomic | undefined,
+ * }} input
+ */
+async function commitConfiguredSource(input) {
+  let configuredSource = input.source;
+  const location = /** @type {Record<string, unknown>} */ (input.source)[input.locationKey];
+  await withStorageOperationLock(input.paths, async () => {
+    await withConfigLock(input.paths.configFile, async () => {
+      /** @type {Record<string, unknown>} */
+      let current = { ...defaultConfig };
+      try {
+        current = await readConfig(input.paths.configFile);
+      } catch (error) {
+        if (!(error instanceof SnackError) || error.reason !== "config_missing") throw error;
+      }
+      const sources = /** @type {Record<string, unknown>[]} */ (
+        (Array.isArray(current.sources) ? current.sources : []).filter(
+          (source) => typeof source === "object" && source !== null,
+        )
+      );
+      const existingAlias = sources.find((source) => source.alias === configuredSource.alias);
+      if (existingAlias && existingAlias[input.locationKey] !== location) {
+        throw new SnackError("A capacity-source alias cannot be rebound to another history.", {
+          code: ExitCode.config,
+          reason: "source_rebind_rejected",
+        });
+      }
+      const existingInstallation = sources.find(
+        (source) =>
+          source[input.locationKey] === location && typeof source.installation_id === "string",
+      );
+      if (typeof existingInstallation?.installation_id === "string") {
+        configuredSource = {
+          ...configuredSource,
+          installation_id: existingInstallation.installation_id,
+        };
+      }
+      const updatedSources = [
+        ...sources.filter((source) => source.alias !== configuredSource.alias),
+        configuredSource,
+      ];
+      /** @type {[string, unknown][]} */
+      const configUpdates = [["sources", updatedSources]];
+      if (input.enableProspectiveAnalysis) {
+        configUpdates.push(["prospective_analysis.enabled", true]);
+      }
+      const prepared = await prepareConfigValues(input.paths.configFile, configUpdates);
+      let previousSnackConfig = null;
+      try {
+        previousSnackConfig = await readFile(input.paths.configFile, "utf8");
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      }
+      const existed = (await inspectDatabase(input.paths.databaseFile)).exists;
+      try {
+        await initializeDatabase(input.paths, {
+          applicationVersion: packageJson.version,
+          now: input.now,
+        });
+        await (input.writeConfig ?? writePrivateAtomic)(input.paths.configFile, prepared.content, {
+          backup: true,
+        });
+        ensureCapacityPeriod(
+          input.paths.databaseFile,
+          configuredSource,
+          input.now,
+          resolvePlanProfile(configuredSource).profile,
+        );
+      } catch (error) {
+        if (previousSnackConfig === null) await rm(input.paths.configFile, { force: true });
+        else await writePrivateAtomic(input.paths.configFile, previousSnackConfig);
+        await rollbackDatabaseInitialization(input.paths, existed);
+        throw error;
+      }
+    });
+  });
+  return configuredSource;
 }
 
 /**
@@ -1333,7 +1537,7 @@ async function readConfiguredSources(configFile) {
  * Both paths produce the same shape and then run the identical journal, backup, and rollback
  * block, because that block is the riskiest code in the command and must not be duplicated.
  *
- * @param {{commandOptions: Record<string, unknown>, observations: {provider: string | null, model: string | null}[], existingSources: {alias: string, provider: string, profile: string, plan?: string, plan_profile?: string}[], prompt: SetupPrompt | undefined, stdout: {write(chunk: string): unknown}}} input
+ * @param {{commandOptions: Record<string, unknown>, observations: {provider: string | null, model: string | null}[], existingSources: {alias: string, provider: string, profile: string, plan?: string, plan_profile?: string}[], prompt: SetupPrompt | undefined, stdout: {write(chunk: string): unknown}, offerPluginInstall?: boolean}} input
  * @returns {Promise<{source: string, provider: string, profile: string, plan: string, planProfile: string, dryRun: boolean, installPlugin: boolean, enableProspectiveAnalysis: boolean} | null>} null when the user declined
  */
 async function resolveSetupValues(input) {
@@ -1439,16 +1643,22 @@ async function resolveSetupValues(input) {
       choices: yesNo,
       default: "no",
     });
-    const installPlugin = await ask({
-      id: "install_plugin",
-      message: "Register the OpenCode capture plugin for live capture?",
-      choices: yesNo,
-      default: "no",
-    });
+    // Claude Code registers no capture plugin, so the question is not asked for it rather than
+    // asked and ignored.
+    const installPlugin =
+      input.offerPluginInstall === false
+        ? "no"
+        : await ask({
+            id: "install_plugin",
+            message: "Register the OpenCode capture plugin for live capture?",
+            choices: yesNo,
+            default: "no",
+          });
 
     input.stdout.write(
       `\nProposed: source ${source} -> ${provider}/${profile}, plan ${plan} ` +
-        `(profile ${planProfile}), prospective analysis ${prospective}, plugin ${installPlugin}.\n`,
+        `(profile ${planProfile}), prospective analysis ${prospective}` +
+        `${input.offerPluginInstall === false ? "" : `, plugin ${installPlugin}`}.\n`,
     );
     const confirmed = await ask({
       id: "confirm",
@@ -1500,13 +1710,11 @@ function isYes(answer) {
 async function removePurgedSources(paths, config, scope, writeConfig) {
   const sources = Array.isArray(config.sources) ? config.sources : [];
   const remaining = sources.filter((source) =>
-    scope.source !== undefined &&
-    isConfiguredOpenCodeSource(source) &&
-    source.alias !== scope.source
+    scope.source !== undefined && isConfiguredSource(source) && source.alias !== scope.source
       ? true
       : scope.source === undefined
         ? false
-        : !isConfiguredOpenCodeSource(source),
+        : !isConfiguredSource(source),
   );
   try {
     await withConfigLock(paths.configFile, async () => {
@@ -1712,9 +1920,7 @@ function buildExportScope(commandOptions, config) {
   const sources = Array.isArray(config.sources) ? config.sources : [];
   if (
     commandOptions.source !== undefined &&
-    !sources.some(
-      (source) => isConfiguredOpenCodeSource(source) && source.alias === commandOptions.source,
-    )
+    !sources.some((source) => isConfiguredSource(source) && source.alias === commandOptions.source)
   ) {
     // Never echo the value back. An alias arrives from argv, and argv is exactly where someone
     // pastes something private by accident; a rejected value must not travel into a JSON
@@ -1772,7 +1978,7 @@ function parseExportBound(raw, flag) {
  */
 async function buildExportProvenance(config, scope) {
   const sources = (Array.isArray(config.sources) ? config.sources : [])
-    .filter(isConfiguredOpenCodeSource)
+    .filter(isConfiguredSource)
     .filter((source) => scope.source === undefined || source.alias === scope.source);
   return {
     cli_version: packageJson.version,
@@ -1835,6 +2041,20 @@ function commandName(argv) {
  * @returns {value is {alias: string, installation_id: string, adapter: "opencode", database: string, provider: string, profile: string, plan: string, fingerprint: string}}
  */
 function isConfiguredOpenCodeSource(value) {
+  return isConfiguredSource(value) && value.adapter === "opencode" && "database" in value;
+}
+
+/**
+ * Recognize a configured capacity source of any supported client.
+ *
+ * Only the paths that touch OpenCode's own plugin and spool need to know which client wrote a
+ * source. Everywhere else — synchronizing, reporting, exporting, purging — a source is a source,
+ * and narrowing to one client there is exactly the leak this release exists to remove.
+ *
+ * @param {unknown} value
+ * @returns {value is {alias: string, installation_id: string, adapter: "opencode" | "claude", database?: string, projects?: string, provider: string, profile: string, plan: string, fingerprint: string}}
+ */
+function isConfiguredSource(value) {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -1843,9 +2063,7 @@ function isConfiguredOpenCodeSource(value) {
     "installation_id" in value &&
     typeof value.installation_id === "string" &&
     "adapter" in value &&
-    value.adapter === "opencode" &&
-    "database" in value &&
-    typeof value.database === "string" &&
+    (value.adapter === "opencode" || value.adapter === "claude") &&
     "provider" in value &&
     typeof value.provider === "string" &&
     "profile" in value &&
