@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -119,8 +119,17 @@ try {
   for (const path of pluginFiles) {
     assert.doesNotMatch(path, /(^|\/)(?:test|fixtures?|\.env)(?:\/|$)/iu);
   }
+  // The plugin installs into its own prefix, the way it reaches an OpenCode installation.
+  // Installing it beside the CLI made npm re-resolve the CLI's native dependency, which
+  // fails the install-script policy on platforms without a matching prebuild.
   const pluginTarball = join(temporary, pluginResult.filename);
-  await execute(process.execPath, [npmCli, "install", "--prefix", temporary, pluginTarball], {
+  const pluginPrefix = join(temporary, "plugin-host");
+  await mkdir(pluginPrefix, { recursive: true });
+  await writeFile(
+    join(pluginPrefix, "package.json"),
+    `${JSON.stringify({ private: true }, null, 2)}\n`,
+  );
+  await execute(process.execPath, [npmCli, "install", "--prefix", pluginPrefix, pluginTarball], {
     cwd: workspace,
     env: { ...process.env, npm_config_cache: join(temporary, "npm-cache") },
     maxBuffer: 10 * 1024 * 1024,
@@ -129,7 +138,7 @@ try {
     process.execPath,
     ["--input-type=module", "--eval", "await import('@snack-ai/opencode')"],
     {
-      cwd: temporary,
+      cwd: pluginPrefix,
     },
   );
 
