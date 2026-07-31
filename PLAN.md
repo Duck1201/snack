@@ -652,7 +652,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 7 - Claude Code Parity
 
 - **Release:** `0.7.0` on npm `next`
-- **Status:** Waves 1-5 implemented and verified locally; publication pending. Claude Code is read
+- **Status:** Complete pending publication. Claude Code is read
   through its JSONL histories by a second adapter behind the existing source-adapter contract, and
   the live-hook path is deferred by
   [ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) because the JSONL already
@@ -660,9 +660,12 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
   leakage from the schema and let two clients share one capacity source; a `0.6` database upgrades
   in place with every row preserved. Budgets measured on Node `24.18.1`: Claude backfill of 100,000
   prompts in 12.5 s against a 30 s budget, steady-state commands surviving a 150 MB heap cap, and
-  `status --no-sync` p95 of 169 ms against 250 ms over a real 423-prompt Claude history. Remaining
-  before release: the independent architecture/privacy review, the CI run across Linux/macOS/WSL2,
-  and publishing `0.7.0` to `next`.
+  `status --no-sync` p95 of 169 ms against 250 ms over a real 423-prompt Claude history. An
+  independent two-axis review found four defects — reads that did not fail closed on a drifted
+  fingerprint, `status` ingesting only one client of a shared source, one history bindable to two
+  capacity sources, and unparseable records dropped in silence — all fixed and covered by tests.
+  Linux, macOS and WSL2/Debian 13 passed on Node `24.18.1`. Publishing `0.7.0` to `next` is the
+  only step left.
 - **Effort:** 5 AI-assisted waves
 **Purpose:** Validate the client-neutral architecture with a second real client and revalidate the Node 24 runtime across both clients.
 
