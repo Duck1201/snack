@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import fc from "fast-check";
 
-import { betaQuantile, regularizedIncompleteBeta } from "../src/beta.js";
+import { QUANTILE_TOLERANCE, betaQuantile, regularizedIncompleteBeta } from "../src/beta.js";
 
 /**
  * Expected values come from Beta families whose quantile has a closed form, derived
@@ -65,12 +65,22 @@ test("beta quantiles stay bounded, finite, and monotone in the probability", () 
         assert.ok(Number.isFinite(value), `quantile ${value} is not finite`);
         assert.ok(value >= 0 && value <= 1, `quantile ${value} outside [0, 1]`);
       }
+      // An iterative solver cannot be monotone below its own convergence tolerance: two
+      // probabilities differing in the fifteenth decimal have quantiles that differ by
+      // less than the bracket the search is allowed to stop on. The slack is therefore
+      // the declared precision, not machine epsilon — which still leaves the failure this
+      // property was written to catch, where an absolute tolerance produced quantiles ten
+      // orders of magnitude apart, far outside any proportional slack.
+      const slack = 4 * QUANTILE_TOLERANCE * Math.max(lowQuantile, highQuantile, 1e-300);
       assert.ok(
-        highQuantile >= lowQuantile - Number.EPSILON,
+        highQuantile >= lowQuantile - slack,
         `Beta(${alpha}, ${beta}): Q(${high})=${highQuantile} below Q(${low})=${lowQuantile}`,
       );
     }),
-    { numRuns: 200 },
+    // This property has already caught two real defects — an absolute convergence
+    // tolerance, and a search that ran out of steps before reaching a subnormal quantile —
+    // and it runs in milliseconds, so it samples the shape space generously.
+    { numRuns: 500 },
   );
 });
 

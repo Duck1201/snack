@@ -10,14 +10,21 @@
 const TINY = 1e-300;
 const CONTINUED_FRACTION_ITERATIONS = 300;
 const CONTINUED_FRACTION_TOLERANCE = 3e-16;
-const QUANTILE_ITERATIONS = 300;
+/**
+ * Enough bisection steps to walk the bracket from 1 down to the smallest subnormal when
+ * Newton cannot help. Shapes below one push the quantile into that territory: with
+ * alpha = 0.01 the answer behaves like p^100, so a probability of 1e-6 asks for a number
+ * around 1e-600. Stopping early there returned the same wrong value for every small
+ * probability, which broke monotonicity by orders of magnitude.
+ */
+const QUANTILE_ITERATIONS = 1200;
 /**
  * Relative, not absolute. With shape parameters below one the quantile can legitimately
  * sit at 1e-26, and an absolute tolerance stops the search while the bracket is still
  * ten orders of magnitude wide — which also made the result non-monotone in the
  * probability, since where it stopped depended on the path taken.
  */
-const QUANTILE_TOLERANCE = 1e-14;
+export const QUANTILE_TOLERANCE = 1e-14;
 
 /** Lanczos g = 7 coefficients; relative error stays below 1e-15 for positive arguments. */
 const LANCZOS = [
@@ -159,6 +166,12 @@ export function betaQuantile(probability, alpha, beta) {
     const error = regularizedIncompleteBeta(guess, alpha, beta) - probability;
     if (error > 0) high = guess;
     else low = guess;
+    // The true quantile can sit below the smallest representable double, or above the
+    // largest one below 1. Reporting the boundary is the closest a double can come, and
+    // it keeps the result ordered: every probability whose quantile underflows reports
+    // the same 0 rather than wherever the search happened to run out of steps.
+    if (high <= Number.MIN_VALUE) return 0;
+    if (low >= 1 - Number.EPSILON) return 1;
     if (high - low <= QUANTILE_TOLERANCE * Math.max(high, Number.MIN_VALUE)) {
       return (low + high) / 2;
     }
