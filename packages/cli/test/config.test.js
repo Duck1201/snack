@@ -30,8 +30,10 @@ test("a missing configuration points at setup, the command that actually creates
     assert.ok(error instanceof SnackError);
     assert.equal(error.reason, "config_missing");
     // `config set` writes a key into a configuration; it is not the first-run entry point,
-    // and sending a new user there leaves them without a capacity source.
+    // and sending a new user there leaves them without a capacity source. Both clients are
+    // named: telling someone who only runs Claude Code to set up OpenCode is a dead end.
     assert.match(error.message, /snack setup opencode/u);
+    assert.match(error.message, /snack setup claude/u);
     return true;
   });
 });

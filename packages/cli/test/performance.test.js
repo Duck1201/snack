@@ -518,3 +518,155 @@ test(`\`stats\` over ${PROMPTS.toLocaleString("en-US")} prompts inside one windo
   t.diagnostic(`stats over one dense window took ${(elapsedMs / 1000).toFixed(1)}s`);
   assert.ok(elapsedMs < 10_000, `stats took ${(elapsedMs / 1000).toFixed(1)}s`);
 });
+
+/**
+ * Build a Claude Code history holding a six-figure number of prompts.
+ *
+ * A hundred prompts per session file, which is the shape that makes the adapter reconstruct a turn
+ * tree a thousand times over rather than once over one enormous file. Each prompt is a submission,
+ * a tool call, and the answer after it, because the walk from a submission down to its terminal
+ * model call is the cost this measures.
+ *
+ * @param {string} root
+ */
+async function makeLargeClaudeHistory(root) {
+  const configDir = join(root, "claude-home");
+  const project = join(configDir, "projects", "-performance-project");
+  await mkdir(project, { recursive: true, mode: 0o700 });
+  const perSession = 100;
+  /** @type {string[]} */
+  let lines = [];
+  for (let index = 1; index <= PROMPTS; index += 1) {
+    const sessionIndex = Math.ceil(index / perSession);
+    const sessionId = `aaaaaaaa-0000-4000-8000-${String(sessionIndex).padStart(12, "0")}`;
+    const started = new Date(origin + index * 60_000).toISOString();
+    const model = index % 3 === 0 ? "claude-haiku-4-5-20251001" : "claude-opus-5";
+    const common = {
+      isSidechain: false,
+      cwd: "/performance/project",
+      sessionId,
+      version: "2.1.220",
+      gitBranch: "main",
+    };
+    /** @param {number} output @param {string} stop */
+    const usage = (output, stop) => ({
+      message: {
+        id: `msg-${index}-${stop}`,
+        model,
+        role: "assistant",
+        stop_reason: stop,
+        type: "message",
+        content: [],
+        usage: {
+          input_tokens: 100 + (index % 900),
+          output_tokens: output,
+          cache_creation_input_tokens: 2,
+          cache_read_input_tokens: 10,
+        },
+      },
+    });
+    lines.push(
+      JSON.stringify({
+        ...common,
+        parentUuid: null,
+        promptId: `p-${index}`,
+        promptSource: "typed",
+        type: "user",
+        message: { role: "user", content: [] },
+        uuid: `u-${index}`,
+        timestamp: started,
+      }),
+      JSON.stringify({
+        ...common,
+        parentUuid: `u-${index}`,
+        type: "assistant",
+        ...usage(25, "tool_use"),
+        uuid: `a-${index}-1`,
+        timestamp: new Date(origin + index * 60_000 + 1_000).toISOString(),
+      }),
+      JSON.stringify({
+        ...common,
+        parentUuid: `a-${index}-1`,
+        type: "assistant",
+        ...usage(40, "end_turn"),
+        uuid: `a-${index}-2`,
+        timestamp: new Date(origin + index * 60_000 + 4_000).toISOString(),
+      }),
+    );
+    if (index % perSession === 0) {
+      await writeFile(join(project, `${sessionId}.jsonl`), `${lines.join("\n")}\n`, {
+        mode: 0o600,
+      });
+      lines = [];
+    }
+  }
+  return configDir;
+}
+
+test(`backfilling ${PROMPTS.toLocaleString("en-US")} prompts from Claude Code meets the backfill and memory budgets`, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "snack-claude-backfill-"));
+  temporaryRoots.push(root);
+  const configDir = await makeLargeClaudeHistory(root);
+  const history = {
+    root,
+    env: {
+      XDG_CONFIG_HOME: join(root, "config"),
+      XDG_DATA_HOME: join(root, "data"),
+      XDG_CACHE_HOME: join(root, "cache"),
+      XDG_STATE_HOME: join(root, "state"),
+      CLAUDE_CONFIG_DIR: configDir,
+    },
+  };
+
+  await runCli(
+    [
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    history,
+  );
+
+  const startedAt = process.hrtime.bigint();
+  const { stdout } = await runCli(["sync", "--full", "--json"], history);
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+  const document = JSON.parse(stdout);
+
+  // A budget met by failing fast is not a budget met.
+  assert.equal(document.status, "ok", stdout.slice(0, 400));
+  const inserted = document.data.sources.reduce(
+    (/** @type {number} */ total, /** @type {{inserted: number}} */ result) =>
+      total + result.inserted,
+    0,
+  );
+  assert.equal(inserted, PROMPTS, stdout.slice(0, 400));
+  t.diagnostic(`Claude backfill of ${PROMPTS} prompts took ${(elapsedMs / 1000).toFixed(1)}s`);
+  assert.ok(elapsedMs < 30_000, `backfill took ${(elapsedMs / 1000).toFixed(1)}s`);
+
+  // Steady state: the commands run many times a day against a source with nothing new to read.
+  // The second client has to hold the same ceiling as the first, or the budget was a property of
+  // OpenCode's adapter rather than of SNACK.
+  for (const argv of [
+    ["status", "--no-sync", "--json"],
+    ["sync", "--json"],
+    ["stats", "--verbose", "--json"],
+  ]) {
+    const result = await runCli(argv, history, { heapLimitMb: 150 }).catch(
+      (/** @type {Error & {stderr?: string}} */ error) => error,
+    );
+    assert.ok(
+      !(result instanceof Error),
+      `\`snack ${argv[0]}\` did not survive a 150MB heap: ${String(result.stderr ?? result).slice(0, 300)}`,
+    );
+    assert.notEqual(JSON.parse(result.stdout).status, "error", argv.join(" "));
+  }
+});

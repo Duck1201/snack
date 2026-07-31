@@ -65,10 +65,15 @@ export async function readConfig(configFile) {
     return parseAndValidateConfig(await readFile(configFile, "utf8"));
   } catch (error) {
     if (isNotFound(error)) {
-      throw new SnackError("Configuration does not exist; run `snack setup opencode` first.", {
-        code: ExitCode.config,
-        reason: "config_missing",
-      });
+      // Both clients are named. Sending someone who only runs Claude Code to set up OpenCode is a
+      // dead end, and this is the first message a new user sees.
+      throw new SnackError(
+        "Configuration does not exist; run `snack setup opencode` or `snack setup claude` first.",
+        {
+          code: ExitCode.config,
+          reason: "config_missing",
+        },
+      );
     }
     if (!(error instanceof SnackError)) {
       throw new SnackError("Configuration could not be read.", {
