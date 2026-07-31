@@ -1,0 +1,48 @@
+name: Bug report
+description: Something SNACK did that it should not have done, or did not do that it should
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Please keep private data out of this form.** Your SNACK database, spool, configuration and
+        exports may hold more than you expect. Describing a file is enough; a maintainer will ask
+        for a reduced sample if the report needs one.
+
+        Found a security problem instead? Use the private channel in
+        [SECURITY.md](https://github.com/Duck1201/snack/blob/main/SECURITY.md), not this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: The commands you ran
+      description: Including flags. Replace anything private with a placeholder.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `snack doctor`
+      description: >
+        It reports versions, permissions, schema fingerprints and storage state, and names no path
+        outside SNACK's own. Redact anything you would rather not share.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `snack --version` and `node --version`, plus your operating system.
+      placeholder: "snack 0.6.1, node 24.18.1, Debian 13 (WSL2)"
+    validations:
+      required: true
