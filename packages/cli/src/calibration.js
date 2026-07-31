@@ -89,7 +89,11 @@ export function summarizeCalibration(forecasts) {
   const grouped = new Map();
   for (const forecast of eligible) {
     const index = bucketIndex(forecast.point);
-    grouped.set(index, [...(grouped.get(index) ?? []), forecast]);
+    const bucket = grouped.get(index);
+    // Appending in place: rebuilding the bucket array per forecast is quadratic, and a
+    // full-history audit scores six figures of them.
+    if (bucket) bucket.push(forecast);
+    else grouped.set(index, [forecast]);
   }
 
   const reliability = [...grouped.entries()]
@@ -279,6 +283,8 @@ function observe(accumulator, outcome, at, policy) {
 function readAccumulator(accumulator, at, halfLifeSeconds) {
   reanchor(accumulator, at, halfLifeSeconds);
   return {
+    prompts_considered: accumulator.successes + accumulator.restrictions + accumulator.excluded,
+    limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
     successes: accumulator.successes,
     restrictions: accumulator.restrictions,
     excluded: accumulator.excluded,

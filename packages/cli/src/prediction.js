@@ -117,6 +117,8 @@ export const EVIDENCE_POLICY = Object.freeze({
 
 /**
  * @typedef {object} ForecastCell
+ * @property {number} prompts_considered How many observations the window brought in.
+ * @property {number} limit_prompts The window size the policy allows.
  * @property {number} successes
  * @property {number} restrictions
  * @property {number} excluded
@@ -134,7 +136,7 @@ export const EVIDENCE_POLICY = Object.freeze({
  * @property {{label: string, policy_version: string}} risk
  * @property {{level: string, policy_version: string, gates: EvidenceGate[]}} evidence
  * @property {string} model_policy_version
- * @property {{backoff_level: string, cell: ForecastCell, prior: {alpha: number, beta: number}}} contributors
+ * @property {{backoff_level: string, evidence_window: ForecastCell, prior: {alpha: number, beta: number}}} contributors
  */
 
 /**
@@ -260,6 +262,7 @@ function summarizeLevels(ordered, expected, now, policy) {
 
   return cells.map((cell, level) => {
     cell.effective_samples = cell.weighted_successes + cell.weighted_restrictions;
+    cell.prompts_considered = cell.successes + cell.restrictions + cell.excluded;
     return { level: policy.backoff_levels[level] ?? "prior", cell };
   });
 }
@@ -298,6 +301,8 @@ export function chooseCell(candidates, policy) {
 /** @returns {ForecastCell} */
 function emptyCell() {
   return {
+    prompts_considered: 0,
+    limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
     successes: 0,
     restrictions: 0,
     excluded: 0,
@@ -446,7 +451,7 @@ export function assembleForecast(input) {
     model_policy_version: policy.version,
     contributors: {
       backoff_level: level,
-      cell: { ...cell, alpha, beta },
+      evidence_window: { ...cell, alpha, beta },
       prior: {
         alpha: input.prior.strength * input.prior.viability,
         beta: input.prior.strength * (1 - input.prior.viability),

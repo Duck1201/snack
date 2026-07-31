@@ -460,10 +460,10 @@ test("status reports a broad initial estimate with very low evidence", async () 
   const { viability, contributors } = document.data;
   // The decay weight of a 55-second-old observation is arithmetic owned by the prediction
   // seam; the command contract is that it is a near-undecayed sample folded onto the prior.
-  const weight = contributors.cell.weighted_successes;
+  const weight = contributors.evidence_window.weighted_successes;
   assert.ok(weight > 0.999 && weight <= 1, `decay weight ${weight}`);
-  assert.equal(contributors.cell.effective_samples, weight);
-  assert.equal(contributors.cell.alpha, contributors.prior.alpha + weight);
+  assert.equal(contributors.evidence_window.effective_samples, weight);
+  assert.equal(contributors.evidence_window.alpha, contributors.prior.alpha + weight);
   assert.ok(
     0 < viability.lower && viability.lower < viability.point && viability.point < viability.upper,
     `interval out of order: ${JSON.stringify(viability)}`,
@@ -481,8 +481,8 @@ test("status reports a broad initial estimate with very low evidence", async () 
         viability: undefined,
         contributors: {
           ...contributors,
-          cell: {
-            ...contributors.cell,
+          evidence_window: {
+            ...contributors.evidence_window,
             weighted_successes: undefined,
             effective_samples: undefined,
             alpha: undefined,
@@ -526,7 +526,9 @@ test("status reports a broad initial estimate with very low evidence", async () 
         model_policy_version: "stage5-prediction-v2",
         contributors: {
           backoff_level: "period",
-          cell: {
+          evidence_window: {
+            prompts_considered: 1,
+            limit_prompts: 2000,
             successes: 1,
             restrictions: 0,
             excluded: 0,

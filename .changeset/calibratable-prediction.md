@@ -37,3 +37,7 @@ model now also decays evidence by how many prompts followed it. The forecast adm
 viability after roughly fifteen to twenty prompts whatever the user's cadence, where before it
 stayed optimistic for eighty. Model policy `stage5-prediction-v2` and evidence policy
 `stage5-evidence-v2` carry the retuned constants.
+
+`status` reports forecast contributors under `evidence_window` rather than `cell`, with the number
+of prompts considered and the window limit beside the counts, since those counts were always
+relative to the bounded evidence window rather than the whole capacity period.

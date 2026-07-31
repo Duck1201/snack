@@ -186,7 +186,7 @@ function replay(setup) {
       backoff: forecast.contributors.backoff_level,
       error: Math.abs(forecast.viability.point - row.truth),
       covered: forecast.viability.lower <= row.truth && row.truth <= forecast.viability.upper,
-      ess: forecast.contributors.cell.effective_samples,
+      ess: forecast.contributors.evidence_window.effective_samples,
     };
   });
   return { rows, scored };

@@ -84,8 +84,8 @@ test("a fresh success in the matching cell updates the posterior", () => {
     `upper ${result.viability.upper}`,
   );
   assert.ok(Math.abs(result.viability.point - 2 / 3) < 1e-12, `point ${result.viability.point}`);
-  assert.equal(result.contributors.cell.successes, 1);
-  assert.equal(result.contributors.cell.restrictions, 0);
+  assert.equal(result.contributors.evidence_window.successes, 1);
+  assert.equal(result.contributors.evidence_window.restrictions, 0);
 });
 
 test("evidence decays with age at the policy half-life", () => {
@@ -143,7 +143,7 @@ test("excluded outcomes never train the model", () => {
   });
 
   assert.deepEqual(withExcluded.viability, withoutExcluded.viability);
-  assert.equal(withExcluded.contributors.cell.excluded, 1);
+  assert.equal(withExcluded.contributors.evidence_window.excluded, 1);
 });
 
 /**
@@ -178,7 +178,10 @@ test("a sparse cell backs off to the pressure band, then the period, then the pr
     ],
   });
   assert.equal(sparseCell.contributors.backoff_level, "period_band");
-  assert.equal(sparseCell.contributors.cell.successes, PREDICTION_POLICY.minimum_cell_samples + 1);
+  assert.equal(
+    sparseCell.contributors.evidence_window.successes,
+    PREDICTION_POLICY.minimum_cell_samples + 1,
+  );
 
   const sparseBand = forecast({
     outcomes: [
@@ -190,7 +193,7 @@ test("a sparse cell backs off to the pressure band, then the period, then the pr
 
   const empty = forecast({ outcomes: [] });
   assert.equal(empty.contributors.backoff_level, "prior");
-  assert.equal(empty.contributors.cell.effective_samples, 0);
+  assert.equal(empty.contributors.evidence_window.effective_samples, 0);
 });
 
 test("the risk label follows the lower bound, not the point estimate", () => {
@@ -233,7 +236,7 @@ test("plentiful successes without a single restriction cannot reach high evidenc
 
   // Spec 9.5: successes alone cannot create high confidence. The model has never observed
   // the event it is predicting, so the restriction gate holds it one rung down.
-  assert.equal(result.contributors.cell.restrictions, 0);
+  assert.equal(result.contributors.evidence_window.restrictions, 0);
   assert.equal(result.evidence.level, "moderate");
   const limiting = result.evidence.gates.filter((gate) => gate.limiting).map((gate) => gate.id);
   assert.deepEqual(limiting, ["restrictions"]);
@@ -315,8 +318,11 @@ test("backing off never reports the observations of a narrower cell as its own",
 
   // The band level owns every eligible observation of the band, restriction included.
   assert.equal(result.contributors.backoff_level, "period_band");
-  assert.equal(result.contributors.cell.restrictions, 1);
-  assert.equal(result.contributors.cell.successes, PREDICTION_POLICY.minimum_cell_samples);
+  assert.equal(result.contributors.evidence_window.restrictions, 1);
+  assert.equal(
+    result.contributors.evidence_window.successes,
+    PREDICTION_POLICY.minimum_cell_samples,
+  );
 });
 
 test("a prior-only forecast names itself an initial heuristic, not the learned method", () => {
@@ -393,14 +399,14 @@ test("evidence loses weight as later prompts pile up, not only as time passes", 
   const withManyAfter = afterSuccesses(PREDICTION_POLICY.recency_half_life_prompts * 3);
 
   assert.ok(
-    withManyAfter.contributors.cell.weighted_restrictions <
-      withFewAfter.contributors.cell.weighted_restrictions / 4,
-    `${withManyAfter.contributors.cell.weighted_restrictions} vs ${withFewAfter.contributors.cell.weighted_restrictions}`,
+    withManyAfter.contributors.evidence_window.weighted_restrictions <
+      withFewAfter.contributors.evidence_window.weighted_restrictions / 4,
+    `${withManyAfter.contributors.evidence_window.weighted_restrictions} vs ${withFewAfter.contributors.evidence_window.weighted_restrictions}`,
   );
   // Time decay alone could not have done this: the whole run spans a few minutes.
   assert.ok(
-    withFewAfter.contributors.cell.weighted_restrictions > 0.9,
-    `a barely superseded restriction should keep most of its weight: ${withFewAfter.contributors.cell.weighted_restrictions}`,
+    withFewAfter.contributors.evidence_window.weighted_restrictions > 0.9,
+    `a barely superseded restriction should keep most of its weight: ${withFewAfter.contributors.evidence_window.weighted_restrictions}`,
   );
 });
 
@@ -412,8 +418,25 @@ test("the effective sample size saturates, so a long history cannot claim certai
   const saturation = 1 / (1 - 2 ** (-1 / PREDICTION_POLICY.recency_half_life_prompts));
 
   assert.ok(
-    huge.contributors.cell.effective_samples < saturation * 1.05,
-    `effective samples ${huge.contributors.cell.effective_samples} exceeded saturation ${saturation}`,
+    huge.contributors.evidence_window.effective_samples < saturation * 1.05,
+    `effective samples ${huge.contributors.evidence_window.effective_samples} exceeded saturation ${saturation}`,
   );
   assert.ok(huge.viability.upper - huge.viability.lower > 0.02, "interval collapsed to a point");
+});
+
+test("the contributors name the window their counts come from", () => {
+  const result = forecast({
+    outcomes: outcomes(40, "moderate", "typical"),
+    dataCompleteness: "complete",
+  });
+
+  // `cell.successes` read like a lifetime total while being a count inside the evidence
+  // window; the shape now says which observations produced the numbers.
+  assert.equal(result.contributors.evidence_window.prompts_considered, 40);
+  assert.equal(result.contributors.evidence_window.successes, 40);
+  assert.equal(
+    result.contributors.evidence_window.limit_prompts,
+    PREDICTION_POLICY.evidence_window_prompts,
+  );
+  assert.equal(Object.hasOwn(result.contributors, "cell"), false);
 });

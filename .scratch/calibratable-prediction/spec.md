@@ -136,10 +136,28 @@ produces few restrictions, so it stays capped low while also being the easiest r
 and the period aggregate is capped for a reason unrelated to how much evidence it holds, yet is the
 best-informed estimate when cells happen to behave alike. The retained test controls for both.
 
+## Measuring the full-history audit
+
+Backtesting the whole 100,000-prompt history took 46 seconds, and the cause was not where it looked.
+`betaQuantile` accounted for 2.3 of those seconds across 200,000 calls; the rest came from
+`summarizeCalibration` rebuilding each reliability bucket's array on every insertion, which is
+quadratic in the number of scored forecasts. Appending in place brought the full audit to about 3
+seconds.
+
+The quantile was improved anyway, since every forecast calls it twice: Newton's method inside a
+bisection bracket replaced plain bisection. That change exposed a real defect the previous
+implementation had been hiding. With shape parameters below one the quantile can legitimately sit
+near 1e-26, and the absolute convergence tolerance of 1e-15 stopped the search while the bracket was
+still ten orders of magnitude wide. Bisection always stopped at the same wrong place so the result
+looked monotone; Newton sometimes reached further, and a property test caught `Q(1.4e-6) = 7e-26`
+sitting below `Q(1e-6) = 5e-16` for `Beta(0.32, 0.047)`. The tolerance is now relative, which fixes
+the accuracy and the monotonicity together.
+
+`contributors.cell` is now `contributors.evidence_window`, carrying `prompts_considered` and
+`limit_prompts`. The counts were always relative to the bounded window rather than the whole
+capacity period, and the old name invited reading them as lifetime totals.
+
 ## Open items
 
-- A full 100,000-prompt backtest is now tractable but still unmeasured end to end; the performance
-  suite exercises 5,000.
-- The evidence window (2000 prompts) makes `contributors.cell.successes` a count within that window
-  rather than within the whole capacity period. Nothing presents it as a lifetime total today, but
-  the JSON field deserves a clearer name before the contract freezes.
+None outstanding for the prediction core. The remaining Stage 5 work is release mechanics: `0.5.0`
+is implemented and unreleased.

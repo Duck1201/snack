@@ -3,14 +3,21 @@
  *
  * The prediction model needs Beta quantiles with declared error bounds rather than an ad
  * hoc approximation. The regularized incomplete Beta function is evaluated with the
- * Lentz modified continued fraction, and the quantile inverts it by bisection.
+ * Lentz modified continued fraction, and the quantile inverts it with Newton's method
+ * kept inside a bisection bracket.
  */
 
 const TINY = 1e-300;
 const CONTINUED_FRACTION_ITERATIONS = 300;
 const CONTINUED_FRACTION_TOLERANCE = 3e-16;
-const QUANTILE_ITERATIONS = 200;
-const QUANTILE_TOLERANCE = 1e-15;
+const QUANTILE_ITERATIONS = 300;
+/**
+ * Relative, not absolute. With shape parameters below one the quantile can legitimately
+ * sit at 1e-26, and an absolute tolerance stops the search while the bracket is still
+ * ten orders of magnitude wide — which also made the result non-monotone in the
+ * probability, since where it stopped depended on the path taken.
+ */
+const QUANTILE_TOLERANCE = 1e-14;
 
 /** Lanczos g = 7 coefficients; relative error stays below 1e-15 for positive arguments. */
 const LANCZOS = [
@@ -123,6 +130,12 @@ export function regularizedIncompleteBeta(x, alpha, beta) {
 /**
  * Quantile (inverse CDF) of Beta(alpha, beta).
  *
+ * Newton's method on the CDF, with every step confined to a bracket that bisection would
+ * have produced. Newton converges in a handful of steps where bisection needs roughly
+ * fifty, and the bracket keeps it from wandering when the density is nearly flat or the
+ * quantile sits against 0 or 1. Every forecast calls this twice, and an audit replaying a
+ * six-figure history calls it two hundred thousand times.
+ *
  * @param {number} probability Probability in [0, 1].
  * @param {number} alpha Positive shape parameter.
  * @param {number} beta Positive shape parameter.
@@ -137,15 +150,26 @@ export function betaQuantile(probability, alpha, beta) {
   if (probability <= 0) return 0;
   if (probability >= 1) return 1;
 
-  // ponytail: plain bisection, ~60 iterations for double precision. A Newton step on the
-  // Beta density would converge faster; add it only if a forecast budget shows it matters.
+  const logBeta = logGamma(alpha) + logGamma(beta) - logGamma(alpha + beta);
   let low = 0;
   let high = 1;
+  let guess = alpha / (alpha + beta);
+
   for (let iteration = 0; iteration < QUANTILE_ITERATIONS; iteration += 1) {
-    const middle = (low + high) / 2;
-    if (high - low < QUANTILE_TOLERANCE) return middle;
-    if (regularizedIncompleteBeta(middle, alpha, beta) < probability) low = middle;
-    else high = middle;
+    const error = regularizedIncompleteBeta(guess, alpha, beta) - probability;
+    if (error > 0) high = guess;
+    else low = guess;
+    if (high - low <= QUANTILE_TOLERANCE * Math.max(high, Number.MIN_VALUE)) {
+      return (low + high) / 2;
+    }
+
+    const density = Math.exp(
+      (alpha - 1) * Math.log(guess) + (beta - 1) * Math.log1p(-guess) - logBeta,
+    );
+    const stepped = density > 0 && Number.isFinite(density) ? guess - error / density : Number.NaN;
+    const next = stepped > low && stepped < high ? stepped : (low + high) / 2;
+    if (next === guess) return next;
+    guess = next;
   }
-  return (low + high) / 2;
+  return guess;
 }

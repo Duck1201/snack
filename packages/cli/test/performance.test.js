@@ -166,14 +166,22 @@ test(`recategorizing a ${PROMPTS.toLocaleString("en-US")}-prompt history stays i
   );
 });
 
-test(`backtesting a large history completes without quadratic blowup`, async () => {
+test(`backtesting the whole ${PROMPTS.toLocaleString("en-US")}-prompt history completes`, async () => {
   const databaseFile = await makeLargeHistory();
-  const rows = readOutcomeRows(databaseFile, "work").slice(0, 5000);
+  const rows = readOutcomeRows(databaseFile, "work");
+  assert.equal(rows.length, PROMPTS);
 
   const replay = timed(() => backtest(rows, { now, prior: { strength: 1, viability: 0.5 } }));
 
-  assert.equal(replay.result.forecasts, 5000 - 10);
-  // Backtesting is an offline audit, not a command budget, but a rolling origin that
-  // rescans the whole prefix each step would make even 5,000 prompts unusable.
-  assert.ok(replay.elapsedMs < 10_000, `backtest took ${replay.elapsedMs.toFixed(0)}ms`);
+  assert.equal(replay.result.forecasts, PROMPTS - 10);
+  assert.equal(replay.result.calibration.brier.sample_size, PROMPTS - 10);
+  assert.ok(
+    (replay.result.calibration.brier.value ?? 1) < 0.05,
+    `brier ${replay.result.calibration.brier.value}`,
+  );
+  // Backtesting is an offline audit rather than a command on the interactive path, so the
+  // budget is loose. What it must not be is quadratic: at 5,000 prompts the same replay
+  // takes well under a second, and a rolling origin that rescanned the prefix at every
+  // step would put a six-figure history out of reach entirely.
+  assert.ok(replay.elapsedMs < 30_000, `backtest took ${replay.elapsedMs.toFixed(0)}ms`);
 });
