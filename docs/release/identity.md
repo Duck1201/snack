@@ -136,13 +136,23 @@ exists, and its verification covers `latest` and `next` for both packages instea
 A release whose tags are not all in place fails, because a default install would resolve to
 something other than what the released commit declares.
 
-Two tags still have to be moved by hand from an authenticated npm login, and this is the only part
-of `0.6.0` that a re-run cannot repair:
+Two tags had to be moved by hand from an authenticated npm login, which a re-run could not repair
+for the reason above:
 
 ```bash
 npm dist-tag add @snack-ai/opencode@0.1.1 latest
 npm dist-tag add @snack-ai/cli@0.6.0 next
 ```
 
-Record the resulting dist-tags here once that is done. The registry is the evidence, not the
-workflow's colour.
+Stage 6 publication: passed
+
+On 2026-07-31 the registry resolves both packages to the versions this release declares, on both
+tags:
+
+| Package | `latest` | `next` | Attestations |
+| --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.6.0` | `0.6.0` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.1` | `0.1.1` | publish + SLSA provenance |
+
+`npm install -g @snack-ai/cli` therefore installs the MVP, and OpenCode resolves the
+MVP-compatible plugin by default. The registry is the evidence, not the workflow's colour.
