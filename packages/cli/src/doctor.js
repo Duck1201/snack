@@ -6,6 +6,7 @@ import { readConfig } from "./config.js";
 import { SnackError } from "./errors.js";
 import { createOpenCodeAdapter } from "./opencode-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
+import { resolvePlanProfile } from "./plan-profile.js";
 import { setupJournalFile } from "./setup-journal.js";
 import {
   inspectDatabase,
@@ -14,6 +15,9 @@ import {
   readSpoolCursors,
   readSpoolIssueCount,
 } from "./storage.js";
+
+/** A bundled profile older than this keeps working, but its assumptions need review. */
+const PLAN_PROFILE_STALE_DAYS = 365;
 
 /**
  * @typedef {object} DoctorCheck
@@ -107,6 +111,7 @@ export async function runDoctor(paths, options = {}) {
   }
   for (const source of sources) {
     if (!isConfiguredSource(source)) continue;
+    checks.push(planProfileCheck(source, now));
     try {
       const fingerprint = createOpenCodeAdapter({ databaseFile: source.database }).fingerprint();
       checks.push(
@@ -348,6 +353,31 @@ async function checkSetupJournal(file) {
     }
     return fail("setup_recovery", "Setup recovery state could not be inspected.");
   }
+}
+
+/**
+ * Report which plan profile a source actually uses and how old its assumptions are.
+ *
+ * A profile is a weak prior; an old one keeps influencing pressure weights, so its age
+ * has to be visible rather than implied.
+ *
+ * @param {{alias: string, plan?: string, plan_profile?: string}} source
+ * @param {Date} now
+ */
+function planProfileCheck(source, now) {
+  const id = `plan_profile:${source.alias}`;
+  const { profile, warnings } = resolvePlanProfile(source);
+  if (warnings.length > 0) {
+    return warn(
+      id,
+      `Configured plan profile is unusable; using ${profile.id}@${profile.version} (${profile.provenance}).`,
+    );
+  }
+  const ageDays = (now.getTime() - Date.parse(`${profile.as_of}T00:00:00.000Z`)) / 86_400_000;
+  const description = `${profile.id}@${profile.version} (${profile.provenance}, as of ${profile.as_of})`;
+  return ageDays > PLAN_PROFILE_STALE_DAYS
+    ? warn(id, `Plan profile ${description} is older than ${PLAN_PROFILE_STALE_DAYS} days.`)
+    : pass(id, `Plan profile ${description}.`);
 }
 
 /** @param {string} id @param {string} message @returns {DoctorCheck} */

@@ -13,6 +13,13 @@ import {
   withConfigLock,
   writePrivateAtomic,
 } from "./config.js";
+import {
+  ANALYTICS_POLICY,
+  computeUsagePressure,
+  horizonWindow,
+  parseHorizon,
+  summarizeUsageProfile,
+} from "./analytics.js";
 import { runDoctor } from "./doctor.js";
 import { ExitCode, SnackError } from "./errors.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
@@ -38,6 +45,8 @@ import {
   inspectDatabase,
   readIngestionCursor,
   readPendingSpoolObservations,
+  readRestrictionWindowRows,
+  readUsageWindowRows,
   readSpoolCursors,
   readSourceSummary,
   rollbackDatabaseInitialization,
@@ -490,6 +499,55 @@ export async function run(argv, options = {}) {
     });
 
   program
+    .command("stats")
+    .description("show observed usage, data quality, and pressure statistics")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--horizon <duration>", "one configured analysis horizon")
+    .option("--verbose", "add per-model detail and extra percentiles")
+    .option("--json", "emit one versioned JSON document")
+    .action(async function stats(commandOptions) {
+      const current = await readConfig(paths.configFile);
+      const configuredSources = Array.isArray(current.sources)
+        ? current.sources.filter(isConfiguredOpenCodeSource)
+        : [];
+      const selected = commandOptions.source
+        ? configuredSources.filter((source) => source.alias === commandOptions.source)
+        : configuredSources;
+      if (selected.length === 0) {
+        throw new SnackError("The requested capacity source is not configured.", {
+          code: ExitCode.unavailable,
+          reason: "source_unavailable",
+        });
+      }
+      const analysis = /** @type {{horizons?: unknown}} */ (current.analysis);
+      const configuredHorizons = Array.isArray(analysis?.horizons)
+        ? /** @type {string[]} */ (analysis.horizons)
+        : defaultConfig.analysis.horizons;
+      const horizons = commandOptions.horizon ? [commandOptions.horizon] : configuredHorizons;
+      /** @type {{code: string, message: string}[]} */
+      const statsWarnings = [];
+      const reports = selected.map((source) => {
+        const { profile: planProfile, warnings } = resolvePlanProfile(source);
+        statsWarnings.push(...warnings);
+        return buildSourceStats({
+          databaseFile: paths.databaseFile,
+          source,
+          planProfile,
+          horizons,
+          now,
+        });
+      });
+      const data = reports.length === 1 ? reports[0] : { sources: reports };
+      if (wantsJson(this, configuredJson)) {
+        stdout.write(formatJson(createEnvelope("stats", data, { warnings: statsWarnings, now })));
+      } else {
+        for (const report of reports) {
+          stdout.write(renderStats(report, commandOptions.verbose === true));
+        }
+      }
+    });
+
+  program
     .command("status")
     .description("assess next-prompt viability")
     .option("--source <alias>", "capacity-source alias")
@@ -538,8 +596,16 @@ export async function run(argv, options = {}) {
             }
           }
           const summary = readSourceSummary(paths.databaseFile, source.alias);
-          statusWarnings.push(...resolvePlanProfile(source).warnings);
-          statuses.push(createInitialStatus(source, summary, now, synchronization));
+          const { profile: planProfile, warnings } = resolvePlanProfile(source);
+          statusWarnings.push(...warnings);
+          const pressure = computeSourcePressure({
+            databaseFile: paths.databaseFile,
+            source,
+            planProfile,
+            horizon: primaryHorizon(current),
+            now,
+          });
+          statuses.push(createInitialStatus(source, summary, now, synchronization, pressure));
         }
         await removeConsumedPendingSegments(paths, configuredSources);
       });
@@ -973,6 +1039,141 @@ function isConfiguredOpenCodeSource(value) {
  * @param {string} installationId
  * @returns {{mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}
  */
+/**
+ * The first configured horizon drives the pressure shown alongside a forecast.
+ *
+ * @param {Record<string, unknown>} config
+ * @returns {string}
+ */
+function primaryHorizon(config) {
+  const configured = /** @type {{horizons?: unknown}} */ (config.analysis)?.horizons;
+  return Array.isArray(configured) && typeof configured[0] === "string"
+    ? configured[0]
+    : /** @type {string} */ (defaultConfig.analysis.horizons[0]);
+}
+
+/**
+ * Rank the current analysis window against the preceding windows of the same length.
+ *
+ * @param {{databaseFile: string, source: {alias: string}, planProfile: import("./plan-profile.js").PlanProfile, horizon: string, now: Date}} input
+ */
+function computeSourcePressure(input) {
+  const horizonSeconds = parseHorizon(input.horizon);
+  const windowCount = ANALYTICS_POLICY.pressure_baseline_windows;
+  const current = summarizeWindow(input, horizonWindow(input.now, horizonSeconds));
+  /** @type {Record<string, number[]>} */
+  const baselines = {};
+  let observedWindows = 0;
+  for (let offset = 1; offset <= windowCount; offset += 1) {
+    const end = new Date(input.now.getTime() - offset * horizonSeconds * 1000);
+    const past = summarizeWindow(input, horizonWindow(end, horizonSeconds));
+    // A window with no prompts means the tool was not used then, which is absence of
+    // observation rather than evidence of low usage. Ranking against it would call a
+    // brand new user's first prompt the heaviest window on record.
+    if (past.values.prompts === 0) continue;
+    observedWindows += 1;
+    for (const [dimension, value] of Object.entries(past.values)) {
+      (baselines[dimension] ??= []).push(value);
+    }
+  }
+  if (observedWindows < ANALYTICS_POLICY.pressure_minimum_baseline_windows) {
+    return {
+      horizon: input.horizon,
+      score: null,
+      band: "unknown",
+      policy_version: ANALYTICS_POLICY.version,
+      baseline_kind: "insufficient",
+      completeness: "partial",
+      contributors: [],
+      baseline_windows: observedWindows,
+    };
+  }
+  return {
+    horizon: input.horizon,
+    baseline_windows: observedWindows,
+    ...computeUsagePressure({
+      current: current.values,
+      baselines,
+      profileWeights: input.planProfile.weights,
+      effectiveSampleSize: current.effectiveSampleSize,
+    }),
+  };
+}
+
+/**
+ * @param {{databaseFile: string, source: {alias: string}}} input
+ * @param {{from: string, to: string}} window
+ */
+function summarizeWindow(input, window) {
+  const profile = summarizeUsageProfile(
+    readUsageWindowRows(input.databaseFile, input.source.alias, window),
+    [],
+    { horizon: "", window },
+  );
+  /** @type {Record<string, number>} */
+  const values = { prompts: profile.prompts.count };
+  for (const [dimension, summary] of Object.entries(profile.dimensions)) {
+    if ("value" in summary) {
+      values[dimension] = summary.value;
+    }
+  }
+  return { values, effectiveSampleSize: profile.effective_sample_size };
+}
+
+/**
+ * Describe observed usage for one capacity source across the requested horizons.
+ *
+ * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date}} input
+ */
+function buildSourceStats(input) {
+  const horizons = input.horizons.map((horizon) => {
+    const window = horizonWindow(input.now, parseHorizon(horizon));
+    return summarizeUsageProfile(
+      readUsageWindowRows(input.databaseFile, input.source.alias, window),
+      readRestrictionWindowRows(input.databaseFile, input.source.alias, window),
+      { horizon, window, now: input.now },
+    );
+  });
+  return {
+    source: {
+      alias: input.source.alias,
+      provider: input.source.provider,
+      profile: input.source.profile,
+      plan: input.source.plan,
+      plan_profile: {
+        id: input.planProfile.id,
+        version: input.planProfile.version,
+        provenance: input.planProfile.provenance,
+        as_of: input.planProfile.as_of,
+      },
+    },
+    horizons,
+    calibration: { status: "not_available", reason: "no_prediction_model_yet" },
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildSourceStats>} report
+ * @param {boolean} verbose
+ */
+function renderStats(report, verbose) {
+  let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
+  for (const horizon of report.horizons) {
+    text +=
+      `  ${horizon.horizon}: ${horizon.prompts.count} prompts` +
+      ` (${horizon.prompts.eligible} eligible, ${horizon.prompts.excluded} excluded);` +
+      ` effective sample ${horizon.effective_sample_size.toFixed(2)};` +
+      ` as_of ${horizon.freshness.as_of ?? "unknown"}.\n`;
+    if (verbose) {
+      for (const [dimension, value] of Object.entries(horizon.dimensions)) {
+        text += `    ${dimension}: ${"value" in value ? value.value : "unknown"} ${value.unit} (sample ${value.sample_size}, missing ${value.missing}).\n`;
+      }
+    }
+  }
+  return text;
+}
+
+/** @param {unknown[]} sources @param {string} installationId */
 function providerMappings(sources, installationId) {
   const providerMappingCounts = new Map();
   for (const source of sources) {

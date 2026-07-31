@@ -7,7 +7,7 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { getConfigValue, readConfig } from "../src/config.js";
-import { SnackError } from "../src/errors.js";
+import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
 import { classifyRisk } from "../src/status.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
@@ -488,7 +488,16 @@ test("status reports a broad initial estimate with very low evidence", async () 
           prior: { alpha: 1, beta: 1 },
           observed: { successes: 1, restrictions: 0 },
         },
-        pressure: { band: "unknown", policy_version: "stage2-placeholder-v1" },
+        pressure: {
+          horizon: "PT1H",
+          score: null,
+          band: "unknown",
+          policy_version: "stage4-analytics-v1",
+          baseline_kind: "insufficient",
+          baseline_windows: 0,
+          completeness: "partial",
+          contributors: [],
+        },
         expected_prompt_category: "typical",
         observed: { prompts: 1, successes: 1, restrictions: 0, excluded: 0 },
         freshness: { as_of: "2026-01-02T03:04:10.000Z", age_seconds: 50 },
@@ -497,7 +506,7 @@ test("status reports a broad initial estimate with very low evidence", async () 
         caveats: [
           "Initial heuristic; this is not a calibrated probability.",
           "Real provider capacity is unknown.",
-          "Usage pressure analytics are not available in Stage 2.",
+          "Usage pressure compares this window with local history; it is not a share of capacity.",
         ],
       },
     },
@@ -1727,3 +1736,268 @@ async function readTree(root) {
   await visit(root);
   return values.join("\n");
 }
+
+test("stats refuses an unconfigured capacity source", async () => {
+  const fixture = await makeRunFixture();
+  await run(["node", "snack", "config", "set", "presentation.json", "false"], fixture.options);
+  fixture.stdout.value = "";
+
+  const exitCode = await run(["node", "snack", "stats", "--json"], fixture.options);
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, ExitCode.unavailable);
+  assert.equal(document.command, "stats");
+  assert.equal(document.status, "error");
+  assert.deepEqual(
+    document.errors.map((/** @type {{code: string}} */ error) => error.code),
+    ["source_unavailable"],
+  );
+});
+
+test("stats describes each configured analysis horizon", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  const exitCode = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.equal(document.command, "stats");
+  assert.equal(document.status, "ok");
+  assert.equal(document.data.source.alias, "personal-anthropic");
+  // The default horizons come from analysis.horizons in the configuration.
+  assert.deepEqual(
+    document.data.horizons.map((/** @type {{horizon: string}} */ entry) => entry.horizon),
+    ["PT1H", "PT5H", "P1D", "P7D"],
+  );
+  const firstHorizon = document.data.horizons[0];
+  assert.deepEqual(firstHorizon.window, {
+    from: "2026-01-02T02:05:00.000Z",
+    to: "2026-01-02T03:05:00.000Z",
+  });
+  assert.deepEqual(firstHorizon.prompts, {
+    count: 1,
+    eligible: 1,
+    successes: 1,
+    restrictions: 0,
+    excluded: 0,
+  });
+});
+
+test("stats restricts the report to a requested horizon", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--horizon", "PT1H", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.deepEqual(
+    document.data.horizons.map((/** @type {{horizon: string}} */ entry) => entry.horizon),
+    ["PT1H"],
+  );
+});
+
+/** @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture */
+async function setupAndSync(fixture) {
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+  await run(
+    ["node", "snack", "sync", "--source", "personal-anthropic", "--full", "--json"],
+    fixture.options,
+  );
+  fixture.stdout.value = "";
+}
+
+test("verbose stats report unknown dimensions without substituting zero", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  const exitCode = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--horizon", "PT1H", "--verbose"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, 0);
+  assert.match(fixture.stdout.value, /PT1H: 1 prompts \(1 eligible, 0 excluded\)/u);
+  assert.match(fixture.stdout.value, /input_tokens: 100 tokens \(sample 1, missing 0\)/u);
+
+  // A horizon with no observations reports unknown, never a fabricated zero.
+  fixture.options.now = new Date("2026-01-10T00:00:00.000Z");
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--horizon", "PT1H", "--verbose"],
+    fixture.options,
+  );
+
+  assert.match(fixture.stdout.value, /PT1H: 0 prompts/u);
+  assert.match(fixture.stdout.value, /input_tokens: unknown tokens \(sample 0, missing 0\)/u);
+  assert.doesNotMatch(fixture.stdout.value, /input_tokens: 0 /u);
+});
+
+test("stats never emit prompt content", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  for (const argv of [
+    ["node", "snack", "stats", "--source", "personal-anthropic"],
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--verbose"],
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    assert.equal(await run(argv, fixture.options), 0);
+    for (const canary of Object.values(privacyCanaries)) {
+      const pattern = new RegExp(String(canary), "u");
+      assert.doesNotMatch(fixture.stdout.value, pattern);
+      assert.doesNotMatch(fixture.stderr.value, pattern);
+      assert.doesNotMatch(await readTree(fixture.root), pattern);
+    }
+  }
+});
+
+test("status reports a real pressure band instead of the Stage 2 placeholder", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  const exitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.equal(document.data.pressure.policy_version, "stage4-analytics-v1");
+  // One prompt and no prior history cannot rank as the heaviest window on record.
+  assert.equal(document.data.pressure.band, "unknown");
+  assert.equal(document.data.pressure.baseline_kind, "insufficient");
+  assert.equal(document.data.pressure.baseline_windows, 0);
+  assert.ok(Array.isArray(document.data.pressure.contributors));
+  assert.ok(
+    !document.data.caveats.some((/** @type {string} */ caveat) => /Stage 2/u.test(caveat)),
+    `Stage 2 pressure caveat still present: ${JSON.stringify(document.data.caveats)}`,
+  );
+});
+
+test("status ranks the current window once enough local history exists", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  // One prompt in each of the eight preceding hours, then a heavy current hour.
+  const baseMs = Date.parse("2026-01-02T03:00:00.000Z");
+  const hour = 3_600_000;
+  let sql = "";
+  for (let index = 1; index <= 8; index += 1) {
+    const created = baseMs - index * hour;
+    sql += insertOpenCodePrompt(`past-${index}`, created);
+  }
+  for (let index = 1; index <= 5; index += 1) {
+    sql += insertOpenCodePrompt(`now-${index}`, baseMs - index * 60_000);
+  }
+  executeOpenCodeSql(fixture.options.env.OPENCODE_DB, sql);
+  await setupAndSync(fixture);
+
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const { pressure } = JSON.parse(fixture.stdout.value).data;
+
+  assert.equal(pressure.baseline_kind, "local");
+  assert.equal(pressure.baseline_windows, 8);
+  // Six prompts this hour against one per hour before it is the heaviest window seen.
+  assert.equal(pressure.band, "high");
+  assert.equal(
+    /** @type {{dimension: string}[]} */ (pressure.contributors)[0]?.dimension,
+    "prompts",
+  );
+  assert.ok(
+    pressure.contributors.every(
+      (/** @type {{percentile: number}} */ contributor) =>
+        contributor.percentile >= 0 && contributor.percentile <= 1,
+    ),
+  );
+});
+
+/**
+ * @param {string} id
+ * @param {number} createdMs
+ */
+function insertOpenCodePrompt(id, createdMs) {
+  const completed = createdMs + 4000;
+  return (
+    `INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+       ('user-${id}', 'session-1', ${createdMs}, ${createdMs},
+        '{"role":"user","time":{"created":${createdMs}},"agent":"build","model":{"providerID":"anthropic","modelID":"claude-sonnet"}}'),
+       ('assistant-${id}', 'session-1', ${createdMs + 1000}, ${completed},
+        '{"role":"assistant","time":{"created":${createdMs + 1000},"completed":${completed}},"parentID":"user-${id}","providerID":"anthropic","modelID":"claude-sonnet","finish":"stop","cost":0.003,"tokens":{"input":100,"output":25,"reasoning":5,"cache":{"read":10,"write":2}}}');\n` +
+    `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+       ('step-${id}', 'assistant-${id}', 'session-1', ${completed}, ${completed},
+        '{"type":"step-finish","reason":"stop","cost":0.003,"tokens":{"input":100,"output":25,"reasoning":5,"cache":{"read":10,"write":2}}}');\n`
+  );
+}
+
+test("doctor reports plan profile provenance and flags a stale profile", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const fresh = JSON.parse(fixture.stdout.value);
+  /** @type {{id: string, status: string, message: string}[]} */
+  const freshChecks = fresh.data.checks;
+  const freshProfile = freshChecks.find((check) =>
+    check.id.startsWith("plan_profile:personal-anthropic"),
+  );
+
+  assert.ok(freshProfile, `no plan profile check in ${freshChecks.map((c) => c.id).join(", ")}`);
+  assert.equal(freshProfile.status, "pass");
+  assert.match(freshProfile.message, /bundled/u);
+
+  // The bundled profile carries a fixed as_of, so a much later clock makes it stale.
+  fixture.options.now = new Date("2030-01-01T00:00:00.000Z");
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  /** @type {{id: string, status: string}[]} */
+  const staleChecks = JSON.parse(fixture.stdout.value).data.checks;
+
+  assert.ok(
+    staleChecks.some(
+      (check) => check.id.startsWith("plan_profile:personal-anthropic") && check.status === "warn",
+    ),
+    "a profile years past its as_of date must warn",
+  );
+});

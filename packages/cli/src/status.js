@@ -7,12 +7,14 @@ import { resolvePlanProfile } from "./plan-profile.js";
  * @param {{prompts: number, successes: number, restrictions: number, excluded: number, as_of: string | null, active_period_started_at: string | null}} observed
  * @param {Date} now
  * @param {{performed: boolean, status: string}} [synchronization]
+ * @param {{band: string, policy_version: string}} [pressure] usage pressure for the primary horizon
  */
 export function createInitialStatus(
   source,
   observed,
   now,
   synchronization = { performed: false, status: "not_requested" },
+  pressure = { band: "unknown", policy_version: "no-analytics" },
 ) {
   const planProfile = resolvePlanProfile(source).profile;
   const asOf = observed.as_of;
@@ -48,7 +50,7 @@ export function createInitialStatus(
       prior: { alpha: 1, beta: 1 },
       observed: { successes: observed.successes, restrictions: observed.restrictions },
     },
-    pressure: { band: "unknown", policy_version: "stage2-placeholder-v1" },
+    pressure,
     expected_prompt_category: "typical",
     observed: {
       prompts: observed.prompts,
@@ -62,7 +64,7 @@ export function createInitialStatus(
     caveats: [
       "Initial heuristic; this is not a calibrated probability.",
       "Real provider capacity is unknown.",
-      "Usage pressure analytics are not available in Stage 2.",
+      "Usage pressure compares this window with local history; it is not a share of capacity.",
     ],
   };
 }

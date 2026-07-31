@@ -22,6 +22,8 @@ export const ANALYTICS_POLICY = Object.freeze({
   decay_half_life_seconds: 86400,
   weight_blend_equivalent_samples: 10,
   pressure_bands: Object.freeze({ moderate: 0.5, elevated: 0.75, high: 0.9 }),
+  pressure_baseline_windows: 30,
+  pressure_minimum_baseline_windows: 5,
 });
 
 /**
