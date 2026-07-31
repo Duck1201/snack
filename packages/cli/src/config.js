@@ -65,7 +65,7 @@ export async function readConfig(configFile) {
     return parseAndValidateConfig(await readFile(configFile, "utf8"));
   } catch (error) {
     if (isNotFound(error)) {
-      throw new SnackError("Configuration does not exist; use `snack config set` first.", {
+      throw new SnackError("Configuration does not exist; run `snack setup opencode` first.", {
         code: ExitCode.config,
         reason: "config_missing",
       });
@@ -184,13 +184,18 @@ export function getConfigValue(config, key) {
   /** @type {unknown} */
   let current = config;
   for (const part of path) {
-    if (!isRecord(current) || !(part in current)) {
-      throw new SnackError(`Configuration key '${key}' does not exist.`, {
+    const missing = () =>
+      new SnackError(`Configuration key '${key}' does not exist.`, {
         code: ExitCode.config,
         reason: "config_key_missing",
       });
+    if (typeof part === "number") {
+      if (!Array.isArray(current) || part >= current.length) throw missing();
+      current = current[part];
+    } else {
+      if (!isRecord(current) || !(part in current)) throw missing();
+      current = current[part];
     }
-    current = current[part];
   }
   return current;
 }
@@ -231,12 +236,22 @@ export async function writePrivateAtomic(target, content, options = {}) {
   }
 }
 
-/** @param {string} key */
+/**
+ * Split a dotted configuration key into a JSONC path.
+ *
+ * A wholly numeric segment addresses an array element, so one configured source can be edited
+ * in place instead of rewriting the whole `sources` array. Numeric segments become numbers
+ * because that is what a JSONC path expects for an index.
+ *
+ * @param {string} key
+ * @returns {(string | number)[]}
+ */
 function parseKey(key) {
   const parts = key.split(".");
   if (
     parts.some(
-      (part) => !/^[a-z][a-z0-9_]*$/u.test(part) || ["__proto__", "constructor"].includes(part),
+      (part) =>
+        !/^(?:[a-z][a-z0-9_]*|\d+)$/u.test(part) || ["__proto__", "constructor"].includes(part),
     )
   ) {
     throw new SnackError("Configuration key is invalid.", {
@@ -244,7 +259,7 @@ function parseKey(key) {
       reason: "invalid_config_key",
     });
   }
-  return parts;
+  return parts.map((part) => (/^\d+$/u.test(part) ? Number(part) : part));
 }
 
 /** @param {string} raw */

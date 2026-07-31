@@ -106,7 +106,13 @@ export async function runDoctor(paths, options = {}) {
         ? pass("opencode_plugin", "OpenCode live-capture plugin registration is compatible.")
         : registration === "missing"
           ? warn("opencode_plugin", "OpenCode live-capture plugin is not registered.")
-          : fail("opencode_plugin", "OpenCode live-capture plugin registration is incompatible."),
+          : registration === "outdated"
+            ? warn(
+                "opencode_plugin",
+                "OpenCode live-capture plugin is registered at another version; " +
+                  "re-run `snack setup opencode` to update it.",
+              )
+            : fail("opencode_plugin", "OpenCode live-capture plugin registration is incompatible."),
     );
   }
   for (const source of sources) {

@@ -132,7 +132,8 @@ export async function run(argv, options = {}) {
     .requiredOption("--source <alias>", "capacity-source alias")
     .requiredOption("--provider <identifier>", "provider identifier")
     .requiredOption("--profile <alias>", "local account/profile alias")
-    .requiredOption("--plan <identifier>", "plan profile identifier")
+    .requiredOption("--plan <identifier>", "how you refer to your plan; a label, not a lookup key")
+    .option("--plan-profile <identifier>", "bundled or custom plan profile to use as the prior")
     .option("--dry-run", "validate and show the proposal without mutation")
     .option("--install-plugin", "register @snack-ai/opencode in the global OpenCode configuration")
     .option("--yes", "confirm a non-interactive global OpenCode configuration change")
@@ -169,7 +170,7 @@ export async function run(argv, options = {}) {
           reason: "plugin_registration_confirmation_required",
         });
       }
-      /** @type {{alias: string, installation_id: string, adapter: string, database: string, provider: string, profile: string, plan: string, fingerprint: string}} */
+      /** @type {{alias: string, installation_id: string, adapter: string, database: string, provider: string, profile: string, plan: string, plan_profile: string, fingerprint: string}} */
       let configuredSource = {
         alias: commandOptions.source,
         installation_id: randomUUID(),
@@ -178,6 +179,10 @@ export async function run(argv, options = {}) {
         provider: commandOptions.provider,
         profile: commandOptions.profile,
         plan: commandOptions.plan,
+        // Recorded separately from `plan`, because the plan a user names and the profile SNACK
+        // holds a prior for are different things. Defaulting here keeps a free-text plan label
+        // from being resolved as a profile id and warning on every later command.
+        plan_profile: commandOptions.planProfile ?? "generic",
         fingerprint: fingerprint.family,
       };
       /** @type {{content: string, change: {target: string, package: string, action: string, prospective_analysis: boolean}} | null} */
@@ -392,6 +397,7 @@ export async function run(argv, options = {}) {
           provider: configuredSource.provider,
           profile: configuredSource.profile,
           plan: configuredSource.plan,
+          plan_profile: configuredSource.plan_profile,
         },
         fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
         dry_run: {

@@ -28,8 +28,11 @@ forecasts. After resolving the configuration, run `snack sync --full` to re-eval
 OpenCode `OPENCODE_DB` is honored when it is an absolute path. Otherwise SNACK checks
 `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db`.
 
-`snack setup opencode --install-plugin --yes` can register `@snack-ai/opencode@0.1.0` in the global
-OpenCode configuration. It stores a content-free `spool-event-v1` stream in SNACK's private spool;
+`snack setup opencode --install-plugin --yes` can register `@snack-ai/opencode@0.1.1` in the global
+OpenCode configuration. SNACK writes that exact specifier but does not require it when reading:
+because every `0.1.x` plugin emits the same `spool-event-v1`, a registration pinned at another
+version of the same package is reported as outdated rather than incompatible, and `doctor` warns
+instead of failing. It stores a content-free `spool-event-v1` stream in SNACK's private spool;
 the plugin never opens SQLite or throws capture failures into OpenCode. Unknown future spool schema
 versions are rejected with sanitized diagnostics.
 
