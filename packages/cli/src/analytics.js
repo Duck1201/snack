@@ -106,6 +106,7 @@ export function summarizeUsageProfile(rows, restrictions, options) {
       TOKEN_DIMENSIONS.map((dimension) => [dimension, summarizeTokenDimension(slices, dimension)]),
     ),
     cost: summarizeCost(slices),
+    by_model: summarizeByModel(slices),
     duration: summarizeDuration(rows),
     restrictions: {
       by_class: countRestrictionClasses(restrictions),
@@ -189,6 +190,108 @@ export function computeUsagePressure(input) {
       (left, right) => (right.contribution ?? -1) - (left.contribution ?? -1),
     ),
   };
+}
+
+/**
+ * Versioned trend policy.
+ *
+ * Deliberately separate from `ANALYTICS_POLICY`: that version is stamped onto every stored
+ * prediction attempt, and bumping it for something that does not affect a forecast would put a
+ * false signal into the audit trail permanently.
+ *
+ * The simulation in `test/analytics.test.js` is the evidence behind these values. Measured as
+ * the share of stationary runs reporting `steady`, and the share of rising runs reported as
+ * `rising` at 10% / 20% / 50% growth per window:
+ *
+ *   windows 3 -> 0.744 | 0.416 / 0.819 / 0.997
+ *   windows 4 -> 0.181 | 0.758 / 0.992 / 1.000
+ *   windows 5 -> 0.689 | 0.652 / 0.986 / 0.994
+ *   windows 6 -> 0.243 | 0.863 / 1.000 / 0.993
+ *   windows 7 -> 0.678 | 0.801 / 0.999 / 0.000
+ *
+ * An even window count leaves an odd number of steps, where no tie is possible and a strict
+ * majority arises by chance: those rows report a direction on stationary usage four times out
+ * of five. Among the odd counts, three under-reports a gentle rise, and seven collapses on a
+ * steep one because the percentile saturates at 1 once a window clears the whole baseline,
+ * making every later step zero. Five is the only count that neither misses a slow climb nor
+ * goes blind on a fast one.
+ */
+export const TREND_POLICY = Object.freeze({
+  version: "stage6-trend-v1",
+  windows: 5,
+  minimum_windows: 3,
+});
+
+/**
+ * Describe which way usage pressure has been moving, without claiming where it is going.
+ *
+ * Each compared window is ranked against **one shared baseline** rather than against its own
+ * preceding history. Ranking each window against a different baseline would put the scores on
+ * different scales, and the sequence between them would mean nothing.
+ *
+ * Direction comes from counting the sign of the steps between consecutive scores: a strict
+ * majority rising or falling names that direction, anything else is `steady`. Below the
+ * minimum evidence the direction is `null` — `steady` is a claim, and absence of observation
+ * must never be reported as one.
+ *
+ * @param {{windows: Record<string, number>[], baselines: Record<string, number[]>, profileWeights: Record<string, number>, effectiveSampleSize: number}} input windows ordered oldest to newest
+ */
+export function computeUsageTrend(input) {
+  const baselineWindows = Math.max(
+    0,
+    ...Object.values(input.baselines).map((values) => values.length),
+  );
+  const base = {
+    windows_compared: input.windows.length,
+    baseline_windows: baselineWindows,
+    /** @type {number[]} */
+    scores: [],
+    policy_version: TREND_POLICY.version,
+    /** @type {"observed" | "not_available"} */
+    status: "not_available",
+    /** @type {string | null} */
+    reason: null,
+    /** @type {"rising" | "falling" | "steady" | null} */
+    direction: null,
+  };
+  if (baselineWindows < ANALYTICS_POLICY.pressure_minimum_baseline_windows) {
+    return { ...base, reason: "insufficient_baseline" };
+  }
+  if (input.windows.length < TREND_POLICY.minimum_windows) {
+    return { ...base, reason: "insufficient_windows" };
+  }
+
+  const scores = input.windows.map(
+    (current) =>
+      computeUsagePressure({
+        current,
+        baselines: input.baselines,
+        profileWeights: input.profileWeights,
+        effectiveSampleSize: input.effectiveSampleSize,
+      }).score,
+  );
+  if (scores.some((score) => score === null)) {
+    return { ...base, reason: "insufficient_baseline" };
+  }
+
+  const ranked = /** @type {number[]} */ (scores);
+  // A percentile cannot exceed 1, so once every compared window clears the whole baseline the
+  // steps between them are all zero no matter how steeply usage is still climbing. Reporting
+  // `steady` there would read as reassurance about the one case that deserves it least.
+  if (ranked.every((score) => score >= 1)) {
+    return { ...base, scores: ranked, reason: "above_baseline" };
+  }
+  let rising = 0;
+  let falling = 0;
+  for (let index = 1; index < ranked.length; index += 1) {
+    const step = /** @type {number} */ (ranked[index]) - /** @type {number} */ (ranked[index - 1]);
+    if (step > 0) rising += 1;
+    if (step < 0) falling += 1;
+  }
+  const steps = ranked.length - 1;
+  const direction = rising * 2 > steps ? "rising" : falling * 2 > steps ? "falling" : "steady";
+
+  return { ...base, scores: ranked, status: "observed", direction };
 }
 
 /**
@@ -400,6 +503,40 @@ function summarizeDuration(rows) {
   return observed.length === 0
     ? { status: "unknown", ...shared }
     : { p50: percentile(observed, 0.5), p90: percentile(observed, 0.9), ...shared };
+}
+
+/**
+ * Split observed usage by the model that produced it.
+ *
+ * The unit is usage slices rather than prompts, because one prompt can span several models and
+ * counting it once per model would report more prompts than were made. A slice whose model the
+ * source never named is grouped under an explicit `unknown`, the same way an unnamed currency
+ * is kept rather than dropped.
+ *
+ * @param {import("./storage.js").UsageSliceRow[]} slices
+ */
+function summarizeByModel(slices) {
+  /** @type {Map<string, import("./storage.js").UsageSliceRow[]>} */
+  const groups = new Map();
+  for (const slice of slices) {
+    const model = slice.model ?? "unknown";
+    // Appending in place rather than rebuilding the group. Spreading the accumulated array once
+    // per slice is quadratic in the slices a window holds, which a dense week of usage reaches:
+    // it cost 26 s and 928 MB at a hundred thousand prompts.
+    const group = groups.get(model);
+    if (group === undefined) groups.set(model, [slice]);
+    else group.push(slice);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([model, group]) => ({
+      model,
+      slices: { count: group.length, unit: "usage slices" },
+      dimensions: Object.fromEntries(
+        TOKEN_DIMENSIONS.map((dimension) => [dimension, summarizeTokenDimension(group, dimension)]),
+      ),
+      cost: summarizeCost(group),
+    }));
 }
 
 /**

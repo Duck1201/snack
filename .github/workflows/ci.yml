@@ -56,6 +56,9 @@ jobs:
       - name: Test clean package lifecycle inside WSL
         shell: wsl-bash {0}
         run: |
+          # WSL starts its own login shell, so the runner's environment does not cross into it.
+          # The suite reads CI to tell a shared runner from a developer machine.
+          export CI=true
           cp --archive . /tmp/snack
           cd /tmp/snack
           node --version

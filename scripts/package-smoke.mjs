@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -77,6 +77,19 @@ try {
   );
   const smoke = await execute(binary, ["--version"], { cwd: temporary });
   assert.equal(smoke.stdout.trim(), cliManifest.version);
+
+  // A supported platform must resolve a published prebuild. A node-gyp fallback would still
+  // produce a working binary here while requiring a compiler toolchain from every user, so the
+  // build directory is asserted to hold nothing but the downloaded binding.
+  // See docs/release/native-sqlite.md.
+  const nativeBuild = await readdir(join(temporary, "node_modules", "better-sqlite3", "build"), {
+    recursive: true,
+  });
+  assert.deepEqual(
+    nativeBuild.map((entry) => entry.split(/[\\/]/u).join("/")).sort(),
+    ["Release", "Release/better_sqlite3.node"],
+    `expected a downloaded prebuild; a source compile left ${nativeBuild.join(", ")}`,
+  );
 
   const pluginManifest = JSON.parse(
     await readFile(join(workspace, "packages", "opencode", "package.json"), "utf8"),

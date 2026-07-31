@@ -154,8 +154,14 @@ A plan profile provides weak initial assumptions, pressure weights, and provenan
 
 - ship with npm releases;
 - never update over the network at runtime;
-- include profile ID, version, publication/as-of date, source/provenance, supported provider/plan identifiers, prior strength, and dimension weights;
+- include profile ID, version, publication/as-of date, source/provenance, prior strength, and dimension weights;
 - may not claim a quota value that SNACK presents as real capacity.
+
+Bundled profiles are named after a **billing archetype**, never after a provider or a plan brand: `generic` (neutral), `subscription-window` (a flat subscription, where restrictions follow requests and generated volume concentrating in a window), and `metered-credit` (billed per token or credit, where risk tracks cumulative volume). Naming them after real plans would turn a bundled artifact into a quota table that goes stale and reads as a claim about provider capacity.
+
+An archetype differentiates **how usage is weighed**, not what the answer is. No archetype declares a `prior_viability` of its own, because a differentiated initial viability would be an assertion about a plan's real capacity; they inherit the neutral default. `generic` states that same neutral value explicitly, so the constant every forecast starts from is readable in a shipped artifact rather than hidden in code. They also all carry the same prior strength: `test/plan-profile.simulation.test.js` measures interval coverage across prior strengths and finds only `1` holds the declared floor at both a near-zero and a restriction-heavy rate, so prior strength has no room to vary inside the coverage contract.
+
+Every bundled profile's constants must be justified by simulation before release. A profile that cannot be shown to rank its own failure mode above neutral weighting — while not simply scoring higher everywhere, which would make it a sensitivity knob rather than a description of a plan — is noise and does not ship.
 
 A source selects its profile through `sources[].plan_profile`, which names either a bundled
 profile or a local file. Custom profiles may be defined locally in JSONC and are labeled
@@ -392,12 +398,21 @@ horizon it shows:
 - observed cost per currency, totalled in exact decimal arithmetic and never converted between currencies; a source that reports a cost without naming a currency is grouped under an explicit unknown currency rather than dropped;
 - median and p90 duration;
 - time-decayed effective sample size over eligible outcomes;
+- the same token dimensions and cost broken down by model, which `--verbose` also renders.
+
+The per-model breakdown counts usage slices rather than prompts, because one prompt can span several models and counting it once per model would report more prompts than were made. A slice whose model the source never named is grouped under an explicit `unknown`, the same way an unnamed currency is kept rather than dropped, and the per-model totals reconcile with the horizon totals.
 
 Every reported statistic carries its unit and its sample size. A statistic is never a bare
 number whose meaning has to be inferred.
 - current pressure and trend;
 - data freshness and completeness;
 - forecast count, Brier score, and interval coverage when meaningful.
+
+The trend describes which way pressure has been moving across the most recent windows, and never where it is going next. All compared windows are ranked against one shared baseline — the windows preceding all of them — because ranking each against its own history would place the scores on different scales and make the sequence meaningless. Direction comes from a strict majority of the steps between consecutive scores, and is reported as `rising`, `falling`, or `steady`; `steady` rather than `stable`, since stable would hint at a claim about the future.
+
+A trend is reported by `stats` only. `status` answers whether the next prompt is viable, and a direction across past windows is not part of that answer.
+
+The direction is `not_available` with a stated reason rather than a fabricated `steady` whenever it cannot be observed: too few baseline windows, too few compared windows, or — the case that matters most — every compared window sitting above the entire baseline. A percentile cannot exceed 1, so once usage clears everything previously seen the steps between windows are all zero however steeply it is still climbing, and reporting `steady` there would read as reassurance about precisely the situation that deserves it least.
 
 Calibration metrics are reported as not available until enough delivered forecasts have been
 followed by outcomes. They are never reported as zero.
@@ -444,6 +459,12 @@ Responsibilities:
 - test source/spool permissions and report next steps.
 
 The MVP accepts `opencode`; `claude` is added in 0.7. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
+
+Setup is guided by default and asks only for what it cannot observe. The source database, its schema fingerprint, the providers present in it, any already-configured sources, and the current plugin registration are all discovered. An unsupported fingerprint fails closed before the first question, so nobody is walked through a questionnaire that cannot lead anywhere. The local account or profile alias is deliberately asked rather than discovered: OpenCode does not expose account identity, and SNACK never reads credentials.
+
+The plan label and the plan profile are asked as two separate questions, because the plan a user names and the archetype SNACK holds a prior for are different things. Prospective analysis and plugin registration both default to declining, and a final confirmation precedes any change. Interrupting the questions — `Ctrl+D`, or stdin closing — cancels setup, which exits `0` having changed nothing.
+
+`--non-interactive` requires `--source`, `--provider`, `--profile`, and `--plan`, and reports which are missing. Without a terminal and without `--non-interactive`, setup exits `2` naming the flags rather than waiting on input that will never arrive. Both entry points resolve the same values and then run the identical journal, backup, and rollback path.
 
 ### 12.3 `snack status`
 
@@ -508,11 +529,20 @@ Doctor never prints credentials, prompt text, response text, or raw sensitive so
 ### 12.7 `snack export`
 
 ```text
-snack export --format <json|csv> --output <path|->
+snack export --format json --output <path|->
+snack export --format csv  --output <directory>
              [--source <alias>] [--since <time>] [--until <time>]
 ```
 
 Export is the only intentional path for data to leave SNACK storage. JSON includes schema version and sufficient plan/model provenance to interpret predictions. CSV is a flattened usage/prediction representation and may require separate files when one-to-many relationships cannot be represented safely.
+
+Both formats carry the same flat tables joined by key — `capacity_periods`, `prompts`, `usage_slices`, `restrictions`, `predictions`, `prediction_evaluations` — rather than one nesting and the other flattening. Each table declares its columns, so a later migration cannot widen an export by adding one. Operational tables are excluded, including `pending_spool_observation`, whose payload column is the one place an unreviewed field from a future capture schema could reach an export; live events that have not yet been reconciled therefore do not appear until a synchronization commits them.
+
+`--since` is inclusive and `--until` exclusive, the same half-open convention the analysis horizons use.
+
+An export carries two levels of provenance. Row-level versions come from the rows and are never re-stamped with the exporting build's values. A document-level block names the exporting build — CLI version, export schema version, envelope schema version — and the plan profile each source resolved to. The export schema version is independent of the envelope `schema_version` because it freezes as a public contract at 1.0 on its own timeline.
+
+`--format csv --output -` is refused with exit `2`. Six related tables cannot share one stream without either repeating prompt columns per usage slice or introducing a separator no CSV reader understands, and both invite a silent miscount; CSV writes one file per table in a directory, beside a `manifest.json` carrying the provenance and per-table row counts.
 
 No export contains credentials or text content. Opaque identifiers remain opaque.
 
@@ -525,7 +555,17 @@ snack data purge (--source <alias> | --all)
                  [--dry-run] [--yes] [--json]
 ```
 
-`--prevent-reimport` records a local tombstone/cursor policy for the selected source range; without it, a later full synchronization may restore records still present in the source.
+`--prevent-reimport` records a local tombstone/cursor policy for the selected source range; without it, a later full synchronization may restore records still present in the source. The tombstone is enforced during ingestion rather than through the ingestion cursor, so it survives `--full`, which ignores cursors by definition.
+
+Purge deletes exactly the selected scope inside one transaction, and verifies that: the rows counted for the preview and the rows actually deleted must agree, or the transaction rolls back. `--dry-run` reports the same counts, the same resolved half-open window, and the same JSON shape as an applied run, so a preview is verifiably a preview of what will happen.
+
+The ingestion cursor is a single high-watermark and cannot express a purged middle range. When the purged range contains the current watermark, the cursor is reset in the same transaction; otherwise an incremental synchronization would silently never re-import the removed records. A purge whose range does not reach the watermark — including one that selects no records at all — leaves the cursor alone, since forcing a full re-scan would change nothing. Spool segments are never deleted by purge — segment removal remains synchronization's responsibility under the rule that a segment is removed only after every configured source has committed past it.
+
+`--include-config` removes the selected sources from the configuration after the database transaction has committed, because the deletion is unrecoverable while the configuration file is recoverable from its backup. It does not touch the OpenCode plugin registration, which may contain credentials and belongs to `setup`; purge warns that capture continues until `setup` changes it.
+
+Confirmation is required unless `--dry-run` or `--yes` is given, and the confirmation is the source alias typed back rather than a single keystroke. Without a terminal, or in `--json` mode where prompting would break the one-document contract, purge exits `2`.
+
+**Purge takes no pre-purge backup.** Leaving a copy of just-deleted records on disk would contradict what the command promises, and §3.5.7 already states that purged records are not restorable. Consequently purge has no I/O failure of its own: storage failures exit `5`, configuration write failures exit `3`, and misuse exits `2`. Exit code `6` in §12.10 is reached by `export` alone.
 
 ### 12.9 `snack config`
 
@@ -546,10 +586,14 @@ Initial stable categories:
 - `3`: invalid or unsafe configuration;
 - `4`: requested source unavailable or incompatible with no usable result;
 - `5`: storage, migration, or integrity failure;
-- `6`: export/purge I/O failure;
+- `6`: export I/O failure; purge reaches no case of its own, because it takes no backup and writes no file (see §12.8);
 - `10`: unexpected internal failure.
 
 If synchronization partially fails but a valid, explicitly stale forecast can still be returned, status exits `0` and exposes degraded health prominently. If no valid result exists for the requested source, it exits `4`.
+
+A time window is half-open, so `--until` at or before `--since` selects nothing by construction and exits `2` rather than reporting an empty success that hides a mistyped bound.
+
+An unexpected internal failure reports no detail, because SNACK cannot know what is safe to print about a failure it did not anticipate. Setting `SNACK_DEBUG` to any value prints the underlying error to stderr for a bug report; it never enters the JSON document, stdout, or any file, and it is off unless asked for, because a stack trace carries absolute paths.
 
 ## 13. JSON Output
 

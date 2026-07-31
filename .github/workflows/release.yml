@@ -1,10 +1,10 @@
-name: Publish technical preview
+name: Publish release
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type publish-0.5.0 after reviewing the release evidence
+        description: Type publish-0.6.0 after reviewing the release evidence
         required: true
         type: string
 
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   publish:
-    if: inputs.confirmation == 'publish-0.5.0' && github.ref == 'refs/heads/main'
+    if: inputs.confirmation == 'publish-0.6.0' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -46,7 +46,7 @@ jobs:
           if npm view "@snack-ai/cli@${version}" version > /dev/null 2>&1; then
             echo "@snack-ai/cli@${version} is already published; skipping." >> "$GITHUB_STEP_SUMMARY"
           else
-            npm publish --workspace @snack-ai/cli --tag next --access public --provenance
+            npm publish --workspace @snack-ai/cli --tag latest --access public --provenance
             echo "Published @snack-ai/cli@${version}." >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Publish OpenCode plugin
@@ -55,10 +55,26 @@ jobs:
           if npm view "@snack-ai/opencode@${version}" version > /dev/null 2>&1; then
             echo "@snack-ai/opencode@${version} is already published; skipping." >> "$GITHUB_STEP_SUMMARY"
           else
-            npm publish --workspace @snack-ai/opencode --tag next --access public --provenance
+            npm publish --workspace @snack-ai/opencode --tag latest --access public --provenance
             echo "Published @snack-ai/opencode@${version}." >> "$GITHUB_STEP_SUMMARY"
           fi
-      # A green run must mean both packages are on the registry. Without this, a skipped
+      # A version already on the registry still has to carry the tag this release promotes. The
+      # plugin published to `next` before the MVP, so moving `latest` onto the MVP-compatible
+      # version is the only thing left for it; a release that skipped this would leave new users
+      # installing a pre-MVP plugin by default. Publishing with `--tag latest` above makes this a
+      # no-op for anything published in this run.
+      - name: Promote both packages to the latest tag
+        run: |
+          cli_version="$(node -p "require('./packages/cli/package.json').version")"
+          plugin_version="$(node -p "require('./packages/opencode/package.json').version")"
+          npm dist-tag add "@snack-ai/cli@${cli_version}" latest
+          npm dist-tag add "@snack-ai/opencode@${plugin_version}" latest
+          # `next` is where pre-release work lands, so it must never resolve to something older
+          # than `latest`: `@next` would otherwise hand an early adopter a build the MVP fixed.
+          npm dist-tag add "@snack-ai/cli@${cli_version}" next
+          npm dist-tag add "@snack-ai/opencode@${plugin_version}" next
+      # A green run must mean both packages are on the registry, at the version this commit
+      # declares, under the tag a default install resolves. Without this, a skipped
       # or silently ineffective publish still reports success.
       - name: Verify both packages are published
         run: |
@@ -80,6 +96,17 @@ jobs:
               echo "verified ${spec}" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "::error::${spec} is not on the registry after publishing"
+              failed=1
+            fi
+          done
+          for package in "@snack-ai/cli:${cli_version}" "@snack-ai/opencode:${plugin_version}"; do
+            name="${package%:*}"
+            expected="${package##*:}"
+            resolved="$(npm view "${name}" dist-tags.latest 2>/dev/null || true)"
+            if [ "${resolved}" = "${expected}" ]; then
+              echo "verified ${name}@latest is ${expected}" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::${name}@latest resolves to '${resolved}', not ${expected}"
               failed=1
             fi
           done

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "metered-credit",
+  "version": "1.0.0",
+  "as_of": "2026-07-31",
+  "provenance": "bundled",
+  "prior_strength": 1,
+  "weights": {
+    "prompts": 0.5,
+    "input_tokens": 3,
+    "output_tokens": 2,
+    "reasoning_tokens": 2,
+    "cache_read_tokens": 0.5,
+    "cache_write_tokens": 2
+  }
+}

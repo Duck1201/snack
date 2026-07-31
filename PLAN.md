@@ -1002,6 +1002,8 @@ On a typical supported developer machine:
 - initial backfill of 100,000 prompts: under 30 seconds;
 - steady-state CLI memory: under 150 MB.
 
+Steady state means the commands run repeatedly against an already-stored history — `status`, an incremental `sync`, `stats`. The initial backfill is deliberately excluded: it carries only the time budget above, because reading a whole source materializes every observation before storage sees it and needs roughly 300 MB of heap at 100,000 prompts. Bounding that would mean committing the backfill in batches, which is a change to when the ingestion cursor advances and belongs to a release that can measure the trade.
+
 These are release gates from MVP onward, not cross-device guarantees. Regressions require measurement and resolution before release.
 
 ## Validation Resolution Matrix

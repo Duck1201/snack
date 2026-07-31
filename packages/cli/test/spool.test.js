@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import { SnackOpenCodePlugin } from "../../opencode/src/plugin.js";
 import { run } from "../src/main.js";
 import {
+  pluginPackageSpec,
   preparePluginRegistration,
   restorePluginRegistration,
   writePluginRegistration,
@@ -550,13 +551,13 @@ test("setup registers the global plugin without exposing unrelated OpenCode sett
       exitCode: 0,
       registration: {
         target: "global",
-        package: "@snack-ai/opencode@0.1.0",
+        package: pluginPackageSpec,
         action: "add",
         prospective_analysis: true,
       },
       plugin: [
         [
-          "@snack-ai/opencode@0.1.0",
+          pluginPackageSpec,
           {
             installation_id: JSON.parse(output).data.source.installation_id,
             spool_directory: resolvePaths({ home: root, env: options.env }).spoolDir,
@@ -581,6 +582,7 @@ test("setup registers the global plugin without exposing unrelated OpenCode sett
         provider: "anthropic",
         profile: "personal",
         plan: "generic",
+        plan_profile: "generic",
       },
     },
   );

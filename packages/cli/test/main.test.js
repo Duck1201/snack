@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -11,19 +10,19 @@ import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
 import { classifyRisk } from "../src/prediction.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
+import {
+  cleanupRunFixtures,
+  createOpenCodeDatabase,
+  executeOpenCodeSql,
+  makeRunFixture,
+  sink,
+} from "./fixtures/run-fixture.js";
 
 const privacyCanaries = JSON.parse(
   await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url), "utf8"),
 );
 
-/** @type {string[]} */
-const temporaryRoots = [];
-
-afterEach(async () => {
-  await Promise.all(
-    temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
-  );
-});
+afterEach(cleanupRunFixtures);
 
 test("config set initializes storage before returning a stable JSON envelope", async () => {
   const fixture = await makeRunFixture();
@@ -38,7 +37,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -152,7 +151,10 @@ test("invalid private input is neither persisted nor echoed", async () => {
 
 test("storage failure cannot commit a prepared configuration update", async () => {
   const fixture = await makeRunFixture();
-  await writeFile(fixture.dataHome, "not a directory", { mode: 0o600 });
+  // A directory where the database file belongs: SQLite cannot open it, and nothing else about
+  // the install is broken. Blocking the whole data root instead would fail the configuration
+  // first on macOS, where the config and data roots are the same directory.
+  await mkdir(fixture.paths.databaseFile, { recursive: true, mode: 0o700 });
 
   const exitCode = await run(
     ["node", "snack", "config", "set", "presentation.json", "true", "--json"],
@@ -280,6 +282,7 @@ test("setup opencode configures an explicit source after a compatible dry-run", 
           provider: "anthropic",
           profile: "personal",
           plan: "generic",
+          plan_profile: "generic",
         },
         fingerprint: {
           family: "oc-sqlite-msgpart-v1",
@@ -296,6 +299,7 @@ test("setup opencode configures an explicit source after a compatible dry-run", 
           provider: "anthropic",
           profile: "personal",
           plan: "generic",
+          plan_profile: "generic",
           fingerprint: "oc-sqlite-msgpart-v1",
         },
       ],
@@ -360,6 +364,7 @@ test("full sync converges without duplicating OpenCode usage records", async () 
           excluded: 0,
           pending_mapping: 0,
           rejected_invalid: 0,
+          tombstoned: 0,
           failed: 0,
         },
       ],
@@ -375,6 +380,7 @@ test("full sync converges without duplicating OpenCode usage records", async () 
           excluded: 0,
           pending_mapping: 0,
           rejected_invalid: 0,
+          tombstoned: 0,
           failed: 0,
         },
       ],
@@ -415,8 +421,56 @@ test("human sync reports every required count", async () => {
 
   assert.match(
     fixture.stdout.value,
-    /personal-anthropic: 1 read, 1 inserted, 0 updated, 0 unchanged, 0 excluded, 0 pending_mapping, 0 rejected_invalid, 0 failed\./u,
+    /personal-anthropic: 1 read, 1 inserted, 0 updated, 0 unchanged, 0 excluded, 0 pending_mapping, 0 rejected_invalid, 0 tombstoned, 0 failed\./u,
   );
+});
+
+test("naming a real plan does not make every later command warn about the plan profile", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+
+  // `--plan` records what the user calls their plan. It is a label, not a bundled profile id,
+  // so it must not be used to look one up: `pro` resolves to nothing and used to warn forever.
+  const setupExitCode = await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    fixture.options,
+  );
+  const configured = JSON.parse(fixture.stdout.value).data.source;
+  fixture.stdout.value = "";
+
+  const statusExitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(setupExitCode, 0);
+  assert.equal(statusExitCode, 0);
+  assert.equal(configured.plan, "pro");
+  assert.equal(configured.plan_profile, "generic");
+  assert.deepEqual(
+    /** @type {{code: string}[]} */ (document.warnings).filter(
+      (warning) => warning.code === "plan_profile_unavailable",
+    ),
+    [],
+  );
+  assert.equal(document.data.source.plan_profile.id, "generic");
+  assert.equal(document.data.source.plan_profile.provenance, "bundled");
 });
 
 test("status reports a broad initial estimate with very low evidence", async () => {
@@ -1693,7 +1747,7 @@ test("human status includes every required uncertainty field", async () => {
 
   assert.match(
     fixture.stdout.value,
-    /risk high; evidence very_low; method bayesian-pressure-band@1; pressure unknown; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
+    /risk high; evidence very_low; method bayesian-pressure-band@1; period 2026-01-02T03:05:00.000Z; pressure unknown; contributors none ranked; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
   );
   assert.match(
     fixture.stdout.value,
@@ -1701,81 +1755,31 @@ test("human status includes every required uncertainty field", async () => {
   );
 });
 
-async function makeRunFixture() {
-  const root = await mkdtemp(join(tmpdir(), "snack-main-"));
-  temporaryRoots.push(root);
-  const stdout = sink();
-  const stderr = sink();
-  /** @type {{XDG_CONFIG_HOME: string, XDG_DATA_HOME: string, XDG_CACHE_HOME: string, XDG_STATE_HOME: string, OPENCODE_DB?: string}} */
-  const env = {
-    XDG_CONFIG_HOME: join(root, "config-home"),
-    XDG_DATA_HOME: join(root, "data-home"),
-    XDG_CACHE_HOME: join(root, "cache-home"),
-    XDG_STATE_HOME: join(root, "state-home"),
-  };
-  const paths = {
-    configDir: join(env.XDG_CONFIG_HOME, "snack"),
-    configFile: join(env.XDG_CONFIG_HOME, "snack", "config.jsonc"),
-    dataDir: join(env.XDG_DATA_HOME, "snack"),
-    databaseFile: join(env.XDG_DATA_HOME, "snack", "snack.sqlite3"),
-    backupDir: join(env.XDG_DATA_HOME, "snack", "backups"),
-  };
-  return {
-    root,
-    stdout,
-    stderr,
-    paths,
-    dataHome: env.XDG_DATA_HOME,
-    options: {
-      stdout,
-      stderr,
-      home: root,
-      env,
-      platform: /** @type {NodeJS.Platform} */ ("linux"),
-      nodeVersion: "24.18.1",
-      now: new Date("2026-01-02T03:04:05.000Z"),
-      writeConfig: /** @type {typeof import("../src/config.js").writePrivateAtomic | undefined} */ (
-        undefined
-      ),
-    },
-  };
-}
+test("human status names the period it describes and what moved the pressure band", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
 
-/** @param {string} root @param {string} [filename] */
-async function createOpenCodeDatabase(root, filename = "opencode.db") {
-  const databaseFile = join(root, filename);
-  const sql = await readFile(
-    new URL("./fixtures/opencode/supported-v1.sql", import.meta.url),
-    "utf8",
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  const human = fixture.stdout.value;
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const status = JSON.parse(fixture.stdout.value).data;
+
+  // Specification §12.3: the default human detail includes the active period and the top pressure
+  // contributors. A forecast whose scope and drivers are only in `--json` is two contracts.
+  assert.match(human, new RegExp(`period ${status.source.active_period.started_at}`, "u"));
+  const ranked = status.pressure.contributors.filter(
+    (/** @type {{percentile: number | null}} */ contributor) => contributor.percentile !== null,
   );
-  const database = new Database(databaseFile);
-  try {
-    database.exec(sql);
-  } finally {
-    database.close();
+  if (ranked.length > 0) {
+    assert.match(human, new RegExp(`contributors[^\\n]*${ranked[0].dimension}`, "u"));
+  } else {
+    assert.match(human, /contributors none ranked/u);
   }
-  return databaseFile;
-}
-
-/** @param {string} databaseFile @param {string} sql */
-function executeOpenCodeSql(databaseFile, sql) {
-  const database = new Database(databaseFile);
-  try {
-    database.exec(sql);
-  } finally {
-    database.close();
-  }
-}
-
-function sink() {
-  return {
-    value: "",
-    /** @param {string} chunk */
-    write(chunk) {
-      this.value += chunk;
-    },
-  };
-}
+});
 
 /** @param {string} root */
 async function readTree(root) {
@@ -2564,4 +2568,194 @@ test("a forecast is evaluated even when the user never syncs again", async () =>
 
   assert.equal(calibration.live.brier.sample_size, 1);
   assert.equal(calibration.live.status, "ok");
+});
+
+test("verbose stats break usage down by model, as the flag promises", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  fixture.stdout.value = "";
+
+  const exitCode = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--verbose"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, 0);
+  // `--verbose` advertises per-model detail; before this it only repeated the dimensions.
+  assert.match(
+    fixture.stdout.value,
+    /model claude-sonnet: 1 usage slices; input_tokens 100, output_tokens 25/u,
+  );
+});
+
+test("verbose stats report per-model usage in the JSON contract too", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  fixture.stdout.value = "";
+
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const horizon = JSON.parse(fixture.stdout.value).data.horizons.find(
+    (/** @type {{horizon: string}} */ entry) => entry.horizon === "PT5H",
+  );
+
+  assert.deepEqual(
+    horizon.by_model.map((/** @type {{model: string}} */ entry) => entry.model),
+    ["claude-sonnet"],
+  );
+  assert.equal(horizon.by_model[0].slices.count, 1);
+  assert.equal(horizon.by_model[0].slices.unit, "usage slices");
+  assert.equal(horizon.by_model[0].dimensions.input_tokens.value, 100);
+  assert.deepEqual(horizon.by_model[0].cost.by_currency, { unknown: "0.003" });
+});
+
+test("every warning the JSON document carries is also spoken to stderr", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  const missingPrompt = join(fixture.root, "no-such-prompt.txt");
+
+  // Acceptance criterion 6 and specification §12.1: human warnings go to stderr. A user who
+  // mistypes `--prompt-file` otherwise reads a forecast built on a different assumption than
+  // the one they believe, with nothing on screen to say so.
+  for (const argv of [
+    ["status", "--no-sync", "--prompt-file", missingPrompt],
+    ["status", "--no-sync"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...argv, "--json"], fixture.options);
+    const warnings = JSON.parse(fixture.stdout.value).warnings;
+    assert.ok(warnings.length > 0, `${argv.join(" ")} produced no warning to compare against`);
+
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...argv], fixture.options);
+    for (const warning of warnings) {
+      assert.match(fixture.stderr.value, new RegExp(escapeForPattern(warning.message), "u"));
+    }
+    // Warnings belong on stderr so a piped forecast stays machine-readable.
+    assert.doesNotMatch(fixture.stdout.value, /Warning:/u);
+  }
+});
+
+/** @param {string} value */
+function escapeForPattern(value) {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+test("the flags the specification documents are the flags the CLI accepts", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  // §12.4 documents `--horizon <duration|all>`; `all` asks for every configured horizon at once,
+  // which is what a source with several of them makes worth asking for.
+  fixture.stdout.value = "";
+  const statsExit = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--horizon", "all", "--json"],
+    fixture.options,
+  );
+  const stats = JSON.parse(fixture.stdout.value);
+  assert.equal(statsExit, 0, fixture.stdout.value.slice(0, 200));
+  assert.ok(stats.data.horizons.length > 1, JSON.stringify(stats.data.horizons));
+
+  // §12.6 documents `snack doctor [--source <alias>]`, which narrows the report to one source's
+  // checks rather than every configured one.
+  fixture.stdout.value = "";
+  const doctorExit = await run(
+    ["node", "snack", "doctor", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const doctor = JSON.parse(fixture.stdout.value);
+  assert.notEqual(doctorExit, 2, fixture.stdout.value.slice(0, 200));
+  assert.ok(
+    doctor.data.checks.some((/** @type {{id: string}} */ check) =>
+      check.id.endsWith(":personal-anthropic"),
+    ),
+    JSON.stringify(doctor.data.checks.map((/** @type {{id: string}} */ check) => check.id)),
+  );
+});
+
+test("a history the prior no longer dominates is not described as sparse", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  // Fifty successful prompts against a prior worth one pseudo-observation: whatever the forecast
+  // backed off to, the plan-profile prior is a rounding error in that posterior. Saying it still
+  // dominates is a statement the same document contradicts.
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  const baseMs = Date.parse("2026-01-02T03:00:00.000Z");
+  let sql = "";
+  for (let index = 1; index <= 50; index += 1) {
+    sql += insertOpenCodePrompt(`bulk-${index}`, baseMs - index * 60_000);
+  }
+  executeOpenCodeSql(fixture.options.env.OPENCODE_DB, sql);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const status = JSON.parse(fixture.stdout.value).data;
+
+  const priorMass = status.contributors.prior.alpha + status.contributors.prior.beta;
+  const posteriorMass =
+    status.contributors.evidence_window.alpha + status.contributors.evidence_window.beta;
+  assert.ok(priorMass * 2 < posteriorMass, `prior ${priorMass} of ${posteriorMass}`);
+  assert.ok(
+    !status.caveats.some((/** @type {string} */ caveat) => caveat.includes("still dominates")),
+    JSON.stringify(status.caveats),
+  );
+});
+
+test("SNACK_DEBUG explains an unexpected failure without changing what it reports", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  const argv = [
+    "node",
+    "snack",
+    "setup",
+    "opencode",
+    "--non-interactive",
+    "--source",
+    "work",
+    "--provider",
+    "anthropic",
+    "--profile",
+    "default",
+    "--plan",
+    "pro",
+    "--json",
+  ];
+  /** @type {() => Promise<never>} */
+  const failWriting = async () => {
+    throw new Error("DIAGNOSTIC_CANARY");
+  };
+
+  const quiet = await run(argv, { ...fixture.options, writeConfig: failWriting });
+  const quietDocument = JSON.parse(fixture.stdout.value);
+
+  assert.equal(quiet, ExitCode.internal);
+  assert.equal(quietDocument.errors[0].code, "internal_error");
+  assert.doesNotMatch(fixture.stderr.value, /DIAGNOSTIC_CANARY/u);
+
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  const verbose = await run(argv, {
+    ...fixture.options,
+    env: { ...fixture.options.env, SNACK_DEBUG: "1" },
+    writeConfig: failWriting,
+  });
+  const verboseDocument = JSON.parse(fixture.stdout.value);
+
+  // Same exit code, same document: the diagnostic goes to stderr and nowhere else, because the
+  // JSON contract is what other programs read.
+  assert.equal(verbose, ExitCode.internal);
+  assert.deepEqual(verboseDocument.errors, quietDocument.errors);
+  assert.match(fixture.stderr.value, /DIAGNOSTIC_CANARY/u);
+  assert.doesNotMatch(fixture.stdout.value, /DIAGNOSTIC_CANARY/u);
 });

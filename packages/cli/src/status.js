@@ -12,7 +12,7 @@ import { buildForecast } from "./prediction.js";
  * @param {{prompts: number, successes: number, restrictions: number, excluded: number, as_of: string | null, active_period_started_at: string | null}} observed
  * @param {Date} now
  * @param {{performed: boolean, status: string}} [synchronization]
- * @param {{band: string, policy_version: string}} [pressure] usage pressure for the primary horizon
+ * @param {{band: string, policy_version: string, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[]}} [pressure] usage pressure for the primary horizon
  * @param {{outcomes?: import("./prediction.js").OutcomeRow[], windowSeconds?: number, category?: string, prospective?: object, completeness?: {level: "complete" | "partial" | "unknown", reasons: string[], policy_version: string}}} [history]
  */
 export function createSourceStatus(
@@ -81,11 +81,25 @@ export function createSourceStatus(
     completeness,
     synchronization,
     caveats: [
-      forecast.contributors.backoff_level === "period_band_category"
-        ? "The estimate is not yet calibrated against observed outcomes."
-        : "Sparse history; the weak plan-profile prior still dominates this estimate.",
+      // Whether the prior still dominates is a question about mass, not about which cell the
+      // forecast backed off to: a period-level estimate built from tens of thousands of prompts
+      // is not sparse. Comparing the prior's pseudo-observations with the posterior they sit in
+      // is the same arithmetic the interval itself uses.
+      priorMass(forecast.contributors) * 2 >= posteriorMass(forecast.contributors)
+        ? "Sparse history; the weak plan-profile prior still dominates this estimate."
+        : "The estimate is not yet calibrated against observed outcomes.",
       "Real provider capacity is unknown.",
       "Usage pressure compares this window with local history; it is not a share of capacity.",
     ],
   };
+}
+
+/** @param {import("./prediction.js").Forecast["contributors"]} contributors */
+function priorMass(contributors) {
+  return contributors.prior.alpha + contributors.prior.beta;
+}
+
+/** @param {import("./prediction.js").Forecast["contributors"]} contributors */
+function posteriorMass(contributors) {
+  return contributors.evidence_window.alpha + contributors.evidence_window.beta;
 }

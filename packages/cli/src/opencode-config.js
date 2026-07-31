@@ -8,16 +8,44 @@ import { SnackError, ExitCode } from "./errors.js";
 import { writePrivateAtomic } from "./config.js";
 
 const packageName = "@snack-ai/opencode";
-const packageSpec = `${packageName}@0.1.0`;
 
-/** @param {{env?: NodeJS.ProcessEnv, home?: string}} [options] */
+/**
+ * The plugin version setup writes. SNACK fetches no package itself; OpenCode resolves this
+ * specifier. Inspection deliberately does not require an exact match — see
+ * `inspectPluginRegistration`.
+ */
+export const pluginPackageSpec = `${packageName}@0.1.1`;
+const packageSpec = pluginPackageSpec;
+
+/**
+ * Locate OpenCode's global configuration the same way OpenCode does.
+ *
+ * The environment falls back to `process.env` exactly as `resolvePaths` does: a real CLI
+ * invocation passes no `env`, and reading `XDG_CONFIG_HOME` only off the argument would register
+ * the plugin under `~/.config` while OpenCode reads it elsewhere — capture would silently never
+ * start, and doctor would still call it compatible by looking in the same wrong place.
+ *
+ * @param {{env?: NodeJS.ProcessEnv, home?: string}} [options]
+ */
 export function resolveOpenCodeConfig(options = {}) {
-  const home = options.home ?? process.env.HOME ?? "";
-  const configHome = options.env?.XDG_CONFIG_HOME ?? join(home, ".config");
+  const env = options.env ?? process.env;
+  const home = options.home ?? env.HOME ?? "";
+  const configHome = env.XDG_CONFIG_HOME ?? join(home, ".config");
   return join(configHome, "opencode", "opencode.json");
 }
 
-/** @param {string} configFile */
+/**
+ * Classify the SNACK entry in OpenCode's global configuration.
+ *
+ * Compatibility is a property of the spool event contract, not of a version string: every
+ * `@snack-ai/opencode@0.1.x` emits `spool-event-v1`. So a registration pinned at a version other
+ * than the one setup writes is reported as `outdated` — an upgrade notice — while `incompatible`
+ * is reserved for an entry SNACK genuinely cannot work with, namely one whose options are absent
+ * or unrecognized.
+ *
+ * @param {string} configFile
+ * @returns {Promise<"compatible" | "outdated" | "missing" | "incompatible" | "invalid">}
+ */
 export async function inspectPluginRegistration(configFile) {
   let source;
   try {
@@ -35,12 +63,10 @@ export async function inspectPluginRegistration(configFile) {
       isSnackPluginSpecifier(value) || (Array.isArray(value) && isSnackPluginSpecifier(value[0])),
   );
   if (plugin === undefined) return "missing";
-  return Array.isArray(plugin) &&
-    plugin[0] === packageSpec &&
-    plugin.length === 2 &&
-    isRecoverablePlugin(plugin)
-    ? "compatible"
-    : "incompatible";
+  if (!Array.isArray(plugin) || plugin.length !== 2 || !isRecoverablePlugin(plugin)) {
+    return "incompatible";
+  }
+  return plugin[0] === packageSpec ? "compatible" : "outdated";
 }
 
 /**

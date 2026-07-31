@@ -7,7 +7,31 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { SnackError } from "../src/errors.js";
-import { initializeDatabase, inspectDatabase } from "../src/storage.js";
+import { resolvePaths } from "../src/paths.js";
+import {
+  createSetupDatabaseBackup,
+  initializeDatabase,
+  inspectDatabase,
+  readIngestionCursor,
+  restoreSetupDatabaseBackup,
+  storeObservations,
+} from "../src/storage.js";
+
+const now = new Date("2026-01-02T03:04:05.000Z");
+
+/** A database carrying the real migrations, rather than the synthetic one `makeFixture` uses. */
+async function makeStorage() {
+  const root = await mkdtemp(join(tmpdir(), "snack-storage-real-"));
+  temporaryRoots.push(root);
+  return {
+    root,
+    paths: resolvePaths({
+      env: { XDG_DATA_HOME: join(root, "data"), XDG_STATE_HOME: join(root, "state") },
+      platform: /** @type {NodeJS.Platform} */ ("linux"),
+      home: root,
+    }),
+  };
+}
 
 /** @type {string[]} */
 const temporaryRoots = [];
@@ -181,5 +205,164 @@ async function makeFixture() {
       databaseFile: join(dataDir, "snack.sqlite3"),
       backupDir: join(dataDir, "backups"),
     },
+  };
+}
+
+test("an ingestion cursor never advances past writes that did not commit", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "0.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+
+  const first = storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [observation(1, "2026-01-02T01:00:00.000Z")], cursor: cursorAt(1000) },
+    now,
+  );
+  assert.equal(first.inserted, 1);
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(1000));
+
+  // A batch that fails partway must leave the cursor where the last committed batch put it.
+  // Advancing it first would skip these observations forever, silently.
+  assert.throws(() =>
+    storeObservations(
+      paths.databaseFile,
+      source,
+      {
+        observations: [
+          observation(2, "2026-01-02T02:00:00.000Z"),
+          // A completion value the schema refuses, so the transaction aborts mid-batch.
+          /** @type {import("../src/storage.js").Observation} */ ({
+            ...observation(3, "2026-01-02T03:00:00.000Z"),
+            completion: "not-a-completion",
+          }),
+        ],
+        cursor: cursorAt(9999),
+      },
+      now,
+    ),
+  );
+
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(1000));
+  assert.equal(countPrompts(paths.databaseFile), 1);
+});
+
+test("a restored setup backup returns the database to exactly its earlier state", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "0.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [observation(1, "2026-01-02T01:00:00.000Z")], cursor: cursorAt(1000) },
+    now,
+  );
+
+  const backupFile = await createSetupDatabaseBackup(paths);
+  assert.ok(backupFile);
+  storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [observation(2, "2026-01-02T02:00:00.000Z")], cursor: cursorAt(2000) },
+    now,
+  );
+  assert.equal(countPrompts(paths.databaseFile), 2);
+
+  await restoreSetupDatabaseBackup(paths, backupFile);
+
+  // Setup rolls back through this path, so it has to undo the observations too, not just the
+  // configuration that pointed at them.
+  assert.equal(countPrompts(paths.databaseFile), 1);
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(1000));
+  assert.equal((await stat(paths.databaseFile)).mode & 0o777, 0o600);
+});
+
+test("re-storing the same observations converges instead of duplicating them", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "0.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  const batch = {
+    observations: [
+      observation(1, "2026-01-02T01:00:00.000Z"),
+      observation(2, "2026-01-02T02:00:00.000Z"),
+    ],
+    cursor: cursorAt(2000),
+  };
+
+  const first = storeObservations(paths.databaseFile, source, batch, now);
+  const second = storeObservations(paths.databaseFile, source, batch, now);
+
+  // A full re-read is the documented recovery path, so it must be safe to run at any time.
+  assert.equal(first.inserted, 2);
+  assert.equal(second.inserted, 0);
+  assert.equal(second.unchanged, 2);
+  assert.equal(countPrompts(paths.databaseFile), 2);
+});
+
+/** @param {string} databaseFile */
+function countPrompts(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const row = /** @type {{total?: unknown}} */ (
+      database.prepare("SELECT COUNT(*) AS total FROM prompt_execution").get()
+    );
+    return Number(row?.total ?? -1);
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {number} timeUpdated */
+function cursorAt(timeUpdated) {
+  return { time_updated: timeUpdated, message_id: `message-${timeUpdated}` };
+}
+
+/** @param {string} databaseFile */
+function seedSource(databaseFile) {
+  const database = new Database(databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    database
+      .prepare("INSERT INTO capacity_source (alias, created_at) VALUES ('work', ?)")
+      .run(now.toISOString());
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile */
+function configuredSource(databaseFile) {
+  return {
+    alias: "work",
+    installation_id: "11111111-2222-4333-8444-555555555555",
+    adapter: /** @type {"opencode"} */ ("opencode"),
+    database: databaseFile,
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "oc-sqlite-msgpart-v1",
+  };
+}
+
+/** @param {number} id @param {string} startedAt @returns {import("../src/storage.js").Observation} */
+function observation(id, startedAt) {
+  return {
+    source_prompt_id: `prompt-${id}`,
+    source_session_id: "session-1",
+    revision: "1",
+    revision_domain: "opencode-message-v1",
+    parser_version: "opencode-session-v1",
+    started_at: startedAt,
+    completed_at: startedAt,
+    duration_ms: 1000,
+    completion: "completed",
+    outcome: "success",
+    provider: "anthropic",
+    model: "claude-sonnet",
+    usage_slices: [],
+    restrictions: [],
   };
 }

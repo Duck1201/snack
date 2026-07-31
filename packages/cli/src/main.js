@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Command, CommanderError } from "commander";
@@ -16,13 +16,21 @@ import {
 } from "./config.js";
 import {
   ANALYTICS_POLICY,
+  TREND_POLICY,
   computeUsagePressure,
+  computeUsageTrend,
   horizonWindow,
   parseHorizon,
   summarizeUsageProfile,
 } from "./analytics.js";
 import { runDoctor } from "./doctor.js";
 import { ExitCode, SnackError } from "./errors.js";
+import {
+  EXPORT_SCHEMA_VERSION,
+  EXPORT_TABLES,
+  exportCsvChunks,
+  exportJsonChunks,
+} from "./export.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
   preparePluginRegistration,
@@ -43,6 +51,7 @@ import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./pr
 import { createSourceStatus } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
+  assertReadableStorage,
   ensureCapacityPeriod,
   createSetupDatabaseBackup,
   initializeDatabase,
@@ -62,6 +71,7 @@ import {
   readSpoolCursors,
   readSpoolIssueCount,
   readPendingMappingCount,
+  purgeScope,
   readSourceSummary,
   rollbackDatabaseInitialization,
   storeObservations,
@@ -82,6 +92,16 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @property {Date | undefined} [now]
  * @property {string | undefined} [nodeVersion]
  * @property {typeof writePrivateAtomic | undefined} [writeConfig]
+ * @property {SetupPrompt | undefined} [prompt]
+ */
+
+/**
+ * Asks the user one question and resolves to their answer.
+ *
+ * Injected rather than reached for, so command tests can script a terminal that does not
+ * exist. The default implementation is built on `node:readline/promises`.
+ *
+ * @typedef {(question: {id: string, message: string, choices?: {value: string, label: string}[], default?: string}) => Promise<string>} SetupPrompt
  */
 
 /**
@@ -129,22 +149,17 @@ export async function run(argv, options = {}) {
     .command("opencode")
     .description("configure read-only OpenCode history")
     .option("--non-interactive", "require all setup values as flags")
-    .requiredOption("--source <alias>", "capacity-source alias")
-    .requiredOption("--provider <identifier>", "provider identifier")
-    .requiredOption("--profile <alias>", "local account/profile alias")
-    .requiredOption("--plan <identifier>", "plan profile identifier")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--provider <identifier>", "provider identifier")
+    .option("--profile <alias>", "local account/profile alias")
+    .option("--plan <identifier>", "how you refer to your plan; a label, not a lookup key")
+    .option("--plan-profile <identifier>", "bundled or custom plan profile to use as the prior")
     .option("--dry-run", "validate and show the proposal without mutation")
     .option("--install-plugin", "register @snack-ai/opencode in the global OpenCode configuration")
     .option("--yes", "confirm a non-interactive global OpenCode configuration change")
     .option("--enable-prospective-analysis", "enable allowlisted ephemeral prompt features")
     .option("--json", "emit one versioned JSON document")
     .action(async function setupOpenCode(commandOptions) {
-      if (commandOptions.nonInteractive !== true) {
-        throw new SnackError("Interactive setup is not available in this release.", {
-          code: ExitCode.usage,
-          reason: "interactive_setup_unavailable",
-        });
-      }
       let recoveredSetupJournal = false;
       const databaseFile = resolveOpenCodeDatabase({
         ...(options.env ? { env: options.env } : {}),
@@ -152,6 +167,8 @@ export async function run(argv, options = {}) {
       });
       const adapter = createOpenCodeAdapter({ databaseFile });
       const fingerprint = adapter.fingerprint();
+      // Fail closed on an unknown schema before anything else, so a guided setup never walks
+      // someone through a questionnaire that cannot lead anywhere.
       if (!fingerprint.supported || fingerprint.family === null) {
         throw new SnackError("The OpenCode database fingerprint is unsupported.", {
           code: ExitCode.unavailable,
@@ -159,9 +176,21 @@ export async function run(argv, options = {}) {
         });
       }
       const dryRun = adapter.readAll();
+      const resolved = await resolveSetupValues({
+        commandOptions,
+        observations: dryRun.observations,
+        existingSources: await readConfiguredSources(paths.configFile),
+        prompt: options.prompt,
+        stdout,
+      });
+      if (resolved === null) {
+        stdout.write("Setup cancelled; nothing was changed.\n");
+        return;
+      }
       if (
-        commandOptions.installPlugin === true &&
-        commandOptions.dryRun !== true &&
+        resolved.installPlugin === true &&
+        resolved.dryRun !== true &&
+        commandOptions.nonInteractive === true &&
         commandOptions.yes !== true
       ) {
         throw new SnackError("Plugin registration requires --yes in non-interactive setup.", {
@@ -169,20 +198,24 @@ export async function run(argv, options = {}) {
           reason: "plugin_registration_confirmation_required",
         });
       }
-      /** @type {{alias: string, installation_id: string, adapter: string, database: string, provider: string, profile: string, plan: string, fingerprint: string}} */
+      /** @type {{alias: string, installation_id: string, adapter: string, database: string, provider: string, profile: string, plan: string, plan_profile: string, fingerprint: string}} */
       let configuredSource = {
-        alias: commandOptions.source,
+        alias: resolved.source,
         installation_id: randomUUID(),
         adapter: "opencode",
         database: databaseFile,
-        provider: commandOptions.provider,
-        profile: commandOptions.profile,
-        plan: commandOptions.plan,
+        provider: resolved.provider,
+        profile: resolved.profile,
+        plan: resolved.plan,
+        // Recorded separately from `plan`, because the plan a user names and the profile SNACK
+        // holds a prior for are different things. Defaulting here keeps a free-text plan label
+        // from being resolved as a profile id and warning on every later command.
+        plan_profile: resolved.planProfile ?? "generic",
         fingerprint: fingerprint.family,
       };
       /** @type {{content: string, change: {target: string, package: string, action: string, prospective_analysis: boolean}} | null} */
       let pluginRegistration = null;
-      if (commandOptions.dryRun !== true) {
+      if (resolved.dryRun !== true) {
         await withStorageOperationLock(paths, async () => {
           recoveredSetupJournal = await recoverSetupJournal(paths);
           await withConfigLock(paths.configFile, async () => {
@@ -271,7 +304,7 @@ export async function run(argv, options = {}) {
             ];
             /** @type {[string, unknown][]} */
             const configUpdates = [["sources", updatedSources]];
-            if (commandOptions.enableProspectiveAnalysis === true) {
+            if (resolved.enableProspectiveAnalysis === true) {
               configUpdates.push(["prospective_analysis.enabled", true]);
             }
             const prepared = await prepareConfigValues(paths.configFile, configUpdates);
@@ -284,7 +317,7 @@ export async function run(argv, options = {}) {
             }
             let registration = null;
             let pluginConfigFile = null;
-            if (commandOptions.installPlugin === true) {
+            if (resolved.installPlugin === true) {
               pluginConfigFile = resolveOpenCodeConfig({
                 ...(options.env ? { env: options.env } : {}),
                 ...(options.home ? { home: options.home } : {}),
@@ -292,7 +325,7 @@ export async function run(argv, options = {}) {
               registration = await preparePluginRegistration(pluginConfigFile, {
                 installation_id: configuredSource.installation_id,
                 spool_directory: paths.spoolDir,
-                prospective_analysis: commandOptions.enableProspectiveAnalysis === true,
+                prospective_analysis: resolved.enableProspectiveAnalysis === true,
                 source_bindings: pluginBindings(
                   updatedSources,
                   configuredSource.installation_id,
@@ -366,7 +399,7 @@ export async function run(argv, options = {}) {
             }
           });
         });
-      } else if (commandOptions.installPlugin === true) {
+      } else if (resolved.installPlugin === true) {
         const configFile = resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
           ...(options.home ? { home: options.home } : {}),
@@ -374,7 +407,7 @@ export async function run(argv, options = {}) {
         pluginRegistration = await preparePluginRegistration(configFile, {
           installation_id: configuredSource.installation_id,
           spool_directory: paths.spoolDir,
-          prospective_analysis: commandOptions.enableProspectiveAnalysis === true,
+          prospective_analysis: resolved.enableProspectiveAnalysis === true,
           source_bindings: [
             {
               provider: configuredSource.provider,
@@ -392,11 +425,12 @@ export async function run(argv, options = {}) {
           provider: configuredSource.provider,
           profile: configuredSource.profile,
           plan: configuredSource.plan,
+          plan_profile: configuredSource.plan_profile,
         },
         fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
         dry_run: {
           observations: dryRun.observations.length,
-          ...(commandOptions.dryRun === true ? { applied: false } : {}),
+          ...(resolved.dryRun === true ? { applied: false } : {}),
         },
         ...(pluginRegistrationChange(pluginRegistration)
           ? { plugin_registration: pluginRegistrationChange(pluginRegistration) }
@@ -407,7 +441,7 @@ export async function run(argv, options = {}) {
         stdout.write(formatJson(createEnvelope("setup opencode", data, { now })));
       } else {
         stdout.write(
-          commandOptions.dryRun === true
+          resolved.dryRun === true
             ? `Validated OpenCode source ${configuredSource.alias}; no changes applied.\n`
             : `Configured OpenCode source ${configuredSource.alias}.\n`,
         );
@@ -489,6 +523,7 @@ export async function run(argv, options = {}) {
               excluded: 0,
               pending_mapping: 0,
               rejected_invalid: 0,
+              tombstoned: 0,
               failed: 1,
             });
           }
@@ -517,9 +552,10 @@ export async function run(argv, options = {}) {
       } else {
         for (const result of results) {
           stdout.write(
-            `${result.alias}: ${result.read} read, ${result.inserted} inserted, ${result.updated} updated, ${result.unchanged} unchanged, ${result.excluded} excluded, ${result.pending_mapping} pending_mapping, ${result.rejected_invalid} rejected_invalid, ${result.failed} failed.\n`,
+            `${result.alias}: ${result.read} read, ${result.inserted} inserted, ${result.updated} updated, ${result.unchanged} unchanged, ${result.excluded} excluded, ${result.pending_mapping} pending_mapping, ${result.rejected_invalid} rejected_invalid, ${result.tombstoned ?? 0} tombstoned, ${result.failed} failed.\n`,
           );
         }
+        reportWarnings(stderr, syncWarnings);
       }
     });
 
@@ -527,8 +563,8 @@ export async function run(argv, options = {}) {
     .command("stats")
     .description("show observed usage, data quality, and pressure statistics")
     .option("--source <alias>", "capacity-source alias")
-    .option("--horizon <duration>", "one configured analysis horizon")
-    .option("--verbose", "add per-model detail and extra percentiles")
+    .option("--horizon <duration|all>", "one configured analysis horizon, or all of them")
+    .option("--verbose", "add per-dimension and per-model detail")
     .option("--json", "emit one versioned JSON document")
     .action(async function stats(commandOptions) {
       const current = await readConfig(paths.configFile);
@@ -548,7 +584,13 @@ export async function run(argv, options = {}) {
       const configuredHorizons = Array.isArray(analysis?.horizons)
         ? /** @type {string[]} */ (analysis.horizons)
         : defaultConfig.analysis.horizons;
-      const horizons = commandOptions.horizon ? [commandOptions.horizon] : configuredHorizons;
+      await assertReadableStorage(paths.databaseFile);
+      // `all` is the documented way to ask for every configured horizon in one report, which is
+      // also the default; naming it explicitly is what makes a script's intent readable.
+      const horizons =
+        commandOptions.horizon && commandOptions.horizon !== "all"
+          ? [commandOptions.horizon]
+          : configuredHorizons;
       /** @type {{code: string, message: string}[]} */
       const statsWarnings = [];
       const reports = selected.map((source) => {
@@ -569,6 +611,7 @@ export async function run(argv, options = {}) {
         for (const report of reports) {
           stdout.write(renderStats(report, commandOptions.verbose === true));
         }
+        reportWarnings(stderr, statsWarnings);
       }
     });
 
@@ -603,6 +646,8 @@ export async function run(argv, options = {}) {
         }
         if (commandOptions.sync !== false) {
           await initializeDatabase(paths, { applicationVersion: packageJson.version, now });
+        } else {
+          await assertReadableStorage(paths.databaseFile);
         }
         for (const source of selected) {
           let synchronization = { performed: false, status: "not_requested" };
@@ -688,23 +733,23 @@ export async function run(argv, options = {}) {
       // A forecast the evidence gates rate `very_low` is reported as degraded health, so a
       // machine consumer never reads a prior-dominated estimate as a settled result.
       const uncalibrated = statuses.some((entry) => entry.evidence.level === "very_low");
+      const reportedWarnings = [
+        ...(uncalibrated
+          ? [
+              {
+                code: "very_low_evidence",
+                message: "The evidence gates cap this forecast at very low; it is not calibrated.",
+              },
+            ]
+          : []),
+        ...statusWarnings,
+      ];
       if (wantsJson(this, configuredJson)) {
         stdout.write(
           formatJson(
             createEnvelope("status", data, {
               status: uncalibrated ? "degraded" : "ok",
-              warnings: [
-                ...(uncalibrated
-                  ? [
-                      {
-                        code: "very_low_evidence",
-                        message:
-                          "The evidence gates cap this forecast at very low; it is not calibrated.",
-                      },
-                    ]
-                  : []),
-                ...statusWarnings,
-              ],
+              warnings: reportedWarnings,
               now,
             }),
           ),
@@ -712,10 +757,11 @@ export async function run(argv, options = {}) {
       } else {
         for (const status of statuses) {
           stdout.write(
-            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence.level}; method ${status.method.id}@${status.method.version}; pressure ${status.pressure.band}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
+            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence.level}; method ${status.method.id}@${status.method.version}; period ${status.source.active_period.started_at ?? "unknown"}; pressure ${status.pressure.band}; contributors ${describeContributors(status.pressure.contributors ?? [])}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
           );
           for (const caveat of status.caveats) stdout.write(`Caveat: ${caveat}\n`);
         }
+        reportWarnings(stderr, reportedWarnings);
       }
       // Only now, with the bytes written, is an attempt a snapshot the user actually saw.
       confirmPredictionDelivery(paths.databaseFile, attemptIds, {
@@ -771,12 +817,14 @@ export async function run(argv, options = {}) {
   program
     .command("doctor")
     .description("diagnose local structure without changing it")
+    .option("--source <alias>", "narrow the source checks to one capacity source")
     .option("--json", "emit one versioned JSON document")
-    .action(async function doctor() {
+    .action(async function doctor(commandOptions) {
       const result = await runDoctor(paths, {
         nodeVersion: options.nodeVersion,
         platform: options.platform,
         now,
+        ...(typeof commandOptions.source === "string" ? { source: commandOptions.source } : {}),
         opencodeConfigFile: resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
           ...(options.home ? { home: options.home } : {}),
@@ -812,6 +860,156 @@ export async function run(argv, options = {}) {
       commandExitCode = doctorExitCode(result.checks);
     });
 
+  const data = program.command("data").description("manage locally stored observations");
+
+  data
+    .command("purge")
+    .description("permanently delete stored observations for a selected scope")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--all", "every configured capacity source")
+    .option("--since <time>", "delete records at or after this time")
+    .option("--until <time>", "delete records before this time")
+    .option("--include-config", "also remove the selected sources from configuration")
+    .option("--prevent-reimport", "refuse to re-import the purged range on a later sync")
+    .option("--dry-run", "report what would be deleted without deleting it")
+    .option("--yes", "confirm the deletion without prompting")
+    .option("--json", "emit one versioned JSON document")
+    .action(async function dataPurge(commandOptions) {
+      if ((commandOptions.source === undefined) === (commandOptions.all !== true)) {
+        throw new SnackError("Purge requires exactly one of --source or --all.", {
+          code: ExitCode.usage,
+          reason: "purge_scope_required",
+        });
+      }
+      const config = await readConfig(paths.configFile);
+      await assertReadableStorage(paths.databaseFile);
+      const scope = buildExportScope(commandOptions, config);
+      const json = wantsJson(this, configuredJson);
+      const preview = await purgeScope(paths, scope, { now, preview: true });
+
+      if (commandOptions.dryRun !== true && commandOptions.yes !== true) {
+        // Prompting is impossible without a terminal, and impossible in JSON mode without
+        // breaking the one-document contract. Refuse rather than delete unasked.
+        if (json || options.prompt === undefined) {
+          throw new SnackError(
+            "Purge permanently deletes records; re-run with --yes to confirm, or --dry-run to preview.",
+            { code: ExitCode.usage, reason: "confirmation_required" },
+          );
+        }
+        // Typing the scope back, rather than a keystroke, is what makes this a decision instead
+        // of a reflex: the records it removes are not restorable.
+        const expected = scope.source ?? "all";
+        const answer = await options.prompt({
+          id: "purge_confirmation",
+          message: `This permanently deletes ${preview.counts.prompts} prompts and ${preview.counts.predictions} prediction snapshots${
+            scope.source === undefined ? " across every source" : ` for ${scope.source}`
+          }. Type ${expected} to confirm:`,
+        });
+        if (answer.trim() !== expected) {
+          stdout.write("Purge cancelled; nothing was deleted.\n");
+          return;
+        }
+      }
+
+      const result =
+        commandOptions.dryRun === true
+          ? preview
+          : await purgeScope(paths, scope, {
+              now,
+              ...(commandOptions.preventReimport === true ? { preventReimport: true } : {}),
+            });
+      /** @type {{code: string, message: string}[]} */
+      const warnings = [];
+      if (commandOptions.dryRun !== true && commandOptions.preventReimport !== true) {
+        warnings.push({
+          code: "reimport_possible",
+          message:
+            "These records remain in the source; a later synchronization may restore them. " +
+            "Use --prevent-reimport to refuse them.",
+        });
+      }
+      if (commandOptions.includeConfig === true && commandOptions.dryRun !== true) {
+        warnings.push(...(await removePurgedSources(paths, config, scope, options.writeConfig)));
+      }
+
+      const document = {
+        dry_run: commandOptions.dryRun === true,
+        scope,
+        counts: result.counts,
+        cursor_reset: result.cursor_reset,
+        tombstones: result.tombstones ?? 0,
+      };
+      if (json) {
+        stdout.write(
+          formatJson(
+            createEnvelope("data purge", document, {
+              now,
+              ...(warnings.length > 0 ? { status: "degraded", warnings } : {}),
+            }),
+          ),
+        );
+      } else {
+        const verb = commandOptions.dryRun === true ? "Would delete" : "Deleted";
+        stdout.write(
+          `${verb} ${document.counts.prompts} prompts and ${document.counts.predictions} prediction snapshots` +
+            `${scope.source === undefined ? " across every source" : ` for ${scope.source}`}.\n`,
+        );
+        reportWarnings(stderr, warnings);
+      }
+    });
+
+  program
+    .command("export")
+    .description("write observed usage and predictions to an interpretable file")
+    .requiredOption("--format <json|csv>", "export format")
+    .requiredOption("--output <path>", "destination path, or - for stdout in JSON")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--since <time>", "include records at or after this time")
+    .option("--until <time>", "include records before this time")
+    .action(async function exportData(commandOptions) {
+      if (commandOptions.format !== "json" && commandOptions.format !== "csv") {
+        throw new SnackError("Export format must be json or csv.", {
+          code: ExitCode.usage,
+          reason: "export_format_unsupported",
+        });
+      }
+      const config = await readConfig(paths.configFile);
+      await assertReadableStorage(paths.databaseFile);
+      const scope = buildExportScope(commandOptions, config);
+      const provenance = await buildExportProvenance(config, scope);
+      const context = { command: "export", now, provenance };
+
+      if (commandOptions.format === "csv" && commandOptions.output === "-") {
+        // Six related tables cannot share one stream without either repeating prompt columns
+        // per usage slice or inventing a separator no CSV reader understands. Both invite a
+        // silent miscount, so CSV requires a directory instead.
+        throw new SnackError("CSV export requires a directory; use --output <dir>.", {
+          code: ExitCode.usage,
+          reason: "csv_stream_unsupported",
+        });
+      }
+
+      if (commandOptions.output === "-") {
+        for (const chunk of exportJsonChunks(paths.databaseFile, scope, context)) {
+          stdout.write(chunk);
+        }
+        return;
+      }
+
+      const counts =
+        commandOptions.format === "json"
+          ? await writeJsonExport(paths.databaseFile, scope, context, commandOptions.output)
+          : await writeCsvExport(paths.databaseFile, scope, context, commandOptions.output);
+      const data = { output: commandOptions.output, format: commandOptions.format, counts };
+      if (wantsJson(this, configuredJson)) {
+        stdout.write(formatJson(createEnvelope("export", data, { now })));
+      } else {
+        stdout.write(
+          `Exported ${Object.values(counts).reduce((total, count) => total + count, 0)} records to ${commandOptions.output}.\n`,
+        );
+      }
+    });
+
   try {
     if (argv.length <= 2) {
       program.outputHelp();
@@ -845,6 +1043,13 @@ export async function run(argv, options = {}) {
         exitCode: error.exitCode,
         now,
       });
+    }
+    // An unexpected failure is the one case where SNACK has nothing useful to say, and the user
+    // has nothing to attach to a report. `SNACK_DEBUG` prints the underlying error to stderr for
+    // that purpose only: never into the JSON document, never to stdout, never to a file, and only
+    // when it is asked for, because a stack trace carries absolute paths.
+    if ((options.env ?? process.env).SNACK_DEBUG) {
+      stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
     }
     return renderError({
       stdout,
@@ -1012,6 +1217,7 @@ function emptySyncResult(alias, path, failed) {
     excluded: 0,
     pending_mapping: 0,
     rejected_invalid: 0,
+    tombstoned: 0,
     failed,
   };
 }
@@ -1019,6 +1225,43 @@ function emptySyncResult(alias, path, failed) {
 /** @param {Command} command @param {boolean} configuredJson */
 function wantsJson(command, configuredJson) {
   return command.optsWithGlobals().json === true || configuredJson;
+}
+
+/**
+ * Name the dimensions that put the pressure band where it is, strongest first.
+ *
+ * Specification §12.3 asks the default human detail for the top contributors. Only ranked
+ * dimensions carry the score, so an unranked one is absent here rather than reported as a
+ * contribution of zero, which would read as evidence of light usage.
+ *
+ * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
+ */
+function describeContributors(contributors) {
+  const ranked = contributors
+    .filter((contributor) => contributor.contribution !== null)
+    .sort((left, right) => Number(right.contribution) - Number(left.contribution))
+    .slice(0, 2);
+  if (ranked.length === 0) return "none ranked";
+  return ranked
+    .map(
+      (contributor) =>
+        `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`,
+    )
+    .join(", ");
+}
+
+/**
+ * Speak in human mode the warnings the JSON envelope would have carried.
+ *
+ * Warnings go to stderr so a piped result stays exactly the result, and every human branch that
+ * builds an envelope's warnings has to call this: a warning a machine reads and a person does not
+ * is the two output modes disagreeing about what happened.
+ *
+ * @param {{write: (text: string) => void}} stderr
+ * @param {{code: string, message: string}[]} warnings
+ */
+function reportWarnings(stderr, warnings) {
+  for (const warning of warnings) stderr.write(`Warning: ${warning.message}\n`);
 }
 
 /**
@@ -1060,6 +1303,494 @@ function formatHumanValue(value) {
   return formatJson(value);
 }
 
+/** The bundled plan-profile archetypes a guided setup can offer. */
+const PLAN_PROFILE_CHOICES = [
+  { value: "generic", label: "generic - neutral weighting, no assumption about billing" },
+  {
+    value: "subscription-window",
+    label: "subscription-window - flat subscription; requests and generated volume weigh most",
+  },
+  {
+    value: "metered-credit",
+    label: "metered-credit - billed per token or credit; cumulative volume weighs most",
+  },
+];
+
+/** @param {string} configFile */
+async function readConfiguredSources(configFile) {
+  try {
+    const config = await readConfig(configFile);
+    return (Array.isArray(config.sources) ? config.sources : []).filter(isConfiguredOpenCodeSource);
+  } catch {
+    // A missing or unreadable configuration simply means there is nothing to propose.
+    return [];
+  }
+}
+
+/**
+ * Decide the values setup will apply, from flags or by asking.
+ *
+ * Both paths produce the same shape and then run the identical journal, backup, and rollback
+ * block, because that block is the riskiest code in the command and must not be duplicated.
+ *
+ * @param {{commandOptions: Record<string, unknown>, observations: {provider: string | null, model: string | null}[], existingSources: {alias: string, provider: string, profile: string, plan?: string, plan_profile?: string}[], prompt: SetupPrompt | undefined, stdout: {write(chunk: string): unknown}}} input
+ * @returns {Promise<{source: string, provider: string, profile: string, plan: string, planProfile: string, dryRun: boolean, installPlugin: boolean, enableProspectiveAnalysis: boolean} | null>} null when the user declined
+ */
+async function resolveSetupValues(input) {
+  const { commandOptions } = input;
+  const fromFlags = {
+    dryRun: commandOptions.dryRun === true,
+    installPlugin: commandOptions.installPlugin === true,
+    enableProspectiveAnalysis: commandOptions.enableProspectiveAnalysis === true,
+  };
+
+  if (commandOptions.nonInteractive === true) {
+    const missing = ["source", "provider", "profile", "plan"].filter(
+      (flag) => typeof commandOptions[flag] !== "string",
+    );
+    if (missing.length > 0) {
+      throw new SnackError(
+        `Non-interactive setup requires ${missing.map((flag) => `--${flag}`).join(", ")}.`,
+        { code: ExitCode.usage, reason: "setup_values_required" },
+      );
+    }
+    return {
+      source: String(commandOptions.source),
+      provider: String(commandOptions.provider),
+      profile: String(commandOptions.profile),
+      plan: String(commandOptions.plan),
+      planProfile:
+        typeof commandOptions.planProfile === "string" ? commandOptions.planProfile : "generic",
+      ...fromFlags,
+    };
+  }
+
+  if (input.prompt === undefined) {
+    throw new SnackError(
+      "Guided setup needs a terminal; pass --non-interactive with --source, --provider, --profile, and --plan instead.",
+      { code: ExitCode.usage, reason: "setup_requires_tty" },
+    );
+  }
+  // Pressing Ctrl+D, or having stdin close, rejects the pending question. That is someone
+  // walking away from a questionnaire, not a failure: cancel quietly rather than reporting an
+  // internal error over a setup that changed nothing.
+  const cancelled = Symbol("cancelled");
+  /** @param {Parameters<SetupPrompt>[0]} question */
+  const ask = async (question) => {
+    try {
+      return await /** @type {SetupPrompt} */ (input.prompt)(question);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw cancelled;
+      throw error;
+    }
+  };
+  const existing = input.existingSources[0];
+
+  // Discovered rather than asked. The local account alias is deliberately not in this list:
+  // OpenCode does not expose account identity, and SNACK never reads credentials.
+  const providers = [
+    ...new Set(
+      input.observations.flatMap((observation) =>
+        typeof observation.provider === "string" && observation.provider.length > 0
+          ? [observation.provider]
+          : [],
+      ),
+    ),
+  ].sort();
+
+  try {
+    const source = await ask({
+      id: "alias",
+      message: "Name this capacity source",
+      ...(existing ? { default: existing.alias } : { default: "default" }),
+    });
+    const provider = await ask({
+      id: "provider",
+      message: "Which provider does it map to?",
+      ...(providers.length > 0
+        ? { choices: providers.map((value) => ({ value, label: value })) }
+        : {}),
+      ...(existing
+        ? { default: existing.provider }
+        : providers[0]
+          ? { default: providers[0] }
+          : {}),
+    });
+    const profile = await ask({
+      id: "profile",
+      message: "Name the local account or profile this maps to (SNACK cannot discover it)",
+      default: existing?.profile ?? "default",
+    });
+    const plan = await ask({
+      id: "plan",
+      message: "What do you call your plan? This is a label SNACK records, not a lookup key",
+      default: existing?.plan ?? "default",
+    });
+    const planProfile = await ask({
+      id: "plan_profile",
+      message: "Which billing archetype should the initial prior assume?",
+      choices: PLAN_PROFILE_CHOICES,
+      default: existing?.plan_profile ?? "generic",
+    });
+    const prospective = await ask({
+      id: "prospective_analysis",
+      message:
+        "Analyze unsent prompts locally for size only? Text is never stored, logged, or sent",
+      choices: yesNo,
+      default: "no",
+    });
+    const installPlugin = await ask({
+      id: "install_plugin",
+      message: "Register the OpenCode capture plugin for live capture?",
+      choices: yesNo,
+      default: "no",
+    });
+
+    input.stdout.write(
+      `\nProposed: source ${source} -> ${provider}/${profile}, plan ${plan} ` +
+        `(profile ${planProfile}), prospective analysis ${prospective}, plugin ${installPlugin}.\n`,
+    );
+    const confirmed = await ask({
+      id: "confirm",
+      message: "Apply this?",
+      choices: yesNo,
+      default: "yes",
+    });
+    if (!isYes(confirmed)) return null;
+
+    return {
+      source,
+      provider,
+      profile,
+      plan,
+      planProfile,
+      dryRun: fromFlags.dryRun,
+      installPlugin: isYes(installPlugin),
+      enableProspectiveAnalysis: isYes(prospective),
+    };
+  } catch (error) {
+    if (error === cancelled) return null;
+    throw error;
+  }
+}
+
+const yesNo = [
+  { value: "yes", label: "yes" },
+  { value: "no", label: "no" },
+];
+
+/** @param {string} answer */
+function isYes(answer) {
+  return /^(y|yes)$/iu.test(answer.trim());
+}
+
+/**
+ * Remove purged sources from the configuration, after their records are already gone.
+ *
+ * The database deletion is unrecoverable while the configuration file is recoverable from its
+ * backup, so the transaction commits first and a failed configuration write degrades with a
+ * named warning instead of reversing anything. The OpenCode plugin registration is left alone:
+ * that file may contain credentials and belongs to `setup`.
+ *
+ * @param {import("./paths.js").SnackPaths} paths
+ * @param {Record<string, unknown>} config
+ * @param {import("./export.js").ExportScope} scope
+ * @param {typeof writePrivateAtomic | undefined} writeConfig
+ */
+async function removePurgedSources(paths, config, scope, writeConfig) {
+  const sources = Array.isArray(config.sources) ? config.sources : [];
+  const remaining = sources.filter((source) =>
+    scope.source !== undefined &&
+    isConfiguredOpenCodeSource(source) &&
+    source.alias !== scope.source
+      ? true
+      : scope.source === undefined
+        ? false
+        : !isConfiguredOpenCodeSource(source),
+  );
+  try {
+    await withConfigLock(paths.configFile, async () => {
+      const prepared = await prepareConfigValues(paths.configFile, [["sources", remaining]]);
+      await (writeConfig ?? writePrivateAtomic)(paths.configFile, prepared.content, {
+        backup: true,
+      });
+    });
+  } catch (error) {
+    return [
+      {
+        code: "config_not_updated",
+        message: `Records were deleted, but the configuration still lists the source: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      },
+    ];
+  }
+  return [
+    {
+      code: "plugin_still_registered",
+      message:
+        "The OpenCode plugin is still registered and will keep writing to the spool; " +
+        "run `snack setup opencode` to change that.",
+    },
+  ];
+}
+
+/**
+ * Write a JSON export to a file, one chunk at a time.
+ *
+ * The chunks are written through an open handle rather than joined into a string, so the
+ * memory a six-figure export needs stays independent of how much history it covers.
+ *
+ * @param {string} databaseFile
+ * @param {import("./export.js").ExportScope} scope
+ * @param {{command: string, now: Date, provenance: unknown}} context
+ * @param {string} target
+ */
+async function writeJsonExport(databaseFile, scope, context, target) {
+  /** @type {Record<string, number>} */
+  let counts = {};
+  await withExportFile(target, async (handle) => {
+    // Counting as the rows stream past keeps the file to a single pass over the history.
+    const chunks = exportJsonChunks(databaseFile, scope, context);
+    let step = chunks.next();
+    while (step.done !== true) {
+      await handle.write(step.value);
+      step = chunks.next();
+    }
+    counts = step.value;
+  });
+  return counts;
+}
+
+/**
+ * Write one CSV file per exported table, plus the manifest that makes them interpretable.
+ *
+ * @param {string} databaseFile
+ * @param {import("./export.js").ExportScope} scope
+ * @param {{command: string, now: Date, provenance: unknown}} context
+ * @param {string} directory
+ */
+async function writeCsvExport(databaseFile, scope, context, directory) {
+  // The directory is part of the destination, so failing to create it is the same failure as
+  // failing to open a file inside it. Without this, an `--output` naming an existing file
+  // escapes the export's own classifier and lands as an unexplained internal failure.
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+  } catch (error) {
+    throw new SnackError(`Export destination '${directory}' could not be opened.`, {
+      code: ExitCode.io,
+      reason: "export_write_error",
+      cause: error,
+    });
+  }
+  /** @type {Record<string, number>} */
+  const counts = {};
+  // The manifest is what makes the CSVs interpretable, and it can only be written once every
+  // row is counted. So the whole set is staged and published together: an export is complete or
+  // it is not there, never a directory of plausible CSVs missing the file that describes them.
+  const staged = [
+    ...EXPORT_TABLES.map((table) => join(directory, `${table.name}.csv`)),
+    join(directory, "manifest.json"),
+  ];
+  try {
+    for (const table of EXPORT_TABLES) {
+      await withExportFile(
+        join(directory, `${table.name}.csv`),
+        async (handle) => {
+          const chunks = exportCsvChunks(databaseFile, scope, table);
+          let step = chunks.next();
+          while (step.done !== true) {
+            await handle.write(step.value);
+            step = chunks.next();
+          }
+          counts[table.name] = step.value;
+        },
+        { defer: true },
+      );
+    }
+    await withExportFile(
+      join(directory, "manifest.json"),
+      async (handle) => {
+        await handle.write(
+          formatJson({
+            export_schema_version: EXPORT_SCHEMA_VERSION,
+            generated_at: context.now.toISOString(),
+            scope,
+            provenance: context.provenance,
+            tables: EXPORT_TABLES.map((table) => ({
+              name: table.name,
+              file: `${table.name}.csv`,
+              columns: table.columns,
+              rows: counts[table.name] ?? 0,
+            })),
+          }),
+        );
+      },
+      { defer: true },
+    );
+    await settleStagedExport(staged, "publish");
+  } catch (error) {
+    await settleStagedExport(staged, "discard");
+    throw error;
+  }
+  return counts;
+}
+
+/**
+ * Create one private export file, reporting a failed write as an export I/O failure.
+ *
+ * Every artifact is written beside its destination as `.partial` and only takes its real name
+ * once the whole export is whole: a CSV export is several files plus the manifest that makes them
+ * interpretable, and a command killed halfway through must not leave files that look finished.
+ * `defer` holds a file at its staged name so the caller can publish the set together.
+ *
+ * @param {string} target
+ * @param {(handle: import("node:fs/promises").FileHandle) => Promise<void>} write
+ * @param {{defer?: boolean}} [options]
+ */
+async function withExportFile(target, write, options = {}) {
+  const partial = stagedExportName(target);
+  let handle;
+  try {
+    handle = await open(partial, "w", 0o600);
+  } catch (error) {
+    throw new SnackError(`Export destination '${target}' could not be opened.`, {
+      code: ExitCode.io,
+      reason: "export_write_error",
+      cause: error,
+    });
+  }
+  try {
+    await write(handle);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await chmod(partial, 0o600).catch(() => {});
+    if (options.defer !== true) await rename(partial, target);
+  } catch (error) {
+    await rm(partial, { force: true }).catch(() => {});
+    throw new SnackError(`Export to '${target}' could not be completed.`, {
+      code: ExitCode.io,
+      reason: "export_write_error",
+      cause: error,
+    });
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** @param {string} target */
+function stagedExportName(target) {
+  return `${target}.partial`;
+}
+
+/**
+ * Publish a staged export, or remove every staged file if any of it failed.
+ *
+ * @param {string[]} targets
+ * @param {"publish" | "discard"} outcome
+ */
+async function settleStagedExport(targets, outcome) {
+  for (const target of targets) {
+    if (outcome === "publish") await rename(stagedExportName(target), target);
+    else await rm(stagedExportName(target), { force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Resolve which records an export covers.
+ *
+ * `--since` is inclusive and `--until` exclusive, the same half-open convention `horizonWindow`
+ * uses, so adjacent exports neither drop nor duplicate a record on the boundary.
+ *
+ * @param {{source?: string, since?: string, until?: string}} commandOptions
+ * @param {Record<string, unknown>} config
+ * @returns {import("./export.js").ExportScope}
+ */
+function buildExportScope(commandOptions, config) {
+  const sources = Array.isArray(config.sources) ? config.sources : [];
+  if (
+    commandOptions.source !== undefined &&
+    !sources.some(
+      (source) => isConfiguredOpenCodeSource(source) && source.alias === commandOptions.source,
+    )
+  ) {
+    // Never echo the value back. An alias arrives from argv, and argv is exactly where someone
+    // pastes something private by accident; a rejected value must not travel into a JSON
+    // document that gets shared.
+    throw new SnackError("The requested capacity source is not configured.", {
+      code: ExitCode.unavailable,
+      reason: "source_not_configured",
+    });
+  }
+  const since =
+    commandOptions.since === undefined
+      ? undefined
+      : parseExportBound(commandOptions.since, "--since");
+  const until =
+    commandOptions.until === undefined
+      ? undefined
+      : parseExportBound(commandOptions.until, "--until");
+  // The window is half-open, so a bound that closes at or before it opens can only ever select
+  // nothing. Reporting that as a successful export of zero records, or as a purge that deleted
+  // nothing, hides a mistyped bound behind an exit code that says everything went fine.
+  if (since !== undefined && until !== undefined && until <= since) {
+    throw new SnackError("--until must be later than --since.", {
+      code: ExitCode.usage,
+      reason: "time_window_invalid",
+    });
+  }
+  return {
+    ...(commandOptions.source === undefined ? {} : { source: commandOptions.source }),
+    ...(since === undefined ? {} : { since }),
+    ...(until === undefined ? {} : { until }),
+  };
+}
+
+/** @param {string} raw @param {string} flag */
+function parseExportBound(raw, flag) {
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new SnackError(`${flag} is not a valid time.`, {
+      code: ExitCode.usage,
+      reason: "export_bound_invalid",
+    });
+  }
+  return parsed.toISOString();
+}
+
+/**
+ * Describe the build that produced an export, without re-stamping the rows.
+ *
+ * Row-level versions already record how each record was produced and must survive unchanged.
+ * This block only says which SNACK wrote the file and which plan profile each source resolved
+ * to, so a reader can interpret the priors behind the exported predictions.
+ *
+ * @param {Record<string, unknown>} config
+ * @param {import("./export.js").ExportScope} scope
+ */
+async function buildExportProvenance(config, scope) {
+  const sources = (Array.isArray(config.sources) ? config.sources : [])
+    .filter(isConfiguredOpenCodeSource)
+    .filter((source) => scope.source === undefined || source.alias === scope.source);
+  return {
+    cli_version: packageJson.version,
+    export_schema_version: EXPORT_SCHEMA_VERSION,
+    envelope_schema_version: "1",
+    plan_profiles: sources.map((source) => {
+      const { profile } = resolvePlanProfile(source);
+      return {
+        source: source.alias,
+        id: profile.id,
+        version: profile.version,
+        provenance: profile.provenance,
+        as_of: profile.as_of,
+      };
+    }),
+  };
+}
+
 /** @param {{id: string, status: "pass" | "warn" | "fail"}[]} checks */
 function doctorExitCode(checks) {
   if (!checks.some((check) => check.status === "fail")) return ExitCode.success;
@@ -1087,13 +1818,16 @@ function doctorExitCode(checks) {
 
 /** @param {string[]} argv */
 function commandName(argv) {
-  return (
-    argv
-      .slice(2)
-      .filter((part) => !part.startsWith("-"))
-      .slice(0, 2)
-      .join(" ") || "snack"
-  );
+  // Every invocation is `snack <command> [<subcommand>] [--flag [value]]...`, so scanning stops
+  // at the first flag. Skipping flags but keeping what follows them put option values — a
+  // source alias, a time bound, a configuration value — into the `command` field of every
+  // error envelope, which is a document users share.
+  const tokens = [];
+  for (const part of argv.slice(2)) {
+    if (part.startsWith("-")) break;
+    tokens.push(part);
+  }
+  return tokens.slice(0, 2).join(" ") || "snack";
 }
 
 /**
@@ -1276,7 +2010,10 @@ function primaryHorizon(config) {
 /**
  * Rank the current analysis window against the preceding windows of the same length.
  *
- * @param {{databaseFile: string, source: {alias: string}, planProfile: import("./plan-profile.js").PlanProfile, horizon: string, now: Date}} input
+ * The trend is reported by `stats` only. `status` answers whether the next prompt is viable,
+ * and a direction over past windows is not part of that answer.
+ *
+ * @param {{databaseFile: string, source: {alias: string}, planProfile: import("./plan-profile.js").PlanProfile, horizon: string, now: Date, includeTrend?: boolean}} input
  */
 function computeSourcePressure(input) {
   const horizonSeconds = parseHorizon(input.horizon);
@@ -1299,6 +2036,10 @@ function computeSourcePressure(input) {
   const current = summarizeWindow(/** @type {typeof rows} */ (buckets[0]), input.now);
   /** @type {Record<string, number[]>} */
   const baselines = {};
+  /** @type {Record<string, number[]>} */
+  const trendBaselines = {};
+  /** @type {Record<string, number>[]} */
+  const trendWindows = [];
   let observedWindows = 0;
   for (let offset = 1; offset <= windowCount; offset += 1) {
     const past = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
@@ -1309,8 +2050,26 @@ function computeSourcePressure(input) {
     observedWindows += 1;
     for (const [dimension, value] of Object.entries(past.values)) {
       (baselines[dimension] ??= []).push(value);
+      // The trend ranks the recent windows against what came before all of them, so the
+      // windows it compares are excluded from the baseline it compares them against.
+      if (offset > TREND_POLICY.windows) (trendBaselines[dimension] ??= []).push(value);
     }
   }
+  for (let offset = TREND_POLICY.windows - 1; offset >= 0; offset -= 1) {
+    const window = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
+    if ((window.values.prompts ?? 0) > 0) trendWindows.push(window.values);
+  }
+  const trend =
+    input.includeTrend === true
+      ? {
+          trend: computeUsageTrend({
+            windows: trendWindows,
+            baselines: trendBaselines,
+            profileWeights: input.planProfile.weights,
+            effectiveSampleSize: current.effectiveSampleSize,
+          }),
+        }
+      : {};
   if (observedWindows < ANALYTICS_POLICY.pressure_minimum_baseline_windows) {
     return {
       horizon: input.horizon,
@@ -1321,11 +2080,13 @@ function computeSourcePressure(input) {
       completeness: "partial",
       contributors: [],
       baseline_windows: observedWindows,
+      ...trend,
     };
   }
   return {
     horizon: input.horizon,
     baseline_windows: observedWindows,
+    ...trend,
     ...computeUsagePressure({
       current: current.values,
       baselines,
@@ -1390,9 +2151,8 @@ function buildSourceStats(input) {
         planProfile: input.planProfile,
         horizon: /** @type {string} */ (input.horizons[0]),
         now: input.now,
+        includeTrend: true,
       }),
-      // Trend needs pressure history, which only prediction snapshots will carry.
-      trend: { status: "not_available", reason: "no_pressure_history_yet" },
     },
     calibration: buildCalibrationReport(input.databaseFile, input.source.alias, input.planProfile),
   };
@@ -1448,12 +2208,30 @@ function describeCalibration(calibration) {
 }
 
 /**
+ * Describe which way pressure has been moving, without implying where it goes next.
+ *
+ * `steady` rather than `stable`: stable hints at a claim about the future, and a trend only
+ * describes windows already observed.
+ *
+ * @param {ReturnType<typeof computeUsageTrend> | undefined} trend
+ */
+function describeTrend(trend) {
+  if (trend === undefined || trend.status !== "observed" || trend.direction === null) {
+    return `trend not_available (${trend?.reason ?? "unknown"})`;
+  }
+  return (
+    `trend ${trend.direction} over ${trend.windows_compared} windows ` +
+    `against ${trend.baseline_windows} baseline windows (policy ${trend.policy_version})`
+  );
+}
+
+/**
  * @param {ReturnType<typeof buildSourceStats>} report
  * @param {boolean} verbose
  */
 function renderStats(report, verbose) {
   let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
-  text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); trend ${report.pressure.trend.status}.\n`;
+  text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); ${describeTrend(report.pressure.trend)}.\n`;
   text += `  calibration: ${describeCalibration(report.calibration)}\n`;
   for (const horizon of report.horizons) {
     const restrictions = Object.entries(horizon.restrictions.by_class);
@@ -1477,6 +2255,17 @@ function renderStats(report, verbose) {
         text += `    ${dimension}: ${"value" in value ? value.value : "unknown"} ${value.unit} (sample ${value.sample_size}, missing ${value.missing}).\n`;
       }
       text += `    cost: sample ${horizon.cost.sample_size}, missing ${horizon.cost.missing}.\n`;
+      for (const entry of horizon.by_model) {
+        const tokensByModel = Object.entries(entry.dimensions)
+          .map(([dimension, value]) => `${dimension} ${"value" in value ? value.value : "unknown"}`)
+          .join(", ");
+        const costByModel = Object.entries(entry.cost.by_currency)
+          .map(([currency, amount]) => `${currency} ${amount}`)
+          .join(", ");
+        text +=
+          `    model ${entry.model}: ${entry.slices.count} ${entry.slices.unit};` +
+          ` ${tokensByModel}; cost ${costByModel === "" ? "unknown" : costByModel}.\n`;
+      }
     }
   }
   return text;

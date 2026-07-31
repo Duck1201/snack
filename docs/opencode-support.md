@@ -1,6 +1,6 @@
 # OpenCode Support Matrix
 
-SNACK `0.3.x` supports the OpenCode SQLite family `oc-sqlite-msgpart-v1` through read-only
+SNACK `0.6.x` supports the OpenCode SQLite family `oc-sqlite-msgpart-v1` through read-only
 backfill and accepts live `spool-event-v1` metadata from `@snack-ai/opencode@0.1.x`.
 
 | OpenCode version | Schema family | Backfill | Live capture |
@@ -28,8 +28,11 @@ forecasts. After resolving the configuration, run `snack sync --full` to re-eval
 OpenCode `OPENCODE_DB` is honored when it is an absolute path. Otherwise SNACK checks
 `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db`.
 
-`snack setup opencode --install-plugin --yes` can register `@snack-ai/opencode@0.1.0` in the global
-OpenCode configuration. It stores a content-free `spool-event-v1` stream in SNACK's private spool;
+`snack setup opencode --install-plugin --yes` can register `@snack-ai/opencode@0.1.1` in the global
+OpenCode configuration. SNACK writes that exact specifier but does not require it when reading:
+because every `0.1.x` plugin emits the same `spool-event-v1`, a registration pinned at another
+version of the same package is reported as outdated rather than incompatible, and `doctor` warns
+instead of failing. It stores a content-free `spool-event-v1` stream in SNACK's private spool;
 the plugin never opens SQLite or throws capture failures into OpenCode. Unknown future spool schema
 versions are rejected with sanitized diagnostics.
 
@@ -38,12 +41,16 @@ fixtures use the documented plugin hook surface and the structured `APIError.dat
 already validated by the supported SQLite source family. Unknown event/schema fields are rejected
 without retaining the raw payload.
 
-`0.2.x` setup is non-interactive: `--source`, `--provider`, `--profile`, and `--plan` are
-explicitly required, and `--dry-run` validates the proposal without creating SNACK state. Guided
-interactive prompts are deferred.
+`snack setup opencode` is guided from `0.6.0`. It discovers the database path, its schema
+fingerprint, and the provider identifiers already present in it, then asks only for what OpenCode
+does not expose — the profile alias, the plan label, and the plan-profile archetype. An unsupported
+fingerprint fails closed before the first question. Nothing is written until the final
+confirmation, and cancelling leaves no SNACK state behind. `--non-interactive` with `--source`,
+`--provider`, `--profile`, and `--plan` remains the scriptable path, and `--dry-run` validates the
+proposal either way.
 
-The Stage 2 status estimate is not retained as a prediction snapshot. Immutable prediction
-attempts, delivery confirmations, and calibration links remain part of Stage 5.
+The profile alias is the one mapping input that cannot be discovered: the supported SQLite family
+records a provider identifier but no account identity, and SNACK never reads OpenCode credentials.
 
 ## Stage 2 Completion
 

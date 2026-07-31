@@ -102,3 +102,25 @@ verification step then queried the registry immediately and did not yet see the 
 plugin version. The step now retries before concluding a version is missing. This was a false
 negative in the gate, not a failed release — which is the inverse of the Stage 3 problem and a
 reminder that the registry, not a workflow's colour, is the evidence.
+
+## Stage 6 release procedure
+
+`0.6.0` is the first release that publishes to `latest` rather than `next`. The protected
+`Publish release` workflow runs from `main` with the confirmation string `publish-0.6.0`, and it
+verifies afterwards that both packages resolve on the registry and that `@snack-ai/cli@latest` and
+`@snack-ai/opencode@latest` are the versions this commit declares.
+
+`@snack-ai/opencode@0.1.1` is already published to `next` and unchanged by the MVP, so its publish
+step skips and the tag move is the only work left for it. That move runs through
+`npm dist-tag add` against the trusted-publisher token. If npm refuses the tag operation for a
+token provisioned by OIDC, the run fails at that step rather than reporting a release that left
+`latest` on a pre-MVP plugin; recover by moving both tags manually from an authenticated npm login:
+
+```bash
+npm dist-tag add @snack-ai/cli@0.6.0 latest
+npm dist-tag add @snack-ai/opencode@0.1.1 latest
+```
+
+Record the run URL, the resolved dist-tags, and the provenance attestation index here once the
+release has happened, as earlier stages did. The registry is the evidence, not the workflow's
+colour.

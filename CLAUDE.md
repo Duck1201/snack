@@ -98,8 +98,9 @@ OpenCode schema family and record it in `docs/opencode-support.md`.
 
 ## Release
 
-Changesets, published to the `next` dist-tag until 0.6.0. The stage version is the product version.
-`release:check` blocks publishing unless gate lines (`Trademark gate: passed`, npm trusted
-publisher, GitHub npm environment, WSL gate) are present in `docs/release/*.md` and
-`docs/opencode-support.md` is no longer `Status: in progress.`. CI runs the full `check` +
-`pack:smoke` on ubuntu, macOS, and inside WSL2/Debian 13.
+Changesets. Releases before 0.6.0 published to the `next` dist-tag; from the 0.6.0 MVP both packages
+publish to `latest`. The stage version is the product version. `release:check` blocks publishing
+unless gate lines (`Trademark gate: passed`, npm trusted publisher, GitHub npm environment, WSL
+gate) are present in `docs/release/*.md` and `docs/opencode-support.md` is no longer
+`Status: in progress.`. CI runs the full `check` + `pack:smoke` on ubuntu, macOS, and inside
+WSL2/Debian 13.
