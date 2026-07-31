@@ -1168,13 +1168,16 @@ export function writeSizeCategories(databaseFile, rows) {
  * Read the source outcomes of a source's active capacity period.
  *
  * Rows come back domain-shaped and unaggregated: decay, cell selection, and evidence
- * gates belong to the prediction module, not to SQL.
+ * gates belong to the prediction module, not to SQL. `limit` keeps the most recent
+ * prompts and still returns them oldest first, so a caller whose weighting makes the tail
+ * irrelevant does not pay to read it.
  *
  * @param {string} databaseFile
  * @param {string} sourceAlias
+ * @param {{limit?: number}} [options]
  * @returns {OutcomeHistoryRow[]}
  */
-export function readOutcomeRows(databaseFile, sourceAlias) {
+export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
     const rows = database
@@ -1192,9 +1195,12 @@ export function readOutcomeRows(databaseFile, sourceAlias) {
          JOIN prompt_source_outcome
            ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
          WHERE prompt_execution.source_alias = ?
-         ORDER BY prompt_execution.started_at ASC, prompt_execution.id ASC`,
+         ORDER BY prompt_execution.started_at ${options.limit === undefined ? "ASC" : "DESC"},
+                  prompt_execution.id ${options.limit === undefined ? "ASC" : "DESC"}
+         ${options.limit === undefined ? "" : "LIMIT ?"}`,
       )
-      .all(sourceAlias);
+      .all(...(options.limit === undefined ? [sourceAlias] : [sourceAlias, options.limit]));
+    if (options.limit !== undefined) rows.reverse();
     return rows.map((row) => {
       if (
         typeof row !== "object" ||

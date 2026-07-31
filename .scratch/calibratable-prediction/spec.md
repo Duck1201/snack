@@ -85,10 +85,61 @@ that is stated in the test.
   it is ingested. `--no-sync` ingests nothing, so there is nothing left unlinked, and `stats` stays
   read-only by design. Covered by a test that never calls `snack sync`.
 
+## Simulating the evidence gates (policy v2)
+
+Simulating the gates did not just confirm the thresholds; it found three defects in the model.
+
+**The evidence ladder had unreachable rungs.** `high` and `very_low` never occurred at all: reaching
+`high` required an effective sample size of 50 in one specific cell, which time decay never allowed
+to accumulate. Measuring the mean absolute error of the point estimate against a known true
+viability gave the replacement cuts — error falls 0.194 below one effective sample, 0.105 at two,
+0.060 at six, 0.055 at ten, 0.036 at eighteen, 0.027 at twenty-six, then flattens near 0.024. The
+thresholds are now 2 / 10 / 25.
+
+**The restriction gate was selecting for bad luck.** Requiring five observed restrictions meant
+requiring an observed refusal rate above 11%, which a source that truly refuses 4% of prompts only
+reaches on an unlucky stretch — so `high` forecasts landed _further_ from the truth than `moderate`
+ones (0.045 against 0.026 at a true viability of 0.96). The gate now only enforces what the
+specification actually asks: a history with no observed restriction never reaches `high`.
+
+**Time decay could not pace a real user.** This was the serious one. With viability collapsing from
+0.99 to 0.70, the forecast still reported a lower bound of 0.94 twenty prompts later, and every
+single simulated run still called the source safe. The cause is that elapsed time is the wrong
+clock: a user prompting every six minutes buries a fresh refusal under hundreds of older successes
+no matter how short the half-life is, while the same constant makes an occasional user forget
+everything.
+
+Prompts needed to admit the collapse, by cadence:
+
+| Weighting                      | every 6 min | every 60 min | every 10 h |
+| ------------------------------ | ----------- | ------------ | ---------- |
+| time decay alone (7 days)      | 80          | 79           | 10         |
+| time decay + 30-prompt recency | 21          | 15           | 7          |
+
+Recency decay counts observations in the same cell, so a rarely used cell keeps its own history.
+Below a 30-prompt half-life the interval widens without buying safety; above 40 the intense cadence
+goes blind again.
+
+**The period aggregate cannot be treated as evidence.** Simulating a source whose viability depends
+on the pressure band, the aggregate's interval covered the truth 26% of the time while the band and
+cell levels stayed near target. Its relevance ceiling dropped from `low` to `very_low`, and an
+unknown pressure band now degrades to the aggregate explicitly instead of being relabelled as
+band-specific evidence.
+
+Two performance consequences followed. Aggregating the backoff levels with `filter` walked a
+six-figure history six times; one reverse pass now builds all three levels without copies. And since
+the two-thousandth prompt back weighs 2^-66, the forecast reads a bounded evidence window rather
+than the whole period, which removed the dominant cost of `status`.
+
+Methodological note: comparing evidence levels naively is confounded twice over. A very safe source
+produces few restrictions, so it stays capped low while also being the easiest regime to predict;
+and the period aggregate is capped for a reason unrelated to how much evidence it holds, yet is the
+best-informed estimate when cells happen to behave alike. The retained test controls for both.
+
 ## Open items
 
-- The evidence gates' thresholds (`sample_thresholds`, `restriction_thresholds`) are reasoned but
-  not simulated the way the interval and decay constants are. They deserve the same treatment before
-  the MVP claims them as calibrated.
 - A full 100,000-prompt backtest is now tractable but still unmeasured end to end; the performance
   suite exercises 5,000.
+- The evidence window (2000 prompts) makes `contributors.cell.successes` a count within that window
+  rather than within the whole capacity period. Nothing presents it as a lifetime total today, but
+  the JSON field deserves a clearer name before the contract freezes.

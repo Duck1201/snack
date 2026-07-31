@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 import { assignPressureBands } from "../src/analytics.js";
 import { backtest } from "../src/calibration.js";
 import { resolvePaths } from "../src/paths.js";
-import { buildForecast } from "../src/prediction.js";
+import { PREDICTION_POLICY, buildForecast } from "../src/prediction.js";
 import { categorizeHistory } from "../src/prompt-features.js";
 import { initializeDatabase, readOutcomeRows, writeSizeCategories } from "../src/storage.js";
 
@@ -100,8 +100,10 @@ function timed(work) {
 test(`forecasting a ${PROMPTS.toLocaleString("en-US")}-prompt history stays inside the status budget`, async () => {
   const databaseFile = await makeLargeHistory();
 
-  const read = timed(() => readOutcomeRows(databaseFile, "work"));
-  assert.equal(read.result.length, PROMPTS);
+  const read = timed(() =>
+    readOutcomeRows(databaseFile, "work", { limit: PREDICTION_POLICY.evidence_window_prompts }),
+  );
+  assert.equal(read.result.length, PREDICTION_POLICY.evidence_window_prompts);
 
   const banded = timed(() =>
     assignPressureBands(read.result, {

@@ -9,9 +9,30 @@ import { betaQuantile } from "./beta.js";
 
 /** Versioned model policy. Every forecast names the policy that produced it. */
 export const PREDICTION_POLICY = Object.freeze({
-  version: "stage5-prediction-v1",
+  version: "stage5-prediction-v2",
   coverage_target: 0.8,
   decay_half_life_seconds: 604800,
+  /**
+   * How many later prompts in the same cell halve an observation's weight.
+   *
+   * Elapsed time alone cannot pace this. A user who prompts every six minutes buries a
+   * fresh restriction under hundreds of older successes no matter how short the time
+   * half-life is, while the same constant makes an occasional user forget everything.
+   * Simulation measured the prompts needed to admit a collapse from 0.99 to 0.70
+   * viability: with time decay alone, 80 prompts at a six-minute cadence and 10 at a
+   * ten-hour cadence; with a 30-prompt recency half-life, 21 and 15. Below 30 the
+   * interval widens without buying more safety; above 40 the intense cadence goes blind
+   * again.
+   */
+  recency_half_life_prompts: 30,
+  /**
+   * How many recent prompts a forecast reads.
+   *
+   * Recency decay makes the tail worthless long before this: the two-thousandth prompt
+   * back weighs 2^-66. Reading a six-figure history to add nothing dominated the status
+   * budget, so the window is cut where the arithmetic stops mattering.
+   */
+  evidence_window_prompts: 2000,
   minimum_cell_samples: 5,
   backoff_levels: Object.freeze(["period_band_category", "period_band", "period", "prior"]),
 });
@@ -21,20 +42,43 @@ export const PREDICTION_POLICY = Object.freeze({
  * with no observed restriction can never look strong.
  */
 export const EVIDENCE_POLICY = Object.freeze({
-  version: "stage5-evidence-v1",
+  version: "stage5-evidence-v2",
   levels: Object.freeze(["very_low", "low", "moderate", "high"]),
-  /** Effective sample size needed to reach each level above `very_low`. */
-  sample_thresholds: Object.freeze({ low: 2, moderate: 20, high: 50 }),
   /**
-   * Observed restrictions needed to reach each level. A history with none is capped at
-   * `low` however many successes it holds, but it is not by itself the weakest gate.
+   * Effective sample size needed to reach each level above `very_low`.
+   *
+   * Chosen from measured error, not intuition. Simulating forecasts against a known true
+   * viability, the mean absolute error of the point estimate falls 0.194 below one
+   * effective sample, 0.105 at two, 0.060 at six, 0.055 at ten, 0.036 at eighteen, and
+   * 0.027 at twenty-six, flattening near 0.024 afterwards. `high` is set where the error
+   * is within roughly a tenth of that floor. Recency decay saturates the effective sample
+   * size near 44, so a threshold above that could never be reached at all.
    */
-  restriction_thresholds: Object.freeze({ low: 0, moderate: 1, high: 5 }),
-  /** Highest level each backoff level may support. */
+  sample_thresholds: Object.freeze({ low: 2, moderate: 10, high: 25 }),
+  /**
+   * Observed restrictions needed to reach each level.
+   *
+   * A history without a single restriction is capped below `high`: the model has never
+   * seen the event it is predicting, however many successes it holds. Requiring more than
+   * one was worse than useless — with the effective sample size saturating near 44, asking
+   * for five restrictions means asking for an observed rate above 11%, which a source that
+   * really refuses 4% of prompts only reaches on an unlucky stretch. Simulation showed
+   * `high` forecasts landing further from the truth than `moderate` ones (0.045 against
+   * 0.026 at a true viability of 0.96) purely from that selection effect.
+   */
+  restriction_thresholds: Object.freeze({ low: 0, moderate: 0, high: 1 }),
+  /**
+   * Highest level each backoff level may support.
+   *
+   * The period aggregate is capped at `very_low` because it pools cells that behave
+   * differently. Simulating a source whose viability depends on the pressure band, the
+   * aggregate's interval covered the truth only 26% of the time while the band and cell
+   * levels stayed near their target. An aggregate forecast is a last resort, not evidence.
+   */
   relevance_ceilings: Object.freeze({
     period_band_category: "high",
     period_band: "moderate",
-    period: "low",
+    period: "very_low",
     prior: "very_low",
   }),
   /** Highest level each ingestion completeness may support. */
@@ -148,56 +192,87 @@ export function classifyRisk(lower) {
 }
 
 /**
- * Time-decay weight of one observation.
+ * Weight of one observation, decayed by elapsed time and by how many comparable prompts
+ * came after it.
+ *
+ * Both matter. Time decay expresses that a provider's behaviour drifts; recency decay
+ * expresses that evidence is superseded by what the user has done since. Recency is
+ * counted within the cell, so a rarely used cell keeps its own history usable.
  *
  * @param {string} startedAt
+ * @param {number} promptsAfter Observations in the same cell that started later.
  * @param {Date} now
- * @param {number} halfLifeSeconds
+ * @param {typeof PREDICTION_POLICY} policy
  * @returns {number}
  */
-function decayWeight(startedAt, now, halfLifeSeconds) {
+function decayWeight(startedAt, promptsAfter, now, policy) {
   const ageSeconds = (now.getTime() - Date.parse(startedAt)) / 1000;
-  if (!Number.isFinite(ageSeconds) || ageSeconds <= 0) return 1;
-  return 2 ** (-ageSeconds / halfLifeSeconds);
+  const timeWeight =
+    !Number.isFinite(ageSeconds) || ageSeconds <= 0
+      ? 1
+      : 2 ** (-ageSeconds / policy.decay_half_life_seconds);
+  return timeWeight * 2 ** (-promptsAfter / policy.recency_half_life_prompts);
 }
 
 /**
- * Aggregates the eligible outcomes a backoff level owns.
+ * Aggregate every backoff level in one pass.
  *
- * @param {OutcomeRow[]} rows
+ * Walking newest first lets each level count how many of its own later observations
+ * supersede the one being weighted, without filtering the history into separate arrays.
+ * At a six-figure history the copies cost more than the arithmetic.
+ *
+ * @param {OutcomeRow[]} ordered Chronological, oldest first.
+ * @param {{band: string, category: string}} expected
  * @param {Date} now
- * @param {number} halfLifeSeconds
- * @returns {ForecastCell}
+ * @param {typeof PREDICTION_POLICY} policy
+ * @returns {{level: string, cell: ForecastCell}[]} most specific first
  */
-function summarizeCell(rows, now, halfLifeSeconds) {
-  const cell = {
-    successes: 0,
-    restrictions: 0,
-    excluded: 0,
-    weighted_successes: 0,
-    weighted_restrictions: 0,
-    effective_samples: 0,
-    alpha: 0,
-    beta: 0,
-  };
+function summarizeLevels(ordered, expected, now, policy) {
+  const cells = [emptyCell(), emptyCell(), emptyCell()];
+  const seen = [0, 0, 0];
 
-  for (const row of rows) {
-    if (row.outcome === "excluded") {
-      cell.excluded += 1;
-      continue;
-    }
-    const weight = decayWeight(row.started_at, now, halfLifeSeconds);
-    if (row.outcome === "success") {
-      cell.successes += 1;
-      cell.weighted_successes += weight;
-    } else if (row.outcome === "restricted") {
-      cell.restrictions += 1;
-      cell.weighted_restrictions += weight;
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const row = ordered[index];
+    if (row === undefined) continue;
+    const matches = [
+      row.pressure_band === expected.band && row.size_category === expected.category,
+      row.pressure_band === expected.band,
+      true,
+    ];
+    for (let level = 0; level < cells.length; level += 1) {
+      if (!matches[level]) continue;
+      const cell = /** @type {ForecastCell} */ (cells[level]);
+      if (row.outcome === "excluded") {
+        cell.excluded += 1;
+        continue;
+      }
+      const weight = decayWeight(row.started_at, seen[level] ?? 0, now, policy);
+      seen[level] = (seen[level] ?? 0) + 1;
+      if (row.outcome === "success") {
+        cell.successes += 1;
+        cell.weighted_successes += weight;
+      } else if (row.outcome === "restricted") {
+        cell.restrictions += 1;
+        cell.weighted_restrictions += weight;
+      }
     }
   }
 
-  cell.effective_samples = cell.weighted_successes + cell.weighted_restrictions;
-  return cell;
+  return cells.map((cell, level) => {
+    cell.effective_samples = cell.weighted_successes + cell.weighted_restrictions;
+    return { level: policy.backoff_levels[level] ?? "prior", cell };
+  });
+}
+
+/**
+ * @param {OutcomeRow[]} rows
+ * @returns {boolean}
+ */
+function isChronological(rows) {
+  for (let index = 1; index < rows.length; index += 1) {
+    if ((rows[index - 1]?.started_at ?? "") > (rows[index]?.started_at ?? "")) return false;
+  }
+  return true;
 }
 
 /**
@@ -245,24 +320,23 @@ function emptyCell() {
  * @returns {{level: string, cell: ForecastCell}}
  */
 function selectCell(input, policy) {
-  const matchers = [
-    (/** @type {OutcomeRow} */ row) =>
-      row.pressure_band === input.expectedBand && row.size_category === input.expectedCategory,
-    (/** @type {OutcomeRow} */ row) => row.pressure_band === input.expectedBand,
-    () => true,
-  ];
-
-  return chooseCell(
-    matchers.map((matches, index) => ({
-      level: policy.backoff_levels[index] ?? "prior",
-      cell: summarizeCell(
-        input.outcomes.filter(matches),
-        input.now,
-        policy.decay_half_life_seconds,
-      ),
-    })),
+  // Recency is counted in observations, so the order has to be explicit rather than
+  // inherited from whatever the caller happened to pass. Repository queries already return
+  // chronological rows, and re-sorting a six-figure history costs more than the whole
+  // forecast, so the common case is verified rather than redone.
+  const ordered = isChronological(input.outcomes)
+    ? input.outcomes
+    : [...input.outcomes].sort((left, right) => left.started_at.localeCompare(right.started_at));
+  const levels = summarizeLevels(
+    ordered,
+    { band: input.expectedBand, category: input.expectedCategory },
+    input.now,
     policy,
   );
+
+  // An unknown pressure band names no cell: matching on it would relabel the period
+  // aggregate as band-specific evidence and inflate the relevance gate.
+  return chooseCell(input.expectedBand === "unknown" ? levels.slice(2) : levels, policy);
 }
 
 /**

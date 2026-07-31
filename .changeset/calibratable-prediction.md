@@ -31,3 +31,9 @@ Pre-0.6 contracts remain experimental; this release changes some of them:
   `degraded` once the evidence level rises above `very_low`.
 - `status` gains `prospective` and a derived `expected_prompt_category`; `stats` replaces the
   `calibration` placeholder with live and backtest streams.
+
+Simulating the evidence gates revealed that elapsed-time decay alone cannot pace a real user, so the
+model now also decays evidence by how many prompts followed it. The forecast admits a collapse in
+viability after roughly fifteen to twenty prompts whatever the user's cadence, where before it
+stayed optimistic for eighty. Model policy `stage5-prediction-v2` and evidence policy
+`stage5-evidence-v2` carry the retuned constants.

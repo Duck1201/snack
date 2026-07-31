@@ -512,16 +512,18 @@ test("status reports a broad initial estimate with very low evidence", async () 
         risk: { label: "high", policy_version: "stage2-risk-v2" },
         evidence: {
           level: "very_low",
-          policy_version: "stage5-evidence-v1",
+          policy_version: "stage5-evidence-v2",
           gates: [
             { id: "sample", level: "very_low", limiting: true },
-            { id: "restrictions", level: "low", limiting: false },
-            { id: "relevance", level: "low", limiting: false },
+            { id: "restrictions", level: "moderate", limiting: false },
+            // A single prompt cannot name a pressure band, so the forecast reads the
+            // period aggregate, which is never treated as strong evidence.
+            { id: "relevance", level: "very_low", limiting: true },
             { id: "completeness", level: "high", limiting: false },
           ],
         },
         method: { id: "bayesian-pressure-band", version: "1" },
-        model_policy_version: "stage5-prediction-v1",
+        model_policy_version: "stage5-prediction-v2",
         contributors: {
           backoff_level: "period",
           cell: {
@@ -550,7 +552,7 @@ test("status reports a broad initial estimate with very low evidence", async () 
         prospective: null,
         observed: { prompts: 1, successes: 1, restrictions: 0, excluded: 0 },
         freshness: { as_of: "2026-01-02T03:04:10.000Z", age_seconds: 50 },
-        completeness: { level: "complete", reasons: [], policy_version: "stage5-evidence-v1" },
+        completeness: { level: "complete", reasons: [], policy_version: "stage5-evidence-v2" },
         synchronization: { performed: false, status: "not_requested" },
         caveats: [
           "Sparse history; the weak plan-profile prior still dominates this estimate.",
@@ -2265,8 +2267,8 @@ test("a delivered status forecast becomes a prediction snapshot", async () => {
   assert.equal(state.attempt?.lower, document.data.viability.lower);
   assert.equal(state.attempt?.risk_label, document.data.risk.label);
   assert.equal(state.attempt?.evidence_level, document.data.evidence.level);
-  assert.equal(state.attempt?.model_policy_version, "stage5-prediction-v1");
-  assert.equal(state.attempt?.evidence_policy_version, "stage5-evidence-v1");
+  assert.equal(state.attempt?.model_policy_version, "stage5-prediction-v2");
+  assert.equal(state.attempt?.evidence_policy_version, "stage5-evidence-v2");
   assert.equal(state.attempt?.risk_policy_version, "stage2-risk-v2");
   assert.equal(state.attempt?.analytics_policy_version, "stage4-analytics-v1");
 });
@@ -2454,7 +2456,7 @@ test("prediction attempts, deliveries, and evaluations retain no prompt content"
     for (const table of ["prediction_attempt", "prediction_delivery", "prediction_evaluation"]) {
       stored += JSON.stringify(database.prepare(`SELECT * FROM ${table}`).all());
     }
-    assert.ok(stored.includes("stage5-prediction-v1"), "the attempt table must not be empty");
+    assert.ok(stored.includes("stage5-prediction-v2"), "the attempt table must not be empty");
   } finally {
     database.close();
   }
@@ -2485,7 +2487,7 @@ test("status reports real ingestion completeness instead of assuming the worst",
   assert.deepEqual(document.data.completeness, {
     level: "complete",
     reasons: [],
-    policy_version: "stage5-evidence-v1",
+    policy_version: "stage5-evidence-v2",
   });
   const completenessGate = document.data.evidence.gates.find(
     (/** @type {{id: string}} */ gate) => gate.id === "completeness",

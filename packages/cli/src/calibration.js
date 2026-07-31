@@ -186,7 +186,7 @@ export function backtest(outcomes, options) {
     }
 
     for (const key of [`${band}\u0000${category}`, band, ""]) {
-      observe(accumulatorFor(key), row.outcome, at, policy.decay_half_life_seconds);
+      observe(accumulatorFor(key), row.outcome, at, policy);
     }
   }
 
@@ -233,17 +233,34 @@ function reanchor(accumulator, at, halfLifeSeconds) {
 }
 
 /**
+ * Push every stored observation one position further into the past.
+ *
+ * Recency decay counts prompts, not seconds, so recording an observation is what ages the
+ * ones before it. Applying the factor to the running totals is exactly equivalent to
+ * re-weighting each observation individually.
+ *
+ * @param {ReturnType<typeof createAccumulator>} accumulator
+ * @param {number} recencyHalfLifePrompts
+ */
+function supersede(accumulator, recencyHalfLifePrompts) {
+  const factor = 2 ** (-1 / recencyHalfLifePrompts);
+  accumulator.weightedSuccesses *= factor;
+  accumulator.weightedRestrictions *= factor;
+}
+
+/**
  * @param {ReturnType<typeof createAccumulator>} accumulator
  * @param {"success" | "restricted" | "excluded"} outcome
  * @param {number} at
- * @param {number} halfLifeSeconds
+ * @param {typeof PREDICTION_POLICY} policy
  */
-function observe(accumulator, outcome, at, halfLifeSeconds) {
+function observe(accumulator, outcome, at, policy) {
   if (outcome === "excluded") {
     accumulator.excluded += 1;
     return;
   }
-  reanchor(accumulator, at, halfLifeSeconds);
+  reanchor(accumulator, at, policy.decay_half_life_seconds);
+  supersede(accumulator, policy.recency_half_life_prompts);
   if (outcome === "success") {
     accumulator.successes += 1;
     accumulator.weightedSuccesses += 1;

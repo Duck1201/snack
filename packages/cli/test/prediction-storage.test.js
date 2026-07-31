@@ -379,3 +379,21 @@ test("each outcome is evaluated against the last snapshot delivered before it", 
   // Re-running is idempotent: an outcome already evaluated is not linked twice.
   assert.equal(linkPrimaryEvaluations(databaseFile, "work", "stage5-evaluation-v1"), 0);
 });
+
+test("readOutcomeRows can return only the most recent prompts, still chronological", async () => {
+  const { databaseFile, seed } = await makeDatabase();
+  seed(
+    Array.from({ length: 10 }, (_unused, index) => ({
+      id: index + 1,
+      started_at: new Date(Date.parse("2026-01-06T00:00:00.000Z") + index * 60_000).toISOString(),
+    })),
+  );
+
+  const recent = readOutcomeRows(databaseFile, "work", { limit: 3 });
+
+  assert.deepEqual(
+    recent.map((row) => row.prompt_execution_id),
+    [8, 9, 10],
+  );
+  assert.equal(readOutcomeRows(databaseFile, "work").length, 10);
+});

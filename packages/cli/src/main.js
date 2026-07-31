@@ -38,7 +38,7 @@ import {
   removeAcknowledgedSegments,
   removeFullyConsumedSegments,
 } from "./spool.js";
-import { classifyIngestionCompleteness } from "./prediction.js";
+import { PREDICTION_POLICY, classifyIngestionCompleteness } from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
 import { createSourceStatus } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
@@ -657,7 +657,9 @@ export async function run(argv, options = {}) {
             }
           }
           const sourceStatus = createSourceStatus(source, summary, now, synchronization, pressure, {
-            outcomes: readOutcomeRows(paths.databaseFile, source.alias),
+            outcomes: readOutcomeRows(paths.databaseFile, source.alias, {
+              limit: PREDICTION_POLICY.evidence_window_prompts,
+            }),
             windowSeconds: parseHorizon(primaryHorizon(current)),
             completeness: classifyIngestionCompleteness({
               synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,

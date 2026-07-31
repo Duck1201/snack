@@ -225,14 +225,16 @@ test("an empty period reports the weakest evidence and names every gate", () => 
   assert.ok(result.evidence.gates.some((gate) => gate.level === "very_low" && gate.limiting));
 });
 
-test("plentiful successes without a single restriction cannot exceed low evidence", () => {
+test("plentiful successes without a single restriction cannot reach high evidence", () => {
   const result = forecast({
     outcomes: outcomes(200, "moderate", "typical"),
     dataCompleteness: "complete",
   });
 
+  // Spec 9.5: successes alone cannot create high confidence. The model has never observed
+  // the event it is predicting, so the restriction gate holds it one rung down.
   assert.equal(result.contributors.cell.restrictions, 0);
-  assert.equal(result.evidence.level, "low");
+  assert.equal(result.evidence.level, "moderate");
   const limiting = result.evidence.gates.filter((gate) => gate.limiting).map((gate) => gate.id);
   assert.deepEqual(limiting, ["restrictions"]);
 });
@@ -267,7 +269,7 @@ test("partial ingestion caps evidence however rich the history is", () => {
 });
 
 // No mix of observations may promote evidence past the weakest gate, and a history without
-// restrictions can never look strong however many successes it holds.
+// a single observed restriction can never reach the top rung however many successes it holds.
 test("evidence never exceeds its weakest gate", () => {
   fc.assert(
     fc.property(
@@ -293,7 +295,7 @@ test("evidence never exceeds its weakest gate", () => {
         assert.equal(ranks.indexOf(result.evidence.level), weakest);
         if (restrictionCount === 0) {
           assert.ok(
-            ranks.indexOf(result.evidence.level) <= ranks.indexOf("low"),
+            ranks.indexOf(result.evidence.level) < ranks.indexOf("high"),
             `evidence ${result.evidence.level} without any restriction`,
           );
         }
@@ -359,4 +361,59 @@ test("a complete ingestion lets rich local evidence reach the top of the ladder"
   assert.equal(forecast({ outcomes: rich, dataCompleteness: "complete" }).evidence.level, "high");
   // Without the ingestion signal the completeness gate alone would hold it at low.
   assert.equal(forecast({ outcomes: rich }).evidence.level, "low");
+});
+
+test("evidence loses weight as later prompts pile up, not only as time passes", () => {
+  // One old restriction, then a run of successes packed into the following minutes. Time
+  // decay barely touches minutes; what must fade the restriction is the prompts after it.
+  const olderThanEverything = 3600;
+  /**
+   * @param {number} successCount
+   * @returns {import("../src/prediction.js").Forecast}
+   */
+  const afterSuccesses = (successCount) =>
+    forecast({
+      outcomes: [
+        {
+          started_at: at(olderThanEverything),
+          outcome: "restricted",
+          pressure_band: "moderate",
+          size_category: "typical",
+        },
+        ...Array.from({ length: successCount }, (_unused, index) => ({
+          started_at: at(olderThanEverything - 1 - index),
+          outcome: /** @type {const} */ ("success"),
+          pressure_band: "moderate",
+          size_category: "typical",
+        })),
+      ],
+    });
+
+  const withFewAfter = afterSuccesses(2);
+  const withManyAfter = afterSuccesses(PREDICTION_POLICY.recency_half_life_prompts * 3);
+
+  assert.ok(
+    withManyAfter.contributors.cell.weighted_restrictions <
+      withFewAfter.contributors.cell.weighted_restrictions / 4,
+    `${withManyAfter.contributors.cell.weighted_restrictions} vs ${withFewAfter.contributors.cell.weighted_restrictions}`,
+  );
+  // Time decay alone could not have done this: the whole run spans a few minutes.
+  assert.ok(
+    withFewAfter.contributors.cell.weighted_restrictions > 0.9,
+    `a barely superseded restriction should keep most of its weight: ${withFewAfter.contributors.cell.weighted_restrictions}`,
+  );
+});
+
+test("the effective sample size saturates, so a long history cannot claim certainty", () => {
+  const huge = forecast({
+    outcomes: outcomes(2000, "moderate", "typical"),
+    dataCompleteness: "complete",
+  });
+  const saturation = 1 / (1 - 2 ** (-1 / PREDICTION_POLICY.recency_half_life_prompts));
+
+  assert.ok(
+    huge.contributors.cell.effective_samples < saturation * 1.05,
+    `effective samples ${huge.contributors.cell.effective_samples} exceeded saturation ${saturation}`,
+  );
+  assert.ok(huge.viability.upper - huge.viability.lower > 0.02, "interval collapsed to a point");
 });
