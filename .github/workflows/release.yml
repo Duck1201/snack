@@ -40,6 +40,12 @@ jobs:
       # Each package publishes only when its exact version is absent from the registry, so
       # a run that failed partway can be retried without tripping over what it already
       # published.
+      # Trusted publishing provisions credentials per package, as a side effect of publishing that
+      # package. A package this run does not publish therefore has no credentials here, and any
+      # registry write against it answers E401 — which is what a `dist-tag` move for an
+      # already-published plugin did on the 0.6.0 run. So each package publishes and tags in one
+      # step, and tagging is attempted only where the token exists. `next` moves with `latest`
+      # because `@next` must never resolve to something older than the default install.
       - name: Publish CLI package
         run: |
           version="$(node -p "require('./packages/cli/package.json').version")"
@@ -47,7 +53,8 @@ jobs:
             echo "@snack-ai/cli@${version} is already published; skipping." >> "$GITHUB_STEP_SUMMARY"
           else
             npm publish --workspace @snack-ai/cli --tag latest --access public --provenance
-            echo "Published @snack-ai/cli@${version}." >> "$GITHUB_STEP_SUMMARY"
+            npm dist-tag add "@snack-ai/cli@${version}" next
+            echo "Published @snack-ai/cli@${version} to latest and next." >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Publish OpenCode plugin
         run: |
@@ -56,23 +63,9 @@ jobs:
             echo "@snack-ai/opencode@${version} is already published; skipping." >> "$GITHUB_STEP_SUMMARY"
           else
             npm publish --workspace @snack-ai/opencode --tag latest --access public --provenance
-            echo "Published @snack-ai/opencode@${version}." >> "$GITHUB_STEP_SUMMARY"
+            npm dist-tag add "@snack-ai/opencode@${version}" next
+            echo "Published @snack-ai/opencode@${version} to latest and next." >> "$GITHUB_STEP_SUMMARY"
           fi
-      # A version already on the registry still has to carry the tag this release promotes. The
-      # plugin published to `next` before the MVP, so moving `latest` onto the MVP-compatible
-      # version is the only thing left for it; a release that skipped this would leave new users
-      # installing a pre-MVP plugin by default. Publishing with `--tag latest` above makes this a
-      # no-op for anything published in this run.
-      - name: Promote both packages to the latest tag
-        run: |
-          cli_version="$(node -p "require('./packages/cli/package.json').version")"
-          plugin_version="$(node -p "require('./packages/opencode/package.json').version")"
-          npm dist-tag add "@snack-ai/cli@${cli_version}" latest
-          npm dist-tag add "@snack-ai/opencode@${plugin_version}" latest
-          # `next` is where pre-release work lands, so it must never resolve to something older
-          # than `latest`: `@next` would otherwise hand an early adopter a build the MVP fixed.
-          npm dist-tag add "@snack-ai/cli@${cli_version}" next
-          npm dist-tag add "@snack-ai/opencode@${plugin_version}" next
       # A green run must mean both packages are on the registry, at the version this commit
       # declares, under the tag a default install resolves. Without this, a skipped
       # or silently ineffective publish still reports success.
@@ -102,12 +95,17 @@ jobs:
           for package in "@snack-ai/cli:${cli_version}" "@snack-ai/opencode:${plugin_version}"; do
             name="${package%:*}"
             expected="${package##*:}"
-            resolved="$(npm view "${name}" dist-tags.latest 2>/dev/null || true)"
-            if [ "${resolved}" = "${expected}" ]; then
-              echo "verified ${name}@latest is ${expected}" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "::error::${name}@latest resolves to '${resolved}', not ${expected}"
-              failed=1
-            fi
+            for tag in latest next; do
+              resolved="$(npm view "${name}" "dist-tags.${tag}" 2>/dev/null || true)"
+              if [ "${resolved}" = "${expected}" ]; then
+                echo "verified ${name}@${tag} is ${expected}" >> "$GITHUB_STEP_SUMMARY"
+              else
+                # A tag this run could not move is a release that is not finished: a default
+                # install would resolve to something other than what this commit declares. See
+                # the recovery commands in docs/release/identity.md.
+                echo "::error::${name}@${tag} resolves to '${resolved}', not ${expected}"
+                failed=1
+              fi
+            done
           done
           exit "${failed}"
