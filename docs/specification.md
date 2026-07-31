@@ -154,8 +154,14 @@ A plan profile provides weak initial assumptions, pressure weights, and provenan
 
 - ship with npm releases;
 - never update over the network at runtime;
-- include profile ID, version, publication/as-of date, source/provenance, supported provider/plan identifiers, prior strength, and dimension weights;
+- include profile ID, version, publication/as-of date, source/provenance, prior strength, and dimension weights;
 - may not claim a quota value that SNACK presents as real capacity.
+
+Bundled profiles are named after a **billing archetype**, never after a provider or a plan brand: `generic` (neutral), `subscription-window` (a flat subscription, where restrictions follow requests and generated volume concentrating in a window), and `metered-credit` (billed per token or credit, where risk tracks cumulative volume). Naming them after real plans would turn a bundled artifact into a quota table that goes stale and reads as a claim about provider capacity.
+
+An archetype differentiates **how usage is weighed**, not what the answer is. No bundled profile declares `prior_viability`; all of them start from the neutral default, because a differentiated initial viability would be an assertion about a plan's real capacity. They also all carry the same prior strength: `test/plan-profile.simulation.test.js` measures interval coverage across prior strengths and finds only `1` holds the declared floor at both a near-zero and a restriction-heavy rate, so prior strength has no room to vary inside the coverage contract.
+
+Every bundled profile's constants must be justified by simulation before release. A profile that cannot be shown to rank its own failure mode above neutral weighting — while not simply scoring higher everywhere, which would make it a sensitivity knob rather than a description of a plan — is noise and does not ship.
 
 A source selects its profile through `sources[].plan_profile`, which names either a bundled
 profile or a local file. Custom profiles may be defined locally in JSONC and are labeled

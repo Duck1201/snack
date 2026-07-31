@@ -90,3 +90,35 @@ Migration 009 adds the tombstone table and recreates the two `BEFORE DELETE` tri
 a connection-scoped escape, so purge can remove the prediction snapshots inside its scope while
 those rows stay immutable to every other connection and every other command. The `ON UPDATE`
 triggers are untouched: nothing may ever rewrite a snapshot.
+
+Two bundled plan profiles join `generic`, named after a billing archetype rather than a provider:
+`subscription-window` for a flat subscription, where restrictions follow requests and generated
+volume concentrating in a window, and `metered-credit` for per-token or credit billing, where risk
+tracks cumulative volume. `--plan-profile` on `snack setup opencode` selects one.
+
+An archetype changes how usage is weighed, never what SNACK claims capacity is. None of them
+declares `prior_viability`, because a differentiated initial viability would assert a plan's real
+capacity.
+
+`test/plan-profile.simulation.test.js` is the evidence, and it changed the design. Coverage measured
+at 1500 trials per corner, as rates 0.02 / 0.25 for n = 5 and n = 20:
+
+    strength 0.5 -> 0.944 / 0.684 | 0.963 / 0.848
+    strength 1   -> 0.905 / 0.918 | 0.927 / 0.861
+    strength 1.5 -> 0.905 / 0.910 | 0.843 / 0.868
+    strength 2   -> 0.000 / 0.900 | 0.751 / 0.873
+
+Only `1` holds the declared floor at both corners: a weaker prior collapses on a restriction-heavy
+source, and a stronger one drags the upper bound below a very high true viability until, at strength
+2 with five near-certain successes, the interval stops containing the truth entirely. Prior strength
+therefore has no room to vary, and the archetypes differ only in their weights.
+
+The simulations also assert that each archetype ranks its own failure mode above neutral weighting
+while ranking the other's failure mode below it — a profile that were simply louder everywhere would
+be a sensitivity knob, not a description of a plan — and that all three converge once local evidence
+accumulates, since a profile is a weak initial assumption rather than a standing opinion.
+
+The unused `supported.providers` and `supported.plans` properties are removed from the plan-profile
+schema. They were never read, and a list of provider brands inside a deliberately brand-free
+artifact contradicts the naming rule; the schema freezes as a public contract at 1.0, so this is the
+last release that can drop them.

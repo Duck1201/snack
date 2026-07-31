@@ -37,7 +37,12 @@ snack setup opencode --non-interactive \
 - `--source` names the capacity source in SNACK; `--provider` and `--profile` say which provider
   account it maps to. Run without `--install-plugin` to configure backfill only.
 - `--plan` records what you call your plan. It is a label, not a lookup key.
-- `--plan-profile` selects the prior SNACK starts from, and defaults to `generic`.
+- `--plan-profile` selects the prior SNACK starts from, and defaults to `generic`. Profiles are
+  named after a billing archetype rather than a provider: `subscription-window` for a flat
+  subscription, where pressure follows requests and generated volume concentrating in a window, and
+  `metered-credit` for per-token or credit billing, where it tracks cumulative volume. The choice
+  changes how usage is weighed, never what SNACK claims your capacity is, and local evidence blends
+  it away as history accumulates.
 - `--install-plugin` registers `@snack-ai/opencode` in the global OpenCode configuration and needs
   `--yes` to confirm; `--dry-run` shows the proposal and changes nothing.
 - `--enable-prospective-analysis` is opt-in, and only enables local ephemeral, allowlisted
