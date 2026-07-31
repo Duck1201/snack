@@ -319,3 +319,40 @@ test("with a terminal, purge asks for the alias typed back", async () => {
   assert.equal(applied, 0);
   assert.equal(count(fixture.resolved.databaseFile, "prompt_execution"), 0);
 });
+
+test("only a purge that removes the watermark resets the ingestion cursor", async () => {
+  // The fixture's single prompt is at 2026-01-02T03:04, and the cursor's watermark with it.
+  // Specification §12.8 resets the cursor only when the purged range contains that watermark:
+  // any other reset forces a full re-scan that changes nothing.
+  for (const argv of [
+    // A window that closes before the watermark deletes nothing behind it.
+    ["--since", "2020-01-01T00:00:00.000Z", "--until", "2020-06-01T00:00:00.000Z"],
+    // A window that opens after it deletes nothing ahead of it either.
+    ["--since", "2030-01-01T00:00:00.000Z"],
+  ]) {
+    const fixture = await makePurgeableHistory();
+    assert.equal(count(fixture.resolved.databaseFile, "ingestion_cursor"), 1);
+
+    const exitCode = await run(
+      ["node", "snack", "data", "purge", "--source", "work", "--yes", "--json", ...argv],
+      fixture.options,
+    );
+
+    assert.equal(exitCode, 0, fixture.stdout.value.slice(0, 200));
+    assert.equal(JSON.parse(fixture.stdout.value).data.counts.prompts, 0);
+    assert.equal(
+      count(fixture.resolved.databaseFile, "ingestion_cursor"),
+      1,
+      `a purge of nothing reset the cursor: ${argv.join(" ")}`,
+    );
+  }
+
+  const fixture = await makePurgeableHistory();
+  const exitCode = await run(
+    ["node", "snack", "data", "purge", "--source", "work", "--yes", "--json"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(count(fixture.resolved.databaseFile, "ingestion_cursor"), 0);
+});

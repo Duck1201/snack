@@ -2006,6 +2006,8 @@ function purgeScopeLocked(paths, scope, options) {
       source: scope.source ?? null,
       since: scope.since ?? null,
       until: scope.until ?? null,
+      since_ms: scope.since === undefined ? null : Date.parse(scope.since),
+      until_ms: scope.until === undefined ? null : Date.parse(scope.until),
     };
     const promptFilter = `
       (@source IS NULL OR prompt_execution.source_alias = @source)
@@ -2123,11 +2125,16 @@ function resetContainedCursors(database, scope, parameters) {
 }
 
 function cursorResetSelect() {
-  // An open upper bound means the purge reaches the present, so any watermark is inside it.
+  // The watermark is epoch milliseconds while the scope bounds are ISO timestamps, so the
+  // comparison has to happen on the bounds converted to milliseconds. Comparing the two directly
+  // made SQLite rank an INTEGER below any TEXT, which made every bounded purge look as if it
+  // contained the watermark, and the missing lower bound made a purge of only older records look
+  // that way too. An open bound on either side means the purge reaches that far.
   return `SELECT source_alias
             FROM ingestion_cursor
            WHERE (@source IS NULL OR source_alias = @source)
-             AND (@until IS NULL OR time_updated < @until)`;
+             AND (@since_ms IS NULL OR time_updated >= @since_ms)
+             AND (@until_ms IS NULL OR time_updated < @until_ms)`;
 }
 
 /**

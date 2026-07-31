@@ -559,7 +559,7 @@ snack data purge (--source <alias> | --all)
 
 Purge deletes exactly the selected scope inside one transaction, and verifies that: the rows counted for the preview and the rows actually deleted must agree, or the transaction rolls back. `--dry-run` reports the same counts, the same resolved half-open window, and the same JSON shape as an applied run, so a preview is verifiably a preview of what will happen.
 
-The ingestion cursor is a single high-watermark and cannot express a purged middle range. When the purged range contains the current watermark, the cursor is reset in the same transaction; otherwise an incremental synchronization would silently never re-import the removed records. Spool segments are never deleted by purge — segment removal remains synchronization's responsibility under the rule that a segment is removed only after every configured source has committed past it.
+The ingestion cursor is a single high-watermark and cannot express a purged middle range. When the purged range contains the current watermark, the cursor is reset in the same transaction; otherwise an incremental synchronization would silently never re-import the removed records. A purge whose range does not reach the watermark — including one that selects no records at all — leaves the cursor alone, since forcing a full re-scan would change nothing. Spool segments are never deleted by purge — segment removal remains synchronization's responsibility under the rule that a segment is removed only after every configured source has committed past it.
 
 `--include-config` removes the selected sources from the configuration after the database transaction has committed, because the deletion is unrecoverable while the configuration file is recoverable from its backup. It does not touch the OpenCode plugin registration, which may contain credentials and belongs to `setup`; purge warns that capture continues until `setup` changes it.
 
@@ -590,6 +590,10 @@ Initial stable categories:
 - `10`: unexpected internal failure.
 
 If synchronization partially fails but a valid, explicitly stale forecast can still be returned, status exits `0` and exposes degraded health prominently. If no valid result exists for the requested source, it exits `4`.
+
+A time window is half-open, so `--until` at or before `--since` selects nothing by construction and exits `2` rather than reporting an empty success that hides a mistyped bound.
+
+An unexpected internal failure reports no detail, because SNACK cannot know what is safe to print about a failure it did not anticipate. Setting `SNACK_DEBUG` to any value prints the underlying error to stderr for a bug report; it never enters the JSON document, stdout, or any file, and it is off unless asked for, because a stack trace carries absolute paths.
 
 ## 13. JSON Output
 

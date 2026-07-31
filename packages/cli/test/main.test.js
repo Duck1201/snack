@@ -2711,3 +2711,51 @@ test("a history the prior no longer dominates is not described as sparse", async
     JSON.stringify(status.caveats),
   );
 });
+
+test("SNACK_DEBUG explains an unexpected failure without changing what it reports", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  const argv = [
+    "node",
+    "snack",
+    "setup",
+    "opencode",
+    "--non-interactive",
+    "--source",
+    "work",
+    "--provider",
+    "anthropic",
+    "--profile",
+    "default",
+    "--plan",
+    "pro",
+    "--json",
+  ];
+  /** @type {() => Promise<never>} */
+  const failWriting = async () => {
+    throw new Error("DIAGNOSTIC_CANARY");
+  };
+
+  const quiet = await run(argv, { ...fixture.options, writeConfig: failWriting });
+  const quietDocument = JSON.parse(fixture.stdout.value);
+
+  assert.equal(quiet, ExitCode.internal);
+  assert.equal(quietDocument.errors[0].code, "internal_error");
+  assert.doesNotMatch(fixture.stderr.value, /DIAGNOSTIC_CANARY/u);
+
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  const verbose = await run(argv, {
+    ...fixture.options,
+    env: { ...fixture.options.env, SNACK_DEBUG: "1" },
+    writeConfig: failWriting,
+  });
+  const verboseDocument = JSON.parse(fixture.stdout.value);
+
+  // Same exit code, same document: the diagnostic goes to stderr and nowhere else, because the
+  // JSON contract is what other programs read.
+  assert.equal(verbose, ExitCode.internal);
+  assert.deepEqual(verboseDocument.errors, quietDocument.errors);
+  assert.match(fixture.stderr.value, /DIAGNOSTIC_CANARY/u);
+  assert.doesNotMatch(fixture.stdout.value, /DIAGNOSTIC_CANARY/u);
+});

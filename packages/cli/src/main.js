@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Command, CommanderError } from "commander";
@@ -1044,6 +1044,13 @@ export async function run(argv, options = {}) {
         now,
       });
     }
+    // An unexpected failure is the one case where SNACK has nothing useful to say, and the user
+    // has nothing to attach to a report. `SNACK_DEBUG` prints the underlying error to stderr for
+    // that purpose only: never into the JSON document, never to stdout, never to a file, and only
+    // when it is asked for, because a stack trace carries absolute paths.
+    if ((options.env ?? process.env).SNACK_DEBUG) {
+      stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+    }
     return renderError({
       stdout,
       stderr,
@@ -1579,46 +1586,74 @@ async function writeCsvExport(databaseFile, scope, context, directory) {
   }
   /** @type {Record<string, number>} */
   const counts = {};
-  for (const table of EXPORT_TABLES) {
-    await withExportFile(join(directory, `${table.name}.csv`), async (handle) => {
-      const chunks = exportCsvChunks(databaseFile, scope, table);
-      let step = chunks.next();
-      while (step.done !== true) {
-        await handle.write(step.value);
-        step = chunks.next();
-      }
-      counts[table.name] = step.value;
-    });
-  }
-  await withExportFile(join(directory, "manifest.json"), async (handle) => {
-    await handle.write(
-      formatJson({
-        export_schema_version: EXPORT_SCHEMA_VERSION,
-        generated_at: context.now.toISOString(),
-        scope,
-        provenance: context.provenance,
-        tables: EXPORT_TABLES.map((table) => ({
-          name: table.name,
-          file: `${table.name}.csv`,
-          columns: table.columns,
-          rows: counts[table.name] ?? 0,
-        })),
-      }),
+  // The manifest is what makes the CSVs interpretable, and it can only be written once every
+  // row is counted. So the whole set is staged and published together: an export is complete or
+  // it is not there, never a directory of plausible CSVs missing the file that describes them.
+  const staged = [
+    ...EXPORT_TABLES.map((table) => join(directory, `${table.name}.csv`)),
+    join(directory, "manifest.json"),
+  ];
+  try {
+    for (const table of EXPORT_TABLES) {
+      await withExportFile(
+        join(directory, `${table.name}.csv`),
+        async (handle) => {
+          const chunks = exportCsvChunks(databaseFile, scope, table);
+          let step = chunks.next();
+          while (step.done !== true) {
+            await handle.write(step.value);
+            step = chunks.next();
+          }
+          counts[table.name] = step.value;
+        },
+        { defer: true },
+      );
+    }
+    await withExportFile(
+      join(directory, "manifest.json"),
+      async (handle) => {
+        await handle.write(
+          formatJson({
+            export_schema_version: EXPORT_SCHEMA_VERSION,
+            generated_at: context.now.toISOString(),
+            scope,
+            provenance: context.provenance,
+            tables: EXPORT_TABLES.map((table) => ({
+              name: table.name,
+              file: `${table.name}.csv`,
+              columns: table.columns,
+              rows: counts[table.name] ?? 0,
+            })),
+          }),
+        );
+      },
+      { defer: true },
     );
-  });
+    await settleStagedExport(staged, "publish");
+  } catch (error) {
+    await settleStagedExport(staged, "discard");
+    throw error;
+  }
   return counts;
 }
 
 /**
  * Create one private export file, reporting a failed write as an export I/O failure.
  *
+ * Every artifact is written beside its destination as `.partial` and only takes its real name
+ * once the whole export is whole: a CSV export is several files plus the manifest that makes them
+ * interpretable, and a command killed halfway through must not leave files that look finished.
+ * `defer` holds a file at its staged name so the caller can publish the set together.
+ *
  * @param {string} target
  * @param {(handle: import("node:fs/promises").FileHandle) => Promise<void>} write
+ * @param {{defer?: boolean}} [options]
  */
-async function withExportFile(target, write) {
+async function withExportFile(target, write, options = {}) {
+  const partial = stagedExportName(target);
   let handle;
   try {
-    handle = await open(target, "w", 0o600);
+    handle = await open(partial, "w", 0o600);
   } catch (error) {
     throw new SnackError(`Export destination '${target}' could not be opened.`, {
       code: ExitCode.io,
@@ -1629,15 +1664,37 @@ async function withExportFile(target, write) {
   try {
     await write(handle);
     await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await chmod(partial, 0o600).catch(() => {});
+    if (options.defer !== true) await rename(partial, target);
   } catch (error) {
+    await rm(partial, { force: true }).catch(() => {});
     throw new SnackError(`Export to '${target}' could not be completed.`, {
       code: ExitCode.io,
       reason: "export_write_error",
       cause: error,
     });
   } finally {
-    await handle.close();
-    await chmod(target, 0o600).catch(() => {});
+    await handle?.close();
+  }
+}
+
+/** @param {string} target */
+function stagedExportName(target) {
+  return `${target}.partial`;
+}
+
+/**
+ * Publish a staged export, or remove every staged file if any of it failed.
+ *
+ * @param {string[]} targets
+ * @param {"publish" | "discard"} outcome
+ */
+async function settleStagedExport(targets, outcome) {
+  for (const target of targets) {
+    if (outcome === "publish") await rename(stagedExportName(target), target);
+    else await rm(stagedExportName(target), { force: true }).catch(() => {});
   }
 }
 
@@ -1667,14 +1724,27 @@ function buildExportScope(commandOptions, config) {
       reason: "source_not_configured",
     });
   }
+  const since =
+    commandOptions.since === undefined
+      ? undefined
+      : parseExportBound(commandOptions.since, "--since");
+  const until =
+    commandOptions.until === undefined
+      ? undefined
+      : parseExportBound(commandOptions.until, "--until");
+  // The window is half-open, so a bound that closes at or before it opens can only ever select
+  // nothing. Reporting that as a successful export of zero records, or as a purge that deleted
+  // nothing, hides a mistyped bound behind an exit code that says everything went fine.
+  if (since !== undefined && until !== undefined && until <= since) {
+    throw new SnackError("--until must be later than --since.", {
+      code: ExitCode.usage,
+      reason: "time_window_invalid",
+    });
+  }
   return {
     ...(commandOptions.source === undefined ? {} : { source: commandOptions.source }),
-    ...(commandOptions.since === undefined
-      ? {}
-      : { since: parseExportBound(commandOptions.since, "--since") }),
-    ...(commandOptions.until === undefined
-      ? {}
-      : { until: parseExportBound(commandOptions.until, "--until") }),
+    ...(since === undefined ? {} : { since }),
+    ...(until === undefined ? {} : { until }),
   };
 }
 

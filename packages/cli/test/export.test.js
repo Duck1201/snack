@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
@@ -379,4 +379,55 @@ test("a CSV destination that cannot be created is an export I/O failure, not a c
     assert.equal(exitCode, ExitCode.io, output);
     assert.equal(JSON.parse(fixture.stdout.value).errors[0].code, "export_write_error", output);
   }
+});
+
+test("a window that closes before it opens is a usage error, not an empty success", async () => {
+  const fixture = await makeExportableHistory();
+
+  for (const argv of [
+    ["export", "--format", "json", "--output", "-"],
+    ["data", "purge", "--all", "--yes"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(
+      [
+        "node",
+        "snack",
+        ...argv,
+        "--since",
+        "2026-07-31T12:00:00.000Z",
+        "--until",
+        "2026-07-31T06:00:00.000Z",
+        "--json",
+      ],
+      fixture.options,
+    );
+
+    assert.equal(exitCode, ExitCode.usage, argv.join(" "));
+    assert.equal(JSON.parse(fixture.stdout.value).errors[0].code, "time_window_invalid");
+  }
+});
+
+test("an export that fails partway leaves no file that looks like a finished one", async () => {
+  const fixture = await makeExportableHistory();
+  const directory = join(fixture.root, "csv-out");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  // A directory where the fourth table's staged file belongs: the first three are already
+  // written when the export fails. The manifest is what makes CSVs interpretable and can only
+  // be written once every row is counted, so a set without it must not survive at all.
+  await mkdir(join(directory, "restrictions.csv.partial"), { recursive: true, mode: 0o700 });
+
+  const exitCode = await run(
+    ["node", "snack", "export", "--format", "csv", "--output", directory, "--json"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, ExitCode.io);
+  const written = await readdir(directory);
+  assert.deepEqual(
+    written.filter((entry) => entry.endsWith(".csv") || entry === "manifest.json"),
+    [],
+    written.join(", "),
+  );
 });
