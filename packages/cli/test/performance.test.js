@@ -37,7 +37,7 @@ const now = new Date(origin + PROMPTS * 60_000);
  *
  * @returns {Promise<{root: string, env: NodeJS.ProcessEnv, paths: import("../src/paths.js").SnackPaths, databaseFile: string}>}
  */
-async function makeLargeHistory() {
+async function makeLargeHistory({ spacingMs = 60_000, endsAt = origin + PROMPTS * 60_000 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "snack-performance-"));
   temporaryRoots.push(root);
   const env = {
@@ -76,9 +76,18 @@ async function makeLargeHistory() {
       `INSERT INTO prompt_source_outcome (prompt_execution_id, outcome, policy_version)
        VALUES (?, ?, 'stage2-outcome-v1')`,
     );
+    // Every real prompt carries at least one usage slice, and the token dimensions, the per-model
+    // breakdown and the observed cost are all read from them. A history without slices exercises
+    // none of that, which is how a quadratic per-model grouping survived a passing budget test.
+    const insertSlice = database.prepare(
+      `INSERT INTO prompt_usage_slice
+         (prompt_execution_id, source_slice_id, provider, model, input_tokens, output_tokens,
+          reasoning_tokens, cache_read_tokens, cache_write_tokens, cost_decimal, currency)
+       VALUES (@id, 'step-finish-1', 'anthropic', @model, @input, 25, 5, 10, 2, '0.003', 'USD')`,
+    );
     database.transaction(() => {
       for (let index = 1; index <= PROMPTS; index += 1) {
-        const startedAt = new Date(origin + index * 60_000).toISOString();
+        const startedAt = new Date(endsAt - (PROMPTS - index) * spacingMs).toISOString();
         insertPrompt.run({
           id: index,
           source_prompt_id: `prompt-${index}`,
@@ -86,6 +95,11 @@ async function makeLargeHistory() {
           tokens: 100 + (index % 900),
         });
         insertOutcome.run(index, index % 97 === 0 ? "restricted" : "success");
+        insertSlice.run({
+          id: index,
+          model: index % 3 === 0 ? "claude-haiku" : "claude-sonnet",
+          input: 100 + (index % 900),
+        });
       }
     })();
   } finally {
@@ -472,4 +486,30 @@ test(`exporting ${PROMPTS.toLocaleString("en-US")} prompts stays inside the memo
     peak - before < bytes,
     `export grew resident memory by ${((peak - before) / 1024 / 1024).toFixed(0)}MB while producing ${(bytes / 1024 / 1024).toFixed(0)}MB`,
   );
+});
+
+test(`\`stats\` over ${PROMPTS.toLocaleString("en-US")} prompts inside one window stays inside the memory budget`, async (t) => {
+  // The spawned command reads the real clock, so a history has to end at the real present for its
+  // analysis windows to hold anything at all. Six seconds apart puts every prompt inside the
+  // default `P7D` horizon: the shape of a heavy week, and the one that makes every per-window
+  // aggregate carry the whole history at once.
+  const history = await makeLargeHistory({ spacingMs: 6_000, endsAt: Date.now() });
+  await writeStatusConfig(history);
+
+  const startedAt = process.hrtime.bigint();
+  const result = await runCli(["stats", "--verbose", "--json"], history, {
+    heapLimitMb: 150,
+  }).catch((/** @type {Error & {stderr?: string}} */ error) => error);
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+  assert.ok(
+    !(result instanceof Error),
+    `\`snack stats\` did not survive a 150MB heap: ${String(result instanceof Error ? (result.stderr ?? result) : "").slice(0, 300)}`,
+  );
+  const document = JSON.parse(result.stdout);
+  assert.notEqual(document.status, "error", result.stdout.slice(0, 300));
+  // A dense window must not be answered by an algorithm whose cost grows with the square of the
+  // prompts it holds; the ceiling is loose enough that only that shape of cost reaches it.
+  t.diagnostic(`stats over one dense window took ${(elapsedMs / 1000).toFixed(1)}s`);
+  assert.ok(elapsedMs < 10_000, `stats took ${(elapsedMs / 1000).toFixed(1)}s`);
 });

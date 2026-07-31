@@ -1319,11 +1319,14 @@ export function readUsageWindowRows(databaseFile, sourceAlias, window) {
          ORDER BY prompt_execution.started_at, prompt_execution.id,
                   prompt_usage_slice.source_slice_id`,
       )
-      .all(sourceAlias, window.from, window.to);
+      .iterate(sourceAlias, window.from, window.to);
 
     /** @type {Map<number, UsageWindowRow>} */
     const prompts = new Map();
-    for (const row of /** @type {(UsageWindowRow & UsageSliceRow)[]} */ (rows)) {
+    // Iterating rather than reading every joined row first: the grouped result is what the caller
+    // keeps, and materializing the join beside it doubles the peak for a dense window that already
+    // holds a hundred thousand prompts.
+    for (const row of /** @type {Iterable<UsageWindowRow & UsageSliceRow>} */ (rows)) {
       let prompt = prompts.get(row.prompt_execution_id);
       if (prompt === undefined) {
         prompt = {

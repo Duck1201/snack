@@ -2588,3 +2588,38 @@ test("verbose stats report per-model usage in the JSON contract too", async () =
   assert.equal(horizon.by_model[0].dimensions.input_tokens.value, 100);
   assert.deepEqual(horizon.by_model[0].cost.by_currency, { unknown: "0.003" });
 });
+
+test("every warning the JSON document carries is also spoken to stderr", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  const missingPrompt = join(fixture.root, "no-such-prompt.txt");
+
+  // Acceptance criterion 6 and specification §12.1: human warnings go to stderr. A user who
+  // mistypes `--prompt-file` otherwise reads a forecast built on a different assumption than
+  // the one they believe, with nothing on screen to say so.
+  for (const argv of [
+    ["status", "--no-sync", "--prompt-file", missingPrompt],
+    ["status", "--no-sync"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...argv, "--json"], fixture.options);
+    const warnings = JSON.parse(fixture.stdout.value).warnings;
+    assert.ok(warnings.length > 0, `${argv.join(" ")} produced no warning to compare against`);
+
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...argv], fixture.options);
+    for (const warning of warnings) {
+      assert.match(fixture.stderr.value, new RegExp(escapeForPattern(warning.message), "u"));
+    }
+    // Warnings belong on stderr so a piped forecast stays machine-readable.
+    assert.doesNotMatch(fixture.stdout.value, /Warning:/u);
+  }
+});
+
+/** @param {string} value */
+function escapeForPattern(value) {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}

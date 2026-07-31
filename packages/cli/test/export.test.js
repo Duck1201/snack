@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 
+import { ExitCode } from "../src/errors.js";
 import { EXPORT_TABLES } from "../src/export.js";
 import { run } from "../src/main.js";
 import { createEnvelope } from "../src/output.js";
@@ -357,4 +358,25 @@ test("a closed pipe ends the export quietly instead of crashing", async () => {
   assert.doesNotMatch(stderr, /EPIPE/u);
   assert.doesNotMatch(stderr, /at Command|Unhandled/u);
   assert.match(stdout, /"command": "export"/u);
+});
+
+test("a CSV destination that cannot be created is an export I/O failure, not a crash", async () => {
+  const fixture = await makeExportableHistory();
+  const occupied = join(fixture.root, "already-a-file");
+  await writeFile(occupied, "", { mode: 0o600 });
+
+  // `--output` naming an existing file is an ordinary typo on a flag that writes a directory.
+  // The JSON format already classifies every destination failure as export I/O; CSV creates its
+  // directory before the first file is opened, and that step has to answer the same way.
+  for (const output of [occupied, join(occupied, "nested")]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(
+      ["node", "snack", "export", "--format", "csv", "--output", output, "--json"],
+      fixture.options,
+    );
+
+    assert.equal(exitCode, ExitCode.io, output);
+    assert.equal(JSON.parse(fixture.stdout.value).errors[0].code, "export_write_error", output);
+  }
 });

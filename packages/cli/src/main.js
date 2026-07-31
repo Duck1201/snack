@@ -555,6 +555,7 @@ export async function run(argv, options = {}) {
             `${result.alias}: ${result.read} read, ${result.inserted} inserted, ${result.updated} updated, ${result.unchanged} unchanged, ${result.excluded} excluded, ${result.pending_mapping} pending_mapping, ${result.rejected_invalid} rejected_invalid, ${result.tombstoned ?? 0} tombstoned, ${result.failed} failed.\n`,
           );
         }
+        reportWarnings(stderr, syncWarnings);
       }
     });
 
@@ -605,6 +606,7 @@ export async function run(argv, options = {}) {
         for (const report of reports) {
           stdout.write(renderStats(report, commandOptions.verbose === true));
         }
+        reportWarnings(stderr, statsWarnings);
       }
     });
 
@@ -726,23 +728,23 @@ export async function run(argv, options = {}) {
       // A forecast the evidence gates rate `very_low` is reported as degraded health, so a
       // machine consumer never reads a prior-dominated estimate as a settled result.
       const uncalibrated = statuses.some((entry) => entry.evidence.level === "very_low");
+      const reportedWarnings = [
+        ...(uncalibrated
+          ? [
+              {
+                code: "very_low_evidence",
+                message: "The evidence gates cap this forecast at very low; it is not calibrated.",
+              },
+            ]
+          : []),
+        ...statusWarnings,
+      ];
       if (wantsJson(this, configuredJson)) {
         stdout.write(
           formatJson(
             createEnvelope("status", data, {
               status: uncalibrated ? "degraded" : "ok",
-              warnings: [
-                ...(uncalibrated
-                  ? [
-                      {
-                        code: "very_low_evidence",
-                        message:
-                          "The evidence gates cap this forecast at very low; it is not calibrated.",
-                      },
-                    ]
-                  : []),
-                ...statusWarnings,
-              ],
+              warnings: reportedWarnings,
               now,
             }),
           ),
@@ -754,6 +756,7 @@ export async function run(argv, options = {}) {
           );
           for (const caveat of status.caveats) stdout.write(`Caveat: ${caveat}\n`);
         }
+        reportWarnings(stderr, reportedWarnings);
       }
       // Only now, with the bytes written, is an attempt a snapshot the user actually saw.
       confirmPredictionDelivery(paths.databaseFile, attemptIds, {
@@ -929,7 +932,7 @@ export async function run(argv, options = {}) {
           `${verb} ${document.counts.prompts} prompts and ${document.counts.predictions} prediction snapshots` +
             `${scope.source === undefined ? " across every source" : ` for ${scope.source}`}.\n`,
         );
-        for (const warning of warnings) stderr.write(`${warning.message}\n`);
+        reportWarnings(stderr, warnings);
       }
     });
 
@@ -1193,6 +1196,20 @@ function emptySyncResult(alias, path, failed) {
 /** @param {Command} command @param {boolean} configuredJson */
 function wantsJson(command, configuredJson) {
   return command.optsWithGlobals().json === true || configuredJson;
+}
+
+/**
+ * Speak in human mode the warnings the JSON envelope would have carried.
+ *
+ * Warnings go to stderr so a piped result stays exactly the result, and every human branch that
+ * builds an envelope's warnings has to call this: a warning a machine reads and a person does not
+ * is the two output modes disagreeing about what happened.
+ *
+ * @param {{write: (text: string) => void}} stderr
+ * @param {{code: string, message: string}[]} warnings
+ */
+function reportWarnings(stderr, warnings) {
+  for (const warning of warnings) stderr.write(`Warning: ${warning.message}\n`);
 }
 
 /**
@@ -1502,8 +1519,19 @@ async function writeJsonExport(databaseFile, scope, context, target) {
  * @param {string} directory
  */
 async function writeCsvExport(databaseFile, scope, context, directory) {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
+  // The directory is part of the destination, so failing to create it is the same failure as
+  // failing to open a file inside it. Without this, an `--output` naming an existing file
+  // escapes the export's own classifier and lands as an unexplained internal failure.
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+  } catch (error) {
+    throw new SnackError(`Export destination '${directory}' could not be opened.`, {
+      code: ExitCode.io,
+      reason: "export_write_error",
+      cause: error,
+    });
+  }
   /** @type {Record<string, number>} */
   const counts = {};
   for (const table of EXPORT_TABLES) {
