@@ -30,6 +30,40 @@ export const defaultConfig = Object.freeze({
 });
 
 /**
+ * Recognize a configured capacity source of any supported client.
+ *
+ * The schema already refuses a malformed source on read; this is the runtime narrowing the command
+ * and diagnostic layers share, so they cannot disagree about what counts as configured. Where a
+ * client keeps its history is the client's own business — a database file for OpenCode, a projects
+ * directory for Claude Code — so either satisfies the check.
+ *
+ * @param {unknown} value
+ * @returns {value is {alias: string, installation_id: string, adapter: "opencode" | "claude", database?: string, projects?: string, provider: string, profile: string, plan: string, fingerprint: string}}
+ */
+export function isConfiguredSource(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "alias" in value &&
+    typeof value.alias === "string" &&
+    "installation_id" in value &&
+    typeof value.installation_id === "string" &&
+    "adapter" in value &&
+    (value.adapter === "opencode" || value.adapter === "claude") &&
+    "provider" in value &&
+    typeof value.provider === "string" &&
+    "profile" in value &&
+    typeof value.profile === "string" &&
+    "plan" in value &&
+    typeof value.plan === "string" &&
+    (("database" in value && typeof value.database === "string") ||
+      ("projects" in value && typeof value.projects === "string")) &&
+    "fingerprint" in value &&
+    typeof value.fingerprint === "string"
+  );
+}
+
+/**
  * @param {string} text
  * @returns {Record<string, unknown>}
  */
@@ -65,10 +99,15 @@ export async function readConfig(configFile) {
     return parseAndValidateConfig(await readFile(configFile, "utf8"));
   } catch (error) {
     if (isNotFound(error)) {
-      throw new SnackError("Configuration does not exist; run `snack setup opencode` first.", {
-        code: ExitCode.config,
-        reason: "config_missing",
-      });
+      // Both clients are named. Sending someone who only runs Claude Code to set up OpenCode is a
+      // dead end, and this is the first message a new user sees.
+      throw new SnackError(
+        "Configuration does not exist; run `snack setup opencode` or `snack setup claude` first.",
+        {
+          code: ExitCode.config,
+          reason: "config_missing",
+        },
+      );
     }
     if (!(error instanceof SnackError)) {
       throw new SnackError("Configuration could not be read.", {

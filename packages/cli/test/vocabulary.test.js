@@ -171,3 +171,28 @@ test("the export manifest cannot smuggle the vocabulary the interface refuses", 
     }
   }
 });
+
+test("the domain and prediction modules do not know which client wrote a source", async () => {
+  // The whole point of adding a second client is that the core stays client-neutral. These modules
+  // consume domain-shaped values and produce domain-shaped results; if any of them has to name a
+  // client, the adapter seam is in the wrong place and the third client would need the same edit
+  // in the same places.
+  const neutral = [
+    "analytics.js",
+    "beta.js",
+    "calibration.js",
+    "output.js",
+    "prediction.js",
+    "prompt-features.js",
+    "status.js",
+  ];
+  for (const module of neutral) {
+    const source = await readFile(new URL(`../src/${module}`, import.meta.url), "utf8");
+    // Comments are allowed to name a client: explaining that a feature allowlist is shared with
+    // the OpenCode capture plugin is prose about a real version identifier, not a branch. What
+    // must not appear is code that behaves differently depending on which client is configured.
+    const code = source.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/\/\/[^\n]*/gu, "");
+    assert.doesNotMatch(code, /\bopencode\b/iu, `${module} names OpenCode`);
+    assert.doesNotMatch(code, /\bclaude\b/iu, `${module} names Claude Code`);
+  }
+});

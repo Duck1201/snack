@@ -2,9 +2,9 @@ import { Buffer } from "node:buffer";
 import { access, constants, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { readConfig } from "./config.js";
+import { isConfiguredSource, readConfig } from "./config.js";
 import { SnackError } from "./errors.js";
-import { createOpenCodeAdapter } from "./opencode-adapter.js";
+import { createSourceAdapter } from "./source-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { setupJournalFile } from "./setup-journal.js";
@@ -99,7 +99,13 @@ export async function runDoctor(paths, options = {}) {
   if (backupFiles) checks.push(backupFiles);
 
   const sources = Array.isArray(config?.sources) ? config.sources : [];
-  if (sources.some(isConfiguredSource) && options.opencodeConfigFile) {
+  // Only an installation that actually configured OpenCode has any reason to hear about the
+  // OpenCode capture plugin. Telling a Claude-only user their OpenCode plugin is unregistered is
+  // an answer to a question they did not ask.
+  const configuredOpenCode = sources.some(
+    (source) => isConfiguredSource(source) && source.adapter === "opencode",
+  );
+  if (configuredOpenCode && options.opencodeConfigFile) {
     const registration = await inspectPluginRegistration(options.opencodeConfigFile);
     checks.push(
       registration === "compatible"
@@ -122,18 +128,19 @@ export async function runDoctor(paths, options = {}) {
     // question than the one `doctor` exists to answer.
     if (options.source !== undefined && source.alias !== options.source) continue;
     checks.push(planProfileCheck(source, now));
+    const client = source.adapter === "claude" ? "Claude Code" : "OpenCode";
     try {
-      const fingerprint = createOpenCodeAdapter({ databaseFile: source.database }).fingerprint();
+      const fingerprint = createSourceAdapter(source).fingerprint();
       checks.push(
         fingerprint.supported && fingerprint.family === source.fingerprint
-          ? pass(`source_fingerprint:${source.alias}`, "OpenCode schema fingerprint is supported.")
+          ? pass(`source_fingerprint:${source.alias}`, `${client} schema fingerprint is supported.`)
           : fail(
               `source_fingerprint:${source.alias}`,
-              "OpenCode schema fingerprint is unsupported.",
+              `${client} schema fingerprint is unsupported.`,
             ),
       );
     } catch {
-      checks.push(fail(`source_fingerprint:${source.alias}`, "OpenCode source is inaccessible."));
+      checks.push(fail(`source_fingerprint:${source.alias}`, `${client} source is inaccessible.`));
     }
     try {
       const pending = readPendingMappingCount(paths.databaseFile, source);
@@ -403,22 +410,4 @@ function warn(id, message) {
 /** @param {string} id @param {string} message @returns {DoctorCheck} */
 function fail(id, message) {
   return { id, status: "fail", message };
-}
-
-/** @param {unknown} value */
-function isConfiguredSource(value) {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "alias" in value &&
-    typeof value.alias === "string" &&
-    "installation_id" in value &&
-    typeof value.installation_id === "string" &&
-    "provider" in value &&
-    typeof value.provider === "string" &&
-    "database" in value &&
-    typeof value.database === "string" &&
-    "fingerprint" in value &&
-    typeof value.fingerprint === "string"
-  );
 }

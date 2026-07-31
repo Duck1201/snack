@@ -170,7 +170,7 @@ Ingestion owns:
 
 - internal `SourceAdapter` contract;
 - OpenCode SQLite reader and schema fingerprints;
-- Claude Code JSONL reader, hook-event reader, and schema fingerprints (0.7+);
+- Claude Code JSONL reader and schema fingerprints (0.7+);
 - spool-event reader/validator;
 - source observation normalization;
 - source identity/revision reconciliation;
@@ -279,7 +279,6 @@ Commander command
 ```text
 OpenCode plugin -> append-only NDJSON spool
 OpenCode DB     -> read-only SQLite adapter
-Claude hooks    -> same content-free event contract (0.7+)
 Claude JSONL    -> read-only JSONL adapter (0.7+)
 
 snack sync/status
@@ -578,9 +577,11 @@ The adapter fingerprints supported record shapes and Claude Code versions using 
 
 Unknown critical shapes fail closed before canonical writes. Full and incremental reads pass through the same client-neutral observation/reconciliation path used by OpenCode.
 
-### 10.6 Claude Code Hook Path (0.7+)
+### 10.6 Claude Code Hook Path (deferred)
 
-SNACK registers user-scoped command hooks only after a setup dry-run, exact diff, backup, explicit consent, and rollback plan. The integration uses official per-turn lifecycle points:
+Not built. [ADR-0006](./adr/0006-claude-jsonl-backfill-without-hooks.md) defers it: Claude Code writes its JSONL as the session runs and records a refusal there as a structured field, so hooks would deliver a second copy of a signal backfill already has, in exchange for writing into a user-owned settings file. The design below is what returns if that stops being true.
+
+SNACK would register user-scoped command hooks only after a setup dry-run, exact diff, backup, explicit consent, and rollback plan, using official per-turn lifecycle points:
 
 - `UserPromptSubmit` to establish the prompt start and optionally derive allowlisted ephemeral features;
 - `Stop` to record successful terminal completion;
@@ -740,10 +741,9 @@ Performance tests use generated histories up to and beyond 100,000 prompts and i
 
 - temporary SQLite databases across every migration;
 - sanitized OpenCode schema/version fixtures;
-- sanitized Claude JSONL/hook schema-version fixtures (0.7+);
+- sanitized Claude JSONL schema-version fixtures (0.7+);
 - WAL/live-read behavior;
 - plugin spool crash/truncation/rotation;
-- Claude hook setup/failure/rollback and shared event-contract behavior (0.7+);
 - setup diff, backup, rollback, and idempotence;
 - status attempt/delivery/outcome linking;
 - human/JSON semantic parity;
