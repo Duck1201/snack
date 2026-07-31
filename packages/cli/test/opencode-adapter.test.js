@@ -766,3 +766,88 @@ function insertErrorPrompt(databaseFile, index, error) {
     database.close();
   }
 }
+
+test("keeps concurrent sessions separate when grouping assistants by prompt", async () => {
+  const databaseFile = await createFixtureDatabase("supported-v1.sql");
+  // A second session whose messages interleave in time with the fixture session.
+  executeSql(
+    databaseFile,
+    `INSERT INTO session (id, version) VALUES ('session-2', '1.18.9');
+     INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+      (
+        'user-s2',
+        'session-2',
+        1767323045500,
+        1767323045500,
+        '{"role":"user","time":{"created":1767323045500},"agent":"build","model":{"providerID":"anthropic","modelID":"claude-sonnet"}}'
+      ),
+      (
+        'assistant-s2',
+        'session-2',
+        1767323046500,
+        1767323050500,
+        '{"role":"assistant","time":{"created":1767323046500,"completed":1767323050500},"parentID":"user-s2","providerID":"anthropic","modelID":"claude-sonnet","finish":"stop","cost":0.007,"tokens":{"input":700,"output":70,"reasoning":7,"cache":{"read":7,"write":7}}}'
+      );
+     INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+      (
+        'step-finish-s2',
+        'assistant-s2',
+        'session-2',
+        1767323050500,
+        1767323050500,
+        '{"type":"step-finish","reason":"stop","cost":0.007,"tokens":{"input":700,"output":70,"reasoning":7,"cache":{"read":7,"write":7}}}'
+      );`,
+  );
+  const adapter = createOpenCodeAdapter({ databaseFile });
+
+  const result = adapter.readAll();
+
+  // Each prompt keeps only its own session's usage; nothing crosses between sessions.
+  const bySource = new Map(
+    result.observations.map((observation) => [observation.source_prompt_id, observation]),
+  );
+  assert.deepEqual(
+    bySource.get("user-1")?.usage_slices.map((slice) => slice.input_tokens),
+    [100],
+  );
+  assert.deepEqual(
+    bySource.get("user-s2")?.usage_slices.map((slice) => slice.input_tokens),
+    [700],
+  );
+  assert.equal(result.observations.length, 2);
+});
+
+test("ignores an assistant whose parent prompt belongs to another session", async () => {
+  const databaseFile = await createFixtureDatabase("supported-v1.sql");
+  // Malformed history: the assistant lives in session-2 but claims a session-1 parent.
+  executeSql(
+    databaseFile,
+    `INSERT INTO session (id, version) VALUES ('session-2', '1.18.9');
+     INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+      (
+        'assistant-cross',
+        'session-2',
+        1767323047000,
+        1767323051000,
+        '{"role":"assistant","time":{"created":1767323047000,"completed":1767323051000},"parentID":"user-1","providerID":"anthropic","modelID":"claude-sonnet","finish":"stop","cost":0.009,"tokens":{"input":900,"output":90,"reasoning":9,"cache":{"read":9,"write":9}}}'
+      );
+     INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+      (
+        'step-finish-cross',
+        'assistant-cross',
+        'session-2',
+        1767323051000,
+        1767323051000,
+        '{"type":"step-finish","reason":"stop","cost":0.009,"tokens":{"input":900,"output":90,"reasoning":9,"cache":{"read":9,"write":9}}}'
+      );`,
+  );
+  const adapter = createOpenCodeAdapter({ databaseFile });
+
+  const result = adapter.readAll();
+
+  // The cross-session usage must not be attributed to the session-1 prompt.
+  assert.deepEqual(
+    result.observations[0]?.usage_slices.map((slice) => slice.input_tokens),
+    [100],
+  );
+});

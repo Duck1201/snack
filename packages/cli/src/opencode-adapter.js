@@ -309,24 +309,38 @@ function readObservations(database, sessionIds = undefined) {
       externalUsers.push(user);
     }
 
+    // Group by owning prompt once. Scanning every assistant and every ownership entry
+    // per prompt made a full backfill quadratic in the number of prompts.
+    /** @type {Map<string, AssistantRow[]>} */
+    const assistantsByOwner = new Map();
+    for (const assistant of assistants) {
+      if (typeof assistant.parent_id !== "string") continue;
+      const owner = ownerByUser.get(assistant.parent_id);
+      if (owner === undefined) continue;
+      if (usersById.get(owner)?.session_id !== assistant.session_id) continue;
+      const group = assistantsByOwner.get(owner);
+      if (group) group.push(assistant);
+      else assistantsByOwner.set(owner, [assistant]);
+    }
+    /** @type {Map<string, string[]>} */
+    const userIdsByOwner = new Map();
+    for (const [userId, owner] of ownerByUser) {
+      const group = userIdsByOwner.get(owner);
+      if (group) group.push(userId);
+      else userIdsByOwner.set(owner, [userId]);
+    }
+
     const observations = externalUsers.flatMap((user) => {
-      const children = assistants.filter((assistant) => {
-        if (assistant.session_id !== user.session_id || typeof assistant.parent_id !== "string") {
-          return false;
-        }
-        return ownerByUser.get(assistant.parent_id) === user.id;
-      });
+      const children = assistantsByOwner.get(user.id) ?? [];
       const started = numberOrNull(user.json_created) ?? user.time_created;
-      const userRevisions = [...ownerByUser.entries()]
-        .filter(([, owner]) => owner === user.id)
-        .flatMap(([userId]) => {
-          const row = /** @type {{time_updated: number | null} | undefined} */ (
-            readUserRevision.get(userId, userId)
-          );
-          return row?.time_updated === null || row?.time_updated === undefined
-            ? []
-            : [{ timeUpdated: row.time_updated, messageId: userId }];
-        });
+      const userRevisions = (userIdsByOwner.get(user.id) ?? []).flatMap((userId) => {
+        const row = /** @type {{time_updated: number | null} | undefined} */ (
+          readUserRevision.get(userId, userId)
+        );
+        return row?.time_updated === null || row?.time_updated === undefined
+          ? []
+          : [{ timeUpdated: row.time_updated, messageId: userId }];
+      });
       /** @type {Map<string | null, AssistantRow[]>} */
       const byProvider = new Map();
       for (const child of children) {
