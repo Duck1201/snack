@@ -454,8 +454,12 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 5 - Calibratable Prediction
 
 - **Release:** `0.5.0` on npm `next`
-- **Status:** Implemented (2026-07-31); **not released**. The changeset is queued and the
-  registry still holds `0.4.0` as the newest `next` version.
+- **Status:** Complete (2026-07-31). `@snack-ai/cli@0.5.0` is published to `next` with a SLSA
+  provenance attestation; `next` now resolves to it. `@snack-ai/opencode` stays at `0.1.1`
+  because Stage 5 changed nothing in the capture plugin, and the publish workflow skipped it
+  as already present. Verified against the registry rather than the workflow's own status:
+  dist-tags, attestation, and a clean install that applied all seven migrations and ran
+  `doctor` without a failing check.
 - **Effort:** 5 AI-assisted waves
 **Purpose:** Replace the purely heuristic forecast with an explainable learned baseline that can be audited and calibrated.
 

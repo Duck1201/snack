@@ -1,6 +1,6 @@
 # Stage 5 — Calibratable Prediction
 
-Status: implemented, unreleased Release: `0.5.0` on npm `next`
+Status: released Release: `@snack-ai/cli@0.5.0` on npm `next`, published 2026-07-31
 
 Replaces the Stage 2 placeholder estimate with an explainable learned baseline that can be audited
 and calibrated. Product contracts live in `docs/specification.md` §7, §9, §10 and
