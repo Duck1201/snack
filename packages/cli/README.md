@@ -20,10 +20,10 @@ shapes fail closed before canonical writes.
 
 ## Getting started
 
-Requires Node.js 24. Pre-MVP releases publish to the `next` tag:
+Requires Node.js 24. `0.6.0` is the MVP and the default install:
 
 ```bash
-npm install -g @snack-ai/cli@next
+npm install -g @snack-ai/cli
 ```
 
 Run `snack setup opencode` and it walks you through it, discovering your OpenCode database, its

@@ -25,7 +25,7 @@
   "publishConfig": {
     "access": "public",
     "provenance": true,
-    "tag": "next"
+    "tag": "latest"
   },
   "scripts": {
     "test": "node --test"

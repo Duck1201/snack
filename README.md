@@ -39,11 +39,10 @@ and reads no credentials.
 
 ### Install
 
-Requires Node.js 24. Pre-MVP releases publish to the `next` tag, so `@next` is required until
-`0.6.0` becomes the default:
+Requires Node.js 24. `0.6.0` is the MVP and the default install:
 
 ```bash
-npm install -g @snack-ai/cli@next
+npm install -g @snack-ai/cli
 ```
 
 ### Quickstart
@@ -120,11 +119,10 @@ não envia telemetria e não lê credenciais.
 
 ### Instalação
 
-Requer Node.js 24. As versões pré-MVP são publicadas na tag `next`, então `@next` é obrigatório até
-a `0.6.0` virar o padrão:
+Requer Node.js 24. A `0.6.0` é o MVP e a instalação padrão:
 
 ```bash
-npm install -g @snack-ai/cli@next
+npm install -g @snack-ai/cli
 ```
 
 ### Primeiros passos
