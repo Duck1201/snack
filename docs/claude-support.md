@@ -1,6 +1,13 @@
 # Claude Code Support Matrix
 
-Status: cross-platform runtime validation pending.
+Status: complete.
+
+Cross-platform runtime validation passed on Node.js `24.18.1` in
+[CI run 30671328826](https://github.com/Duck1201/snack/actions/runs/30671328826): `npm run check`
+and `npm run pack:smoke` green on `ubuntu-latest`, `macos-latest`, and WSL2/Debian 13, with 348 CLI
+tests. Budgets measured locally at 100,000 prompts: Claude backfill 12.5 s against a 30 s budget,
+`status --no-sync` p95 169 ms against 250 ms over a real history, and the steady-state commands
+surviving a 150 MB heap cap.
 
 SNACK `0.7.x` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
 read-only backfill. There is no live-capture path for Claude Code and no SNACK hook is registered in

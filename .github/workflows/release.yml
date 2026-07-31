@@ -4,9 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type publish-0.6.1 after reviewing the release evidence
+        description: Type publish-0.7.0 after reviewing the release evidence
         required: true
         type: string
+      dist_tag:
+        description: >
+          npm dist-tag to publish under. Post-MVP previews go to next; latest is the channel a plain
+          `npm install` resolves and belongs to the MVP until 1.0. See the npm Channel Policy in
+          PLAN.md.
+        required: true
+        type: choice
+        default: next
+        options:
+          - next
+          - latest
 
 permissions:
   actions: read
@@ -15,7 +26,7 @@ permissions:
 
 jobs:
   publish:
-    if: inputs.confirmation == 'publish-0.6.1' && github.ref == 'refs/heads/main'
+    if: inputs.confirmation == 'publish-0.7.0' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -65,27 +76,37 @@ jobs:
       # the tag already points at that version. Tags other than `latest` are moved by hand; see
       # docs/release/identity.md.
       - name: Publish CLI package
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
         run: |
           version="$(node -p "require('./packages/cli/package.json').version")"
           if npm view "@snack-ai/cli@${version}" version > /dev/null 2>&1; then
             echo "@snack-ai/cli@${version} is already published; skipping." >> "$GITHUB_STEP_SUMMARY"
+            echo "CLI_PUBLISHED=0" >> "$GITHUB_ENV"
           else
-            npm publish --workspace @snack-ai/cli --tag latest --access public --provenance
-            echo "Published @snack-ai/cli@${version} to latest." >> "$GITHUB_STEP_SUMMARY"
+            npm publish --workspace @snack-ai/cli --tag "${DIST_TAG}" --access public --provenance
+            echo "Published @snack-ai/cli@${version} to ${DIST_TAG}." >> "$GITHUB_STEP_SUMMARY"
+            echo "CLI_PUBLISHED=1" >> "$GITHUB_ENV"
           fi
       - name: Publish OpenCode plugin
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
         run: |
           version="$(node -p "require('./packages/opencode/package.json').version")"
           if npm view "@snack-ai/opencode@${version}" version > /dev/null 2>&1; then
             echo "@snack-ai/opencode@${version} is already published; skipping." >> "$GITHUB_STEP_SUMMARY"
+            echo "PLUGIN_PUBLISHED=0" >> "$GITHUB_ENV"
           else
-            npm publish --workspace @snack-ai/opencode --tag latest --access public --provenance
-            echo "Published @snack-ai/opencode@${version} to latest." >> "$GITHUB_STEP_SUMMARY"
+            npm publish --workspace @snack-ai/opencode --tag "${DIST_TAG}" --access public --provenance
+            echo "Published @snack-ai/opencode@${version} to ${DIST_TAG}." >> "$GITHUB_STEP_SUMMARY"
+            echo "PLUGIN_PUBLISHED=1" >> "$GITHUB_ENV"
           fi
-      # A green run must mean both packages are on the registry, at the version this commit
-      # declares, under the tag a default install resolves. Without this, a skipped
-      # or silently ineffective publish still reports success.
+      # A green run must mean both packages are on the registry at the version this commit
+      # declares, and that the tag this run set points at it. Without this, a skipped or silently
+      # ineffective publish still reports success.
       - name: Verify both packages are published
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
         run: |
           cli_version="$(node -p "require('./packages/cli/package.json').version")"
           plugin_version="$(node -p "require('./packages/opencode/package.json').version")"
@@ -108,17 +129,25 @@ jobs:
               failed=1
             fi
           done
-          for package in "@snack-ai/cli:${cli_version}" "@snack-ai/opencode:${plugin_version}"; do
-            name="${package%:*}"
-            expected="${package##*:}"
-            # `latest` only: it is the tag a default install resolves and the tag this workflow
-            # sets, on the publish itself. Any other tag is moved by hand and is not this run's
-            # claim to make.
-            resolved="$(npm view "${name}" dist-tags.latest 2>/dev/null || true)"
+          # Only the tag this run set, and only for a package this run actually published. A
+          # package that was skipped is carrying a previous release's tags, and reasserting them
+          # here would be this run claiming something it did not do. `--tag` on the publish is the
+          # only way this workflow sets a tag; every other tag is moved by hand.
+          for package in "@snack-ai/cli:${cli_version}:${CLI_PUBLISHED}" \
+                         "@snack-ai/opencode:${plugin_version}:${PLUGIN_PUBLISHED}"; do
+            name="${package%%:*}"
+            rest="${package#*:}"
+            expected="${rest%:*}"
+            published="${rest##*:}"
+            if [ "${published}" != "1" ]; then
+              echo "skipped ${name}: not published by this run" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            resolved="$(npm view "${name}" "dist-tags.${DIST_TAG}" 2>/dev/null || true)"
             if [ "${resolved}" = "${expected}" ]; then
-              echo "verified ${name}@latest is ${expected}" >> "$GITHUB_STEP_SUMMARY"
+              echo "verified ${name}@${DIST_TAG} is ${expected}" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::error::${name}@latest resolves to '${resolved}', not ${expected}"
+              echo "::error::${name}@${DIST_TAG} resolves to '${resolved}', not ${expected}"
               failed=1
             fi
           done
