@@ -451,6 +451,12 @@ Responsibilities:
 
 The MVP accepts `opencode`; `claude` is added in 0.7. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
 
+Setup is guided by default and asks only for what it cannot observe. The source database, its schema fingerprint, the providers present in it, any already-configured sources, and the current plugin registration are all discovered. An unsupported fingerprint fails closed before the first question, so nobody is walked through a questionnaire that cannot lead anywhere. The local account or profile alias is deliberately asked rather than discovered: OpenCode does not expose account identity, and SNACK never reads credentials.
+
+The plan label and the plan profile are asked as two separate questions, because the plan a user names and the archetype SNACK holds a prior for are different things. Prospective analysis and plugin registration both default to declining, and a final confirmation precedes any change. Interrupting the questions — `Ctrl+D`, or stdin closing — cancels setup, which exits `0` having changed nothing.
+
+`--non-interactive` requires `--source`, `--provider`, `--profile`, and `--plan`, and reports which are missing. Without a terminal and without `--non-interactive`, setup exits `2` naming the flags rather than waiting on input that will never arrive. Both entry points resolve the same values and then run the identical journal, backup, and rollback path.
+
 ### 12.3 `snack status`
 
 ```text

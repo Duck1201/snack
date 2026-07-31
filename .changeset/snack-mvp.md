@@ -122,3 +122,22 @@ The unused `supported.providers` and `supported.plans` properties are removed fr
 schema. They were never read, and a list of provider brands inside a deliberately brand-free
 artifact contradicts the naming rule; the schema freezes as a public contract at 1.0, so this is the
 last release that can drop them.
+
+`snack setup opencode` is guided by default. It discovers the OpenCode database, its schema
+fingerprint, the providers present in it, any already-configured source, and the current plugin
+registration, then asks only for what it cannot observe. The local account alias is one of those:
+OpenCode does not expose account identity and SNACK never reads credentials, so it is asked rather
+than guessed.
+
+An unsupported fingerprint fails closed before the first question, so nobody is walked through a
+questionnaire that cannot lead anywhere. The plan label and the plan profile are asked separately.
+Prospective analysis and plugin registration both default to declining, and a final confirmation
+precedes any change. Interrupting the questions cancels setup, which exits 0 having changed nothing
+— previously that path did not exist at all, since interactive setup threw
+`interactive_setup_unavailable`.
+
+`--non-interactive` keeps working and now reports which of `--source`, `--provider`, `--profile`,
+and `--plan` are missing instead of failing on the first one. Without a terminal and without
+`--non-interactive`, setup exits 2 naming the flags rather than waiting on input that will never
+arrive. Both entry points resolve the same values and then run the identical journal, backup, and
+rollback path, so idempotency and rollback are covered once for both.

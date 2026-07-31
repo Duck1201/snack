@@ -26,7 +26,11 @@ Requires Node.js 24. Pre-MVP releases publish to the `next` tag:
 npm install -g @snack-ai/cli@next
 ```
 
-Setup is non-interactive in this release, so every value is an explicit flag:
+Run `snack setup opencode` and it walks you through it, discovering your OpenCode database, its
+schema fingerprint, and the providers already present in it, then asking only for what it cannot
+observe. Nothing is written until you confirm, and `Ctrl+D` cancels.
+
+To script it instead, pass every value as a flag:
 
 ```bash
 snack setup opencode --non-interactive \

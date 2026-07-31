@@ -89,6 +89,16 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @property {Date | undefined} [now]
  * @property {string | undefined} [nodeVersion]
  * @property {typeof writePrivateAtomic | undefined} [writeConfig]
+ * @property {SetupPrompt | undefined} [prompt]
+ */
+
+/**
+ * Asks the user one question and resolves to their answer.
+ *
+ * Injected rather than reached for, so command tests can script a terminal that does not
+ * exist. The default implementation is built on `node:readline/promises`.
+ *
+ * @typedef {(question: {id: string, message: string, choices?: {value: string, label: string}[], default?: string}) => Promise<string>} SetupPrompt
  */
 
 /**
@@ -136,10 +146,10 @@ export async function run(argv, options = {}) {
     .command("opencode")
     .description("configure read-only OpenCode history")
     .option("--non-interactive", "require all setup values as flags")
-    .requiredOption("--source <alias>", "capacity-source alias")
-    .requiredOption("--provider <identifier>", "provider identifier")
-    .requiredOption("--profile <alias>", "local account/profile alias")
-    .requiredOption("--plan <identifier>", "how you refer to your plan; a label, not a lookup key")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--provider <identifier>", "provider identifier")
+    .option("--profile <alias>", "local account/profile alias")
+    .option("--plan <identifier>", "how you refer to your plan; a label, not a lookup key")
     .option("--plan-profile <identifier>", "bundled or custom plan profile to use as the prior")
     .option("--dry-run", "validate and show the proposal without mutation")
     .option("--install-plugin", "register @snack-ai/opencode in the global OpenCode configuration")
@@ -147,12 +157,6 @@ export async function run(argv, options = {}) {
     .option("--enable-prospective-analysis", "enable allowlisted ephemeral prompt features")
     .option("--json", "emit one versioned JSON document")
     .action(async function setupOpenCode(commandOptions) {
-      if (commandOptions.nonInteractive !== true) {
-        throw new SnackError("Interactive setup is not available in this release.", {
-          code: ExitCode.usage,
-          reason: "interactive_setup_unavailable",
-        });
-      }
       let recoveredSetupJournal = false;
       const databaseFile = resolveOpenCodeDatabase({
         ...(options.env ? { env: options.env } : {}),
@@ -160,6 +164,8 @@ export async function run(argv, options = {}) {
       });
       const adapter = createOpenCodeAdapter({ databaseFile });
       const fingerprint = adapter.fingerprint();
+      // Fail closed on an unknown schema before anything else, so a guided setup never walks
+      // someone through a questionnaire that cannot lead anywhere.
       if (!fingerprint.supported || fingerprint.family === null) {
         throw new SnackError("The OpenCode database fingerprint is unsupported.", {
           code: ExitCode.unavailable,
@@ -167,9 +173,21 @@ export async function run(argv, options = {}) {
         });
       }
       const dryRun = adapter.readAll();
+      const resolved = await resolveSetupValues({
+        commandOptions,
+        observations: dryRun.observations,
+        existingSources: await readConfiguredSources(paths.configFile),
+        prompt: options.prompt,
+        stdout,
+      });
+      if (resolved === null) {
+        stdout.write("Setup cancelled; nothing was changed.\n");
+        return;
+      }
       if (
-        commandOptions.installPlugin === true &&
-        commandOptions.dryRun !== true &&
+        resolved.installPlugin === true &&
+        resolved.dryRun !== true &&
+        commandOptions.nonInteractive === true &&
         commandOptions.yes !== true
       ) {
         throw new SnackError("Plugin registration requires --yes in non-interactive setup.", {
@@ -179,22 +197,22 @@ export async function run(argv, options = {}) {
       }
       /** @type {{alias: string, installation_id: string, adapter: string, database: string, provider: string, profile: string, plan: string, plan_profile: string, fingerprint: string}} */
       let configuredSource = {
-        alias: commandOptions.source,
+        alias: resolved.source,
         installation_id: randomUUID(),
         adapter: "opencode",
         database: databaseFile,
-        provider: commandOptions.provider,
-        profile: commandOptions.profile,
-        plan: commandOptions.plan,
+        provider: resolved.provider,
+        profile: resolved.profile,
+        plan: resolved.plan,
         // Recorded separately from `plan`, because the plan a user names and the profile SNACK
         // holds a prior for are different things. Defaulting here keeps a free-text plan label
         // from being resolved as a profile id and warning on every later command.
-        plan_profile: commandOptions.planProfile ?? "generic",
+        plan_profile: resolved.planProfile ?? "generic",
         fingerprint: fingerprint.family,
       };
       /** @type {{content: string, change: {target: string, package: string, action: string, prospective_analysis: boolean}} | null} */
       let pluginRegistration = null;
-      if (commandOptions.dryRun !== true) {
+      if (resolved.dryRun !== true) {
         await withStorageOperationLock(paths, async () => {
           recoveredSetupJournal = await recoverSetupJournal(paths);
           await withConfigLock(paths.configFile, async () => {
@@ -283,7 +301,7 @@ export async function run(argv, options = {}) {
             ];
             /** @type {[string, unknown][]} */
             const configUpdates = [["sources", updatedSources]];
-            if (commandOptions.enableProspectiveAnalysis === true) {
+            if (resolved.enableProspectiveAnalysis === true) {
               configUpdates.push(["prospective_analysis.enabled", true]);
             }
             const prepared = await prepareConfigValues(paths.configFile, configUpdates);
@@ -296,7 +314,7 @@ export async function run(argv, options = {}) {
             }
             let registration = null;
             let pluginConfigFile = null;
-            if (commandOptions.installPlugin === true) {
+            if (resolved.installPlugin === true) {
               pluginConfigFile = resolveOpenCodeConfig({
                 ...(options.env ? { env: options.env } : {}),
                 ...(options.home ? { home: options.home } : {}),
@@ -304,7 +322,7 @@ export async function run(argv, options = {}) {
               registration = await preparePluginRegistration(pluginConfigFile, {
                 installation_id: configuredSource.installation_id,
                 spool_directory: paths.spoolDir,
-                prospective_analysis: commandOptions.enableProspectiveAnalysis === true,
+                prospective_analysis: resolved.enableProspectiveAnalysis === true,
                 source_bindings: pluginBindings(
                   updatedSources,
                   configuredSource.installation_id,
@@ -378,7 +396,7 @@ export async function run(argv, options = {}) {
             }
           });
         });
-      } else if (commandOptions.installPlugin === true) {
+      } else if (resolved.installPlugin === true) {
         const configFile = resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
           ...(options.home ? { home: options.home } : {}),
@@ -386,7 +404,7 @@ export async function run(argv, options = {}) {
         pluginRegistration = await preparePluginRegistration(configFile, {
           installation_id: configuredSource.installation_id,
           spool_directory: paths.spoolDir,
-          prospective_analysis: commandOptions.enableProspectiveAnalysis === true,
+          prospective_analysis: resolved.enableProspectiveAnalysis === true,
           source_bindings: [
             {
               provider: configuredSource.provider,
@@ -409,7 +427,7 @@ export async function run(argv, options = {}) {
         fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
         dry_run: {
           observations: dryRun.observations.length,
-          ...(commandOptions.dryRun === true ? { applied: false } : {}),
+          ...(resolved.dryRun === true ? { applied: false } : {}),
         },
         ...(pluginRegistrationChange(pluginRegistration)
           ? { plugin_registration: pluginRegistrationChange(pluginRegistration) }
@@ -420,7 +438,7 @@ export async function run(argv, options = {}) {
         stdout.write(formatJson(createEnvelope("setup opencode", data, { now })));
       } else {
         stdout.write(
-          commandOptions.dryRun === true
+          resolved.dryRun === true
             ? `Validated OpenCode source ${configuredSource.alias}; no changes applied.\n`
             : `Configured OpenCode source ${configuredSource.alias}.\n`,
         );
@@ -1206,6 +1224,187 @@ function formatHumanValue(value) {
   if (typeof value === "string") return `${value}\n`;
   if (value === null || typeof value !== "object") return `${String(value)}\n`;
   return formatJson(value);
+}
+
+/** The bundled plan-profile archetypes a guided setup can offer. */
+const PLAN_PROFILE_CHOICES = [
+  { value: "generic", label: "generic - neutral weighting, no assumption about billing" },
+  {
+    value: "subscription-window",
+    label: "subscription-window - flat subscription; requests and generated volume weigh most",
+  },
+  {
+    value: "metered-credit",
+    label: "metered-credit - billed per token or credit; cumulative volume weighs most",
+  },
+];
+
+/** @param {string} configFile */
+async function readConfiguredSources(configFile) {
+  try {
+    const config = await readConfig(configFile);
+    return (Array.isArray(config.sources) ? config.sources : []).filter(isConfiguredOpenCodeSource);
+  } catch {
+    // A missing or unreadable configuration simply means there is nothing to propose.
+    return [];
+  }
+}
+
+/**
+ * Decide the values setup will apply, from flags or by asking.
+ *
+ * Both paths produce the same shape and then run the identical journal, backup, and rollback
+ * block, because that block is the riskiest code in the command and must not be duplicated.
+ *
+ * @param {{commandOptions: Record<string, unknown>, observations: {provider: string | null, model: string | null}[], existingSources: {alias: string, provider: string, profile: string, plan?: string, plan_profile?: string}[], prompt: SetupPrompt | undefined, stdout: {write(chunk: string): unknown}}} input
+ * @returns {Promise<{source: string, provider: string, profile: string, plan: string, planProfile: string, dryRun: boolean, installPlugin: boolean, enableProspectiveAnalysis: boolean} | null>} null when the user declined
+ */
+async function resolveSetupValues(input) {
+  const { commandOptions } = input;
+  const fromFlags = {
+    dryRun: commandOptions.dryRun === true,
+    installPlugin: commandOptions.installPlugin === true,
+    enableProspectiveAnalysis: commandOptions.enableProspectiveAnalysis === true,
+  };
+
+  if (commandOptions.nonInteractive === true) {
+    const missing = ["source", "provider", "profile", "plan"].filter(
+      (flag) => typeof commandOptions[flag] !== "string",
+    );
+    if (missing.length > 0) {
+      throw new SnackError(
+        `Non-interactive setup requires ${missing.map((flag) => `--${flag}`).join(", ")}.`,
+        { code: ExitCode.usage, reason: "setup_values_required" },
+      );
+    }
+    return {
+      source: String(commandOptions.source),
+      provider: String(commandOptions.provider),
+      profile: String(commandOptions.profile),
+      plan: String(commandOptions.plan),
+      planProfile:
+        typeof commandOptions.planProfile === "string" ? commandOptions.planProfile : "generic",
+      ...fromFlags,
+    };
+  }
+
+  if (input.prompt === undefined) {
+    throw new SnackError(
+      "Guided setup needs a terminal; pass --non-interactive with --source, --provider, --profile, and --plan instead.",
+      { code: ExitCode.usage, reason: "setup_requires_tty" },
+    );
+  }
+  // Pressing Ctrl+D, or having stdin close, rejects the pending question. That is someone
+  // walking away from a questionnaire, not a failure: cancel quietly rather than reporting an
+  // internal error over a setup that changed nothing.
+  const cancelled = Symbol("cancelled");
+  /** @param {Parameters<SetupPrompt>[0]} question */
+  const ask = async (question) => {
+    try {
+      return await /** @type {SetupPrompt} */ (input.prompt)(question);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw cancelled;
+      throw error;
+    }
+  };
+  const existing = input.existingSources[0];
+
+  // Discovered rather than asked. The local account alias is deliberately not in this list:
+  // OpenCode does not expose account identity, and SNACK never reads credentials.
+  const providers = [
+    ...new Set(
+      input.observations.flatMap((observation) =>
+        typeof observation.provider === "string" && observation.provider.length > 0
+          ? [observation.provider]
+          : [],
+      ),
+    ),
+  ].sort();
+
+  try {
+    const source = await ask({
+      id: "alias",
+      message: "Name this capacity source",
+      ...(existing ? { default: existing.alias } : { default: "default" }),
+    });
+    const provider = await ask({
+      id: "provider",
+      message: "Which provider does it map to?",
+      ...(providers.length > 0
+        ? { choices: providers.map((value) => ({ value, label: value })) }
+        : {}),
+      ...(existing
+        ? { default: existing.provider }
+        : providers[0]
+          ? { default: providers[0] }
+          : {}),
+    });
+    const profile = await ask({
+      id: "profile",
+      message: "Name the local account or profile this maps to (SNACK cannot discover it)",
+      default: existing?.profile ?? "default",
+    });
+    const plan = await ask({
+      id: "plan",
+      message: "What do you call your plan? This is a label SNACK records, not a lookup key",
+      default: existing?.plan ?? "default",
+    });
+    const planProfile = await ask({
+      id: "plan_profile",
+      message: "Which billing archetype should the initial prior assume?",
+      choices: PLAN_PROFILE_CHOICES,
+      default: existing?.plan_profile ?? "generic",
+    });
+    const prospective = await ask({
+      id: "prospective_analysis",
+      message:
+        "Analyze unsent prompts locally for size only? Text is never stored, logged, or sent",
+      choices: yesNo,
+      default: "no",
+    });
+    const installPlugin = await ask({
+      id: "install_plugin",
+      message: "Register the OpenCode capture plugin for live capture?",
+      choices: yesNo,
+      default: "no",
+    });
+
+    input.stdout.write(
+      `\nProposed: source ${source} -> ${provider}/${profile}, plan ${plan} ` +
+        `(profile ${planProfile}), prospective analysis ${prospective}, plugin ${installPlugin}.\n`,
+    );
+    const confirmed = await ask({
+      id: "confirm",
+      message: "Apply this?",
+      choices: yesNo,
+      default: "yes",
+    });
+    if (!isYes(confirmed)) return null;
+
+    return {
+      source,
+      provider,
+      profile,
+      plan,
+      planProfile,
+      dryRun: fromFlags.dryRun,
+      installPlugin: isYes(installPlugin),
+      enableProspectiveAnalysis: isYes(prospective),
+    };
+  } catch (error) {
+    if (error === cancelled) return null;
+    throw error;
+  }
+}
+
+const yesNo = [
+  { value: "yes", label: "yes" },
+  { value: "no", label: "no" },
+];
+
+/** @param {string} answer */
+function isYes(answer) {
+  return /^(y|yes)$/iu.test(answer.trim());
 }
 
 /**
