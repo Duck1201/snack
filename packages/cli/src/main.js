@@ -1162,6 +1162,17 @@ function buildSourceStats(input) {
       },
     },
     horizons,
+    pressure: {
+      ...computeSourcePressure({
+        databaseFile: input.databaseFile,
+        source: input.source,
+        planProfile: input.planProfile,
+        horizon: /** @type {string} */ (input.horizons[0]),
+        now: input.now,
+      }),
+      // Trend needs pressure history, which only prediction snapshots will carry.
+      trend: { status: "not_available", reason: "no_pressure_history_yet" },
+    },
     calibration: { status: "not_available", reason: "no_prediction_model_yet" },
   };
 }
@@ -1172,16 +1183,29 @@ function buildSourceStats(input) {
  */
 function renderStats(report, verbose) {
   let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
+  text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); trend ${report.pressure.trend.status}.\n`;
   for (const horizon of report.horizons) {
+    const restrictions = Object.entries(horizon.restrictions_by_class);
+    const tokens = Object.entries(horizon.dimensions)
+      .map(([dimension, value]) => `${dimension} ${"value" in value ? value.value : "unknown"}`)
+      .join(", ");
+    const cost = Object.entries(horizon.cost.by_currency)
+      .map(([currency, amount]) => `${currency} ${amount}`)
+      .join(", ");
     text +=
       `  ${horizon.horizon}: ${horizon.prompts.count} prompts` +
       ` (${horizon.prompts.eligible} eligible, ${horizon.prompts.excluded} excluded);` +
+      ` restrictions ${restrictions.length === 0 ? "none" : restrictions.map(([klass, count]) => `${klass} ${count}`).join(", ")};` +
+      ` tokens ${tokens};` +
+      ` cost ${cost === "" ? "unknown" : cost};` +
+      ` duration ${"p50" in horizon.duration ? `p50 ${horizon.duration.p50}ms p90 ${horizon.duration.p90}ms` : "unknown"};` +
       ` effective sample ${horizon.effective_sample_size.toFixed(2)};` +
       ` as_of ${horizon.freshness.as_of ?? "unknown"}.\n`;
     if (verbose) {
       for (const [dimension, value] of Object.entries(horizon.dimensions)) {
         text += `    ${dimension}: ${"value" in value ? value.value : "unknown"} ${value.unit} (sample ${value.sample_size}, missing ${value.missing}).\n`;
       }
+      text += `    cost: sample ${horizon.cost.sample_size}, missing ${horizon.cost.missing}.\n`;
     }
   }
   return text;

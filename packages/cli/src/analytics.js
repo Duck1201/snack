@@ -305,14 +305,18 @@ function summarizeCost(slices) {
   const totals = new Map();
   let observed = 0;
   for (const slice of slices) {
-    if (slice.cost_decimal === null || slice.currency === null) {
+    if (slice.cost_decimal === null) {
       continue;
     }
+    // A source may report a cost without naming a currency. Dropping it would hide
+    // observed usage, so it is grouped under an explicit unknown currency and never
+    // merged with a named one.
+    const currency = slice.currency ?? "unknown";
     observed += 1;
     const amount = parseDecimal(slice.cost_decimal);
-    const running = totals.get(slice.currency) ?? { scaled: 0n, scale: 0 };
+    const running = totals.get(currency) ?? { scaled: 0n, scale: 0 };
     const scale = Math.max(running.scale, amount.scale);
-    totals.set(slice.currency, {
+    totals.set(currency, {
       scaled:
         rescale(running.scaled, running.scale, scale) + rescale(amount.scaled, amount.scale, scale),
       scale,

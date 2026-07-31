@@ -861,3 +861,39 @@ test("simulation: band boundaries produce a sane alarm rate on stationary usage"
   assert.ok(Math.abs(share("elevated") - 0.15) < 0.03, `elevated fired ${share("elevated")}`);
   assert.ok(Math.abs(share("high") - 0.1) < 0.03, `high fired ${share("high")}`);
 });
+
+test("observed cost without a reported currency is kept under an unknown currency", async () => {
+  const { databaseFile, seed } = await makeSeededDatabase();
+  // OpenCode reports a cost but never a currency, so requiring one would drop the cost.
+  seed([
+    {
+      id: 1,
+      started_at: "2026-01-02T01:00:00.000Z",
+      slices: [{ cost_decimal: "0.003", currency: null }],
+    },
+    {
+      id: 2,
+      started_at: "2026-01-02T01:10:00.000Z",
+      slices: [{ cost_decimal: "0.007", currency: null }],
+    },
+    {
+      id: 3,
+      started_at: "2026-01-02T01:20:00.000Z",
+      slices: [{ cost_decimal: "1.5", currency: "USD" }],
+    },
+  ]);
+  const window = { from: "2026-01-01T22:04:05.000Z", to: "2026-01-02T03:04:05.000Z" };
+
+  const profile = summarizeUsageProfile(readUsageWindowRows(databaseFile, "work", window), [], {
+    horizon: "PT5H",
+    window,
+  });
+
+  // Unknown-currency costs total together but never merge with a named currency.
+  assert.deepEqual(profile.cost, {
+    by_currency: { USD: "1.5", unknown: "0.01" },
+    sample_size: 3,
+    missing: 0,
+    complete: true,
+  });
+});

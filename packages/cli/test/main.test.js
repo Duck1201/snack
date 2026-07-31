@@ -2001,3 +2001,26 @@ test("doctor reports plan profile provenance and flags a stale profile", async (
     "a profile years past its as_of date must warn",
   );
 });
+
+test("concise stats report every field the specification requires", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  const exitCode = await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--horizon", "PT5H"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, 0);
+  const output = fixture.stdout.value;
+  assert.match(output, /PT5H: 1 prompts \(1 eligible, 0 excluded\)/u, "prompt counts");
+  assert.match(output, /restrictions none/u, "restrictions by class");
+  assert.match(output, /input_tokens 100/u, "token dimensions stay separate");
+  assert.match(output, /output_tokens 25/u, "token dimensions stay separate");
+  assert.match(output, /cost unknown 0\.003/u, "observed cost with its currency");
+  assert.match(output, /duration p50 5000ms p90 5000ms/u, "duration percentiles");
+  assert.match(output, /pressure \w+/u, "current pressure");
+  assert.match(output, /as_of 2026-01-02T03:04:10\.000Z/u, "freshness");
+});
