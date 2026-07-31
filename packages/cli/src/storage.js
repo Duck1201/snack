@@ -1075,6 +1075,148 @@ export function readSourceSummary(databaseFile, sourceAlias) {
 }
 
 /**
+ * @typedef {object} OutcomeHistoryRow
+ * @property {number} prompt_execution_id
+ * @property {number} capacity_period_id
+ * @property {string} started_at
+ * @property {"success" | "restricted" | "excluded"} outcome
+ * @property {string | null} size_category Null while the prompt has not been categorized.
+ */
+
+/**
+ * @typedef {object} CategorizationRow
+ * @property {number} prompt_execution_id
+ * @property {string} started_at
+ * @property {number | null} estimated_input_tokens
+ */
+
+/**
+ * Read the input features the size categorization consumes, in chronological order.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {CategorizationRow[]}
+ */
+export function readCategorizationRows(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT id AS prompt_execution_id, started_at, estimated_input_tokens
+         FROM prompt_execution
+         WHERE source_alias = ?
+         ORDER BY started_at ASC, id ASC`,
+      )
+      .all(sourceAlias);
+    return rows.map((row) => {
+      if (
+        typeof row !== "object" ||
+        row === null ||
+        !("prompt_execution_id" in row) ||
+        !("started_at" in row) ||
+        !("estimated_input_tokens" in row)
+      ) {
+        throw new Error("Categorization row is invalid.");
+      }
+      return {
+        prompt_execution_id: Number(row.prompt_execution_id),
+        started_at: String(row.started_at),
+        estimated_input_tokens:
+          row.estimated_input_tokens === null ? null : Number(row.estimated_input_tokens),
+      };
+    });
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Persist derived size categories in one transaction.
+ *
+ * The categories are computed by the prediction modules; storage only writes what it is
+ * given, so the whole chronological suffix stays consistent or none of it is written.
+ *
+ * @param {string} databaseFile
+ * @param {{prompt_execution_id: number, size_category: string, category_policy_version: string, category_baseline_as_of: string | null}[]} rows
+ * @returns {number} rows written
+ */
+export function writeSizeCategories(databaseFile, rows) {
+  if (rows.length === 0) return 0;
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    database.pragma("foreign_keys = ON");
+    const update = database.prepare(
+      `UPDATE prompt_execution
+          SET size_category = @size_category,
+              category_policy_version = @category_policy_version,
+              category_baseline_as_of = @category_baseline_as_of
+        WHERE id = @prompt_execution_id`,
+    );
+    return database.transaction((/** @type {typeof rows} */ batch) =>
+      batch.reduce((written, row) => written + update.run(row).changes, 0),
+    )(rows);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Read the source outcomes of a source's active capacity period.
+ *
+ * Rows come back domain-shaped and unaggregated: decay, cell selection, and evidence
+ * gates belong to the prediction module, not to SQL.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {OutcomeHistoryRow[]}
+ */
+export function readOutcomeRows(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT
+           prompt_execution.id AS prompt_execution_id,
+           prompt_execution.capacity_period_id AS capacity_period_id,
+           prompt_execution.started_at AS started_at,
+           prompt_source_outcome.outcome AS outcome,
+           prompt_execution.size_category AS size_category
+         FROM prompt_execution
+         JOIN capacity_period
+           ON capacity_period.id = prompt_execution.capacity_period_id
+          AND capacity_period.ended_at IS NULL
+         JOIN prompt_source_outcome
+           ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
+         WHERE prompt_execution.source_alias = ?
+         ORDER BY prompt_execution.started_at ASC, prompt_execution.id ASC`,
+      )
+      .all(sourceAlias);
+    return rows.map((row) => {
+      if (
+        typeof row !== "object" ||
+        row === null ||
+        !("prompt_execution_id" in row) ||
+        !("capacity_period_id" in row) ||
+        !("started_at" in row) ||
+        !("outcome" in row) ||
+        !("size_category" in row)
+      ) {
+        throw new Error("Outcome history row is invalid.");
+      }
+      return {
+        prompt_execution_id: Number(row.prompt_execution_id),
+        capacity_period_id: Number(row.capacity_period_id),
+        started_at: String(row.started_at),
+        outcome: /** @type {"success" | "restricted" | "excluded"} */ (String(row.outcome)),
+        size_category: row.size_category === null ? null : String(row.size_category),
+      };
+    });
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * @typedef {object} UsageSliceRow
  * @property {string} source_slice_id
  * @property {string} provider

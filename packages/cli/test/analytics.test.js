@@ -9,6 +9,7 @@ import fc from "fast-check";
 
 import {
   ANALYTICS_POLICY,
+  assignPressureBands,
   computeUsagePressure,
   effectiveSampleSize,
   horizonWindow,
@@ -979,5 +980,75 @@ test("pressure contributors reproduce from the published policy", () => {
       },
     ),
     { numRuns: 200 },
+  );
+});
+
+const bandOrigin = "2026-01-01T00:00:00.000Z";
+const bandWindowSeconds = 3600;
+
+/**
+ * Builds prompts placed in fixed hourly windows counted from the origin.
+ *
+ * @param {number[]} countsPerWindow
+ * @returns {{started_at: string}[]}
+ */
+function promptsInWindows(countsPerWindow) {
+  /** @type {{started_at: string}[]} */
+  const rows = [];
+  for (const [windowIndex, count] of countsPerWindow.entries()) {
+    for (let index = 0; index < count; index += 1) {
+      const offset = (windowIndex * bandWindowSeconds + index) * 1000;
+      rows.push({ started_at: new Date(Date.parse(bandOrigin) + offset).toISOString() });
+    }
+  }
+  return rows;
+}
+
+test("historical pressure bands rank a window against the windows before it", () => {
+  // Six quiet windows establish the baseline, then a burst arrives.
+  const counts = [1, 1, 1, 1, 1, 1, 20];
+  const banded = assignPressureBands(promptsInWindows(counts), {
+    origin: bandOrigin,
+    windowSeconds: bandWindowSeconds,
+  });
+
+  const bandOf = (/** @type {number} */ windowIndex) => {
+    const before = counts.slice(0, windowIndex).reduce((sum, value) => sum + value, 0);
+    return banded[before]?.pressure_band;
+  };
+
+  // The first windows cannot be ranked: fewer baseline windows than the policy requires.
+  assert.equal(bandOf(0), "unknown");
+  assert.equal(bandOf(ANALYTICS_POLICY.pressure_minimum_baseline_windows - 1), "unknown");
+  assert.equal(bandOf(6), "high");
+  assert.equal(
+    banded.length,
+    counts.reduce((sum, value) => sum + value, 0),
+  );
+});
+
+test("a pressure band never depends on prompts that came after it", () => {
+  const counts = [2, 2, 2, 2, 2, 2, 3, 1];
+  const rows = promptsInWindows(counts);
+  const options = { origin: bandOrigin, windowSeconds: bandWindowSeconds };
+
+  const prefix = rows.slice(0, -1);
+  const withFuture = assignPressureBands(rows, options).slice(0, prefix.length);
+  const withoutFuture = assignPressureBands(prefix, options);
+
+  assert.deepEqual(withFuture, withoutFuture);
+});
+
+test("pressure bands are independent of the order rows arrive in", () => {
+  const rows = promptsInWindows([1, 3, 1, 4, 1, 5, 9, 2]);
+  const options = { origin: bandOrigin, windowSeconds: bandWindowSeconds };
+  const shuffled = [...rows].reverse();
+
+  const direct = assignPressureBands(rows, options);
+  const reordered = assignPressureBands(shuffled, options);
+
+  assert.deepEqual(
+    [...reordered].sort((left, right) => left.started_at.localeCompare(right.started_at)),
+    [...direct].sort((left, right) => left.started_at.localeCompare(right.started_at)),
   );
 });

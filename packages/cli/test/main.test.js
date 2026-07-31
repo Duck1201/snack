@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 import { getConfigValue, readConfig } from "../src/config.js";
 import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
-import { classifyRisk } from "../src/status.js";
+import { classifyRisk } from "../src/prediction.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
 
 const privacyCanaries = JSON.parse(
@@ -38,7 +38,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -455,8 +455,41 @@ test("status reports a broad initial estimate with very low evidence", async () 
   );
   const document = JSON.parse(fixture.stdout.value);
 
+  // The interval itself is arithmetic proven at the prediction seam; here the contract is
+  // that it is a bounded, ordered interval carrying its declared coverage target.
+  const { viability, contributors } = document.data;
+  // The decay weight of a 55-second-old observation is arithmetic owned by the prediction
+  // seam; the command contract is that it is a near-undecayed sample folded onto the prior.
+  const weight = contributors.cell.weighted_successes;
+  assert.ok(weight > 0.999 && weight <= 1, `decay weight ${weight}`);
+  assert.equal(contributors.cell.effective_samples, weight);
+  assert.equal(contributors.cell.alpha, contributors.prior.alpha + weight);
+  assert.ok(
+    0 < viability.lower && viability.lower < viability.point && viability.point < viability.upper,
+    `interval out of order: ${JSON.stringify(viability)}`,
+  );
+  assert.ok(viability.upper < 1, `upper ${viability.upper}`);
+  assert.equal(viability.coverage_target, 0.8);
+
   assert.deepEqual(
-    { exitCode, command: document.command, status: document.status, data: document.data },
+    {
+      exitCode,
+      command: document.command,
+      status: document.status,
+      data: {
+        ...document.data,
+        viability: undefined,
+        contributors: {
+          ...contributors,
+          cell: {
+            ...contributors.cell,
+            weighted_successes: undefined,
+            effective_samples: undefined,
+            alpha: undefined,
+          },
+        },
+      },
+    },
     {
       exitCode: 0,
       command: "status",
@@ -475,18 +508,33 @@ test("status reports a broad initial estimate with very low evidence", async () 
             as_of: "2026-01-01",
           },
         },
-        viability: {
-          lower: 0.2666666666666666,
-          point: 0.6666666666666666,
-          upper: 0.95,
-          coverage_target: 0.8,
-        },
+        viability: undefined,
         risk: { label: "high", policy_version: "stage2-risk-v2" },
-        evidence: "very_low",
-        method: { id: "initial-generic", version: "1" },
+        evidence: {
+          level: "very_low",
+          policy_version: "stage5-evidence-v1",
+          gates: [
+            { id: "sample", level: "very_low", limiting: true },
+            { id: "restrictions", level: "low", limiting: false },
+            { id: "relevance", level: "low", limiting: false },
+            { id: "completeness", level: "low", limiting: false },
+          ],
+        },
+        method: { id: "bayesian-pressure-band", version: "1" },
+        model_policy_version: "stage5-prediction-v1",
         contributors: {
-          prior: { alpha: 1, beta: 1 },
-          observed: { successes: 1, restrictions: 0 },
+          backoff_level: "period",
+          cell: {
+            successes: 1,
+            restrictions: 0,
+            excluded: 0,
+            weighted_successes: undefined,
+            weighted_restrictions: 0,
+            effective_samples: undefined,
+            alpha: undefined,
+            beta: 0.5,
+          },
+          prior: { alpha: 0.5, beta: 0.5 },
         },
         pressure: {
           horizon: "PT1H",
@@ -499,12 +547,13 @@ test("status reports a broad initial estimate with very low evidence", async () 
           contributors: [],
         },
         expected_prompt_category: "typical",
+        prospective: null,
         observed: { prompts: 1, successes: 1, restrictions: 0, excluded: 0 },
         freshness: { as_of: "2026-01-02T03:04:10.000Z", age_seconds: 50 },
         completeness: "partial",
         synchronization: { performed: false, status: "not_requested" },
         caveats: [
-          "Initial heuristic; this is not a calibrated probability.",
+          "Sparse history; the weak plan-profile prior still dominates this estimate.",
           "Real provider capacity is unknown.",
           "Usage pressure compares this window with local history; it is not a share of capacity.",
         ],
@@ -1640,9 +1689,12 @@ test("human status includes every required uncertainty field", async () => {
 
   assert.match(
     fixture.stdout.value,
-    /risk high; evidence very_low; method initial-generic@1; pressure unknown; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
+    /risk high; evidence very_low; method bayesian-pressure-band@1; pressure unknown; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
   );
-  assert.match(fixture.stdout.value, /Caveat: Initial heuristic/u);
+  assert.match(
+    fixture.stdout.value,
+    /Caveat: Sparse history; the weak plan-profile prior still dominates/u,
+  );
 });
 
 async function makeRunFixture() {
@@ -2024,4 +2076,143 @@ test("concise stats report every field the specification requires", async () => 
   assert.match(output, /duration p50 5000ms p90 5000ms/u, "duration percentiles");
   assert.match(output, /pressure \w+/u, "current pressure");
   assert.match(output, /as_of 2026-01-02T03:04:10\.000Z/u, "freshness");
+});
+
+test("prospective analysis sizes the next prompt from a file without retaining it", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  const promptFile = join(fixture.root, "prompt.txt");
+  await writeFile(
+    promptFile,
+    `${privacyCanaries.prompt}\n${privacyCanaries.credential}\n${"context line\n".repeat(400)}`,
+    { mode: 0o600 },
+  );
+
+  fixture.stdout.value = "";
+  const exitCode = await run(
+    [
+      "node",
+      "snack",
+      "status",
+      "--source",
+      "personal-anthropic",
+      "--no-sync",
+      "--prompt-file",
+      promptFile,
+      "--json",
+    ],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.equal(document.data.expected_prompt_category, "large");
+  assert.deepEqual(document.data.prospective, {
+    analyzer_version: "snack-input-v1",
+    policy_version: "stage5-category-v1",
+    baseline_kind: "generic",
+    // The OpenCode backfill carries no input features; only the capture plugin does, so
+    // there is no local token baseline to size against yet.
+    baseline_sample: 0,
+  });
+  for (const canary of Object.values(privacyCanaries)) {
+    const pattern = new RegExp(String(canary), "u");
+    assert.doesNotMatch(fixture.stdout.value, pattern);
+    assert.doesNotMatch(fixture.stderr.value, pattern);
+    assert.doesNotMatch(await readTree(fixture.dataHome), pattern);
+  }
+});
+
+test("prospective analysis reads stdin when the prompt file is a dash", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  fixture.stdout.value = "";
+  const exitCode = await run(
+    [
+      "node",
+      "snack",
+      "status",
+      "--source",
+      "personal-anthropic",
+      "--no-sync",
+      "--prompt-file",
+      "-",
+      "--json",
+    ],
+    { ...fixture.options, stdin: ["short question"] },
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.equal(document.data.expected_prompt_category, "small");
+  assert.equal(document.data.prospective.analyzer_version, "snack-input-v1");
+});
+
+test("an unreadable prompt file warns and falls back to a typical prompt", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  const exitCode = await run(
+    [
+      "node",
+      "snack",
+      "status",
+      "--source",
+      "personal-anthropic",
+      "--no-sync",
+      "--prompt-file",
+      join(fixture.root, "absent.txt"),
+      "--json",
+    ],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  // A forecast is still useful without the prospective feature vector; refusing to report
+  // one because a file is missing would be worse than assuming a typical prompt.
+  assert.equal(exitCode, 0);
+  assert.equal(document.data.expected_prompt_category, "typical");
+  assert.equal(document.data.prospective, null);
+  assert.ok(
+    document.warnings.some(
+      (/** @type {{code: string}} */ warning) => warning.code === "prospective_analysis_failed",
+    ),
+    JSON.stringify(document.warnings),
+  );
+});
+
+test("sync assigns a size category to every ingested prompt", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  const database = new Database(fixture.paths.databaseFile, { readonly: true });
+  try {
+    const rows = database
+      .prepare("SELECT size_category, category_policy_version FROM prompt_execution")
+      .all();
+    assert.ok(rows.length > 0);
+    for (const row of rows) {
+      assert.equal(
+        /** @type {{category_policy_version: string}} */ (row).category_policy_version,
+        "stage5-category-v1",
+      );
+      assert.ok(
+        ["small", "typical", "large"].includes(
+          /** @type {{size_category: string}} */ (row).size_category,
+        ),
+        JSON.stringify(row),
+      );
+    }
+  } finally {
+    database.close();
+  }
 });

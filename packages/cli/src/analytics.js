@@ -421,3 +421,52 @@ function summarizeTokenDimension(slices, dimension) {
     ? { status: "unknown", ...shared }
     : { value: observed.reduce((total, value) => total + value, 0), ...shared };
 }
+
+/**
+ * Assign the usage-pressure band that was in force when each prompt started.
+ *
+ * The forecast model needs the band a prompt belonged to, not today's band. Prompts are
+ * bucketed into fixed windows counted from the capacity-period origin — the same discrete
+ * windows the pressure calculation uses — and each window is ranked against the windows
+ * that preceded it only. A window without enough preceding windows stays `unknown`, so a
+ * band never depends on observations that arrived after the prompt it describes.
+ *
+ * @template {{started_at: string}} Row
+ * @param {Row[]} rows
+ * @param {{origin: string, windowSeconds: number}} options
+ * @returns {(Row & {pressure_band: string})[]}
+ */
+export function assignPressureBands(rows, options) {
+  const originMs = Date.parse(options.origin);
+  const windowMs = options.windowSeconds * 1000;
+
+  /** @type {Map<number, number>} */
+  const counts = new Map();
+  const windowOf = (/** @type {Row} */ row) =>
+    Math.floor((Date.parse(row.started_at) - originMs) / windowMs);
+  for (const row of rows) {
+    const index = windowOf(row);
+    counts.set(index, (counts.get(index) ?? 0) + 1);
+  }
+
+  // Rank every populated window against the populated windows before it. An empty window
+  // is absence of observation, not a zero, so it never enters a baseline.
+  const ordered = [...counts.keys()].sort((left, right) => left - right);
+  /** @type {Map<number, string>} */
+  const bands = new Map();
+  /** @type {number[]} */
+  const baseline = [];
+  for (const index of ordered) {
+    const count = counts.get(index) ?? 0;
+    const band =
+      baseline.length >= ANALYTICS_POLICY.pressure_minimum_baseline_windows
+        ? classifyPressureBand(
+            percentileRank(baseline.slice(-ANALYTICS_POLICY.pressure_baseline_windows), count),
+          )
+        : "unknown";
+    bands.set(index, band);
+    baseline.push(count);
+  }
+
+  return rows.map((row) => ({ ...row, pressure_band: bands.get(windowOf(row)) ?? "unknown" }));
+}

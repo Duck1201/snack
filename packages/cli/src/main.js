@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,7 +37,8 @@ import {
   removeAcknowledgedSegments,
   removeFullyConsumedSegments,
 } from "./spool.js";
-import { createInitialStatus } from "./status.js";
+import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
+import { createSourceStatus } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
   ensureCapacityPeriod,
@@ -46,12 +48,15 @@ import {
   readIngestionCursor,
   readPendingSpoolObservations,
   readRestrictionWindowRows,
+  readCategorizationRows,
+  readOutcomeRows,
   readUsageWindowRows,
   readSpoolCursors,
   readSourceSummary,
   rollbackDatabaseInitialization,
   storeObservations,
   withStorageOperationLock,
+  writeSizeCategories,
 } from "./storage.js";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -60,6 +65,7 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @typedef {object} RunOptions
  * @property {{write(chunk: string): unknown}} [stdout]
  * @property {{write(chunk: string): unknown}} [stderr]
+ * @property {AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>} [stdin]
  * @property {NodeJS.ProcessEnv | undefined} [env]
  * @property {NodeJS.Platform | undefined} [platform]
  * @property {string | undefined} [home]
@@ -76,6 +82,7 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 export async function run(argv, options = {}) {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
+  const stdin = options.stdin ?? process.stdin;
   const now = options.now ?? new Date();
   const paths = resolvePaths({ env: options.env, platform: options.platform, home: options.home });
   let configuredJson = false;
@@ -453,6 +460,10 @@ export async function run(argv, options = {}) {
                 mappings,
               })),
             );
+            // Categories are a derived projection over the features just ingested; a late
+            // arrival can move an older prompt, so the whole source is recategorized in
+            // chronological order before any forecast reads it.
+            recategorizeSource(paths.databaseFile, candidate.alias);
           } catch {
             results.push({
               alias: candidate.alias,
@@ -552,9 +563,10 @@ export async function run(argv, options = {}) {
     .description("assess next-prompt viability")
     .option("--source <alias>", "capacity-source alias")
     .option("--no-sync", "use already synchronized observations")
+    .option("--prompt-file <path>", "analyze an unsent prompt from a file, or - for stdin")
     .option("--json", "emit one versioned JSON document")
     .action(async function status(commandOptions) {
-      /** @type {ReturnType<typeof createInitialStatus>[]} */
+      /** @type {ReturnType<typeof createSourceStatus>[]} */
       const statuses = [];
       /** @type {{code: string, message: string}[]} */
       const statusWarnings = [];
@@ -595,6 +607,7 @@ export async function run(argv, options = {}) {
               synchronization = { performed: true, status: "failed" };
             }
           }
+          if (synchronization.performed) recategorizeSource(paths.databaseFile, source.alias);
           const summary = readSourceSummary(paths.databaseFile, source.alias);
           const { profile: planProfile, warnings } = resolvePlanProfile(source);
           statusWarnings.push(...warnings);
@@ -605,21 +618,56 @@ export async function run(argv, options = {}) {
             horizon: primaryHorizon(current),
             now,
           });
-          statuses.push(createInitialStatus(source, summary, now, synchronization, pressure));
+          /** @type {{category: string, prospective: object} | null} */
+          let prospective = null;
+          if (typeof commandOptions.promptFile === "string") {
+            try {
+              prospective = await analyzeProspectivePrompt({
+                promptFile: commandOptions.promptFile,
+                stdin,
+                databaseFile: paths.databaseFile,
+                alias: source.alias,
+              });
+            } catch {
+              // The text is discarded either way; a missing or unreadable file must not
+              // cost the user their forecast, and no part of the error is reported.
+              statusWarnings.push({
+                code: "prospective_analysis_failed",
+                message: "The prompt could not be analyzed; assuming a typical prompt.",
+              });
+            }
+          }
+          statuses.push(
+            createSourceStatus(source, summary, now, synchronization, pressure, {
+              outcomes: readOutcomeRows(paths.databaseFile, source.alias),
+              windowSeconds: parseHorizon(primaryHorizon(current)),
+              ...(prospective
+                ? { category: prospective.category, prospective: prospective.prospective }
+                : {}),
+            }),
+          );
         }
         await removeConsumedPendingSegments(paths, configuredSources);
       });
       const data = statuses.length === 1 ? statuses[0] : { sources: statuses };
+      // A forecast the evidence gates rate `very_low` is reported as degraded health, so a
+      // machine consumer never reads a prior-dominated estimate as a settled result.
+      const uncalibrated = statuses.some((entry) => entry.evidence.level === "very_low");
       if (wantsJson(this, configuredJson)) {
         stdout.write(
           formatJson(
             createEnvelope("status", data, {
-              status: "degraded",
+              status: uncalibrated ? "degraded" : "ok",
               warnings: [
-                {
-                  code: "initial_estimate",
-                  message: "The estimate is an uncalibrated Stage 2 heuristic.",
-                },
+                ...(uncalibrated
+                  ? [
+                      {
+                        code: "very_low_evidence",
+                        message:
+                          "The evidence gates cap this forecast at very low; it is not calibrated.",
+                      },
+                    ]
+                  : []),
                 ...statusWarnings,
               ],
               now,
@@ -629,7 +677,7 @@ export async function run(argv, options = {}) {
       } else {
         for (const status of statuses) {
           stdout.write(
-            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence}; method ${status.method.id}@${status.method.version}; pressure ${status.pressure.band}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
+            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence.level}; method ${status.method.id}@${status.method.version}; pressure ${status.pressure.band}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
           );
           for (const caveat of status.caveats) stdout.write(`Caveat: ${caveat}\n`);
         }
@@ -1039,6 +1087,73 @@ function isConfiguredOpenCodeSource(value) {
  * @param {string} installationId
  * @returns {{mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}
  */
+
+/**
+ * Read an unsent prompt without letting its text reach argv, the log, or storage.
+ *
+ * @param {string} promptFile Path, or `-` for standard input.
+ * @param {AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>} stdin
+ * @returns {Promise<string>}
+ */
+async function readProspectiveText(promptFile, stdin) {
+  if (promptFile !== "-") return readFile(promptFile, "utf8");
+  /** @type {string[]} */
+  const chunks = [];
+  for await (const chunk of stdin) {
+    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+  }
+  return chunks.join("");
+}
+
+/**
+ * Derive the prompt-size category of an unsent prompt against local history.
+ *
+ * The text is held only for the duration of `analyzePromptText`; only the allowlisted
+ * feature vector survives this function, and only its category leaves it.
+ *
+ * @param {{promptFile: string, stdin: AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>, databaseFile: string, alias: string}} input
+ * @returns {Promise<{category: string, prospective: object} | null>}
+ */
+async function analyzeProspectivePrompt(input) {
+  const text = await readProspectiveText(input.promptFile, input.stdin);
+  const features = analyzePromptText(text);
+  const baseline = readCategorizationRows(input.databaseFile, input.alias)
+    .map((row) => row.estimated_input_tokens)
+    .filter((tokens) => tokens !== null);
+  const sized = categorizePromptSize(features, baseline);
+  return {
+    category: sized.category,
+    prospective: {
+      analyzer_version: features.analyzer_version,
+      policy_version: sized.policy_version,
+      baseline_kind: sized.baseline_kind,
+      baseline_sample: sized.baseline_sample,
+    },
+  };
+}
+
+/**
+ * Recompute the derived size categories of a source after ingestion.
+ *
+ * ponytail: recategorizes the whole source on every sync. The chronological suffix from
+ * the earliest changed prompt would be enough; narrow this if the sync budget demands it.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ */
+function recategorizeSource(databaseFile, alias) {
+  const categorized = categorizeHistory(readCategorizationRows(databaseFile, alias));
+  writeSizeCategories(
+    databaseFile,
+    categorized.map((row) => ({
+      prompt_execution_id: row.prompt_execution_id,
+      size_category: row.size_category,
+      category_policy_version: row.category_policy_version,
+      category_baseline_as_of: row.category_baseline_as_of,
+    })),
+  );
+}
+
 /**
  * The first configured horizon drives the pressure shown alongside a forecast.
  *
