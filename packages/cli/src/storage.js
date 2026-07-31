@@ -1034,6 +1034,8 @@ export function readSourceSummary(databaseFile, sourceAlias) {
         `SELECT
            (SELECT started_at FROM capacity_period
             WHERE source_alias = ? AND ended_at IS NULL) AS active_period_started_at,
+           (SELECT id FROM capacity_period
+            WHERE source_alias = ? AND ended_at IS NULL) AS active_period_id,
            COUNT(prompt_execution.id) AS prompts,
            COALESCE(SUM(prompt_source_outcome.outcome = 'success'), 0) AS successes,
            COALESCE(SUM(prompt_source_outcome.outcome = 'restricted'), 0) AS restrictions,
@@ -1047,7 +1049,7 @@ export function readSourceSummary(databaseFile, sourceAlias) {
            ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
          WHERE prompt_execution.source_alias = ?`,
       )
-      .get(sourceAlias, sourceAlias);
+      .get(sourceAlias, sourceAlias, sourceAlias);
     if (
       typeof row !== "object" ||
       row === null ||
@@ -1056,7 +1058,8 @@ export function readSourceSummary(databaseFile, sourceAlias) {
       !("restrictions" in row) ||
       !("excluded" in row) ||
       !("as_of" in row) ||
-      !("active_period_started_at" in row)
+      !("active_period_started_at" in row) ||
+      !("active_period_id" in row)
     ) {
       throw new Error("Source summary is invalid.");
     }
@@ -1068,6 +1071,7 @@ export function readSourceSummary(databaseFile, sourceAlias) {
       as_of: typeof row.as_of === "string" ? row.as_of : null,
       active_period_started_at:
         typeof row.active_period_started_at === "string" ? row.active_period_started_at : null,
+      active_period_id: row.active_period_id === null ? null : Number(row.active_period_id),
     };
   } finally {
     database.close();
@@ -1626,5 +1630,301 @@ async function pathExists(path) {
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
     throw error;
+  }
+}
+
+/**
+ * @typedef {object} PredictionAttempt
+ * @property {string} source_alias
+ * @property {number} capacity_period_id
+ * @property {string} generated_at
+ * @property {string} method_id
+ * @property {string} method_version
+ * @property {string} model_policy_version
+ * @property {string} risk_policy_version
+ * @property {string} evidence_policy_version
+ * @property {string} weight_policy_version
+ * @property {string} analytics_policy_version
+ * @property {string | null} category_policy_version
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ * @property {number} coverage_target
+ * @property {string} risk_label
+ * @property {string} evidence_level
+ * @property {string} expected_size_category
+ * @property {string} backoff_level
+ * @property {string} pressure_band
+ * @property {number | null} pressure_score
+ * @property {string | null} pressure_contributors_json
+ * @property {string} plan_profile_id
+ * @property {string} plan_profile_version
+ * @property {string | null} data_as_of
+ * @property {string} completeness
+ */
+
+/**
+ * Store one immutable prediction attempt.
+ *
+ * @param {string} databaseFile
+ * @param {Record<string, unknown>} attempt
+ * @returns {number} attempt id
+ */
+export function recordPredictionAttempt(databaseFile, attempt) {
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    database.pragma("foreign_keys = ON");
+    const columns = [
+      "source_alias",
+      "capacity_period_id",
+      "generated_at",
+      "method_id",
+      "method_version",
+      "model_policy_version",
+      "risk_policy_version",
+      "evidence_policy_version",
+      "weight_policy_version",
+      "analytics_policy_version",
+      "category_policy_version",
+      "lower",
+      "point",
+      "upper",
+      "coverage_target",
+      "risk_label",
+      "evidence_level",
+      "expected_size_category",
+      "backoff_level",
+      "pressure_band",
+      "pressure_score",
+      "pressure_contributors_json",
+      "plan_profile_id",
+      "plan_profile_version",
+      "data_as_of",
+      "completeness",
+    ];
+    const result = database
+      .prepare(
+        `INSERT INTO prediction_attempt (${columns.join(", ")})
+         VALUES (${columns.map((column) => `@${column}`).join(", ")})`,
+      )
+      .run(Object.fromEntries(columns.map((column) => [column, attempt[column] ?? null])));
+    return Number(result.lastInsertRowid);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Confirm that an attempt reached the user, promoting it to a prediction snapshot.
+ *
+ * @param {string} databaseFile
+ * @param {{prediction_attempt_id: number, delivered_at: string, channel: string, format: string, invocation_id: string}} delivery
+ */
+export function recordPredictionDelivery(databaseFile, delivery) {
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    database.pragma("foreign_keys = ON");
+    database
+      .prepare(
+        `INSERT INTO prediction_delivery
+           (prediction_attempt_id, delivered_at, channel, format, invocation_id)
+         VALUES (@prediction_attempt_id, @delivered_at, @channel, @format, @invocation_id)`,
+      )
+      .run(delivery);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Link a delivered forecast to the outcome that followed it.
+ *
+ * @param {string} databaseFile
+ * @param {{prediction_attempt_id: number, prompt_execution_id: number, linked_at: string, is_primary: boolean, policy_version: string}} evaluation
+ */
+export function linkPredictionEvaluation(databaseFile, evaluation) {
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    database.pragma("foreign_keys = ON");
+    database
+      .prepare(
+        `INSERT INTO prediction_evaluation
+           (prediction_attempt_id, prompt_execution_id, linked_at, is_primary, policy_version)
+         VALUES (@prediction_attempt_id, @prompt_execution_id, @linked_at, @is_primary,
+                 @policy_version)`,
+      )
+      .run({ ...evaluation, is_primary: evaluation.is_primary ? 1 : 0 });
+  } catch (error) {
+    // The unique partial index reports a constraint failure; name what it protects.
+    if (error instanceof Error && /prediction_evaluation_primary_idx|UNIQUE/u.test(error.message)) {
+      throw new SnackError("This outcome already has a primary live forecast.", {
+        code: ExitCode.storage,
+        reason: "primary_forecast_exists",
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Delivered attempts of a source: the prediction snapshots.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {{prediction_attempt_id: number, generated_at: string, delivered_at: string, lower: number, point: number, upper: number, risk_label: string, evidence_level: string, model_policy_version: string, capacity_period_id: number}[]}
+ */
+export function readPredictionSnapshots(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT
+           prediction_attempt.id AS prediction_attempt_id,
+           prediction_attempt.generated_at AS generated_at,
+           prediction_delivery.delivered_at AS delivered_at,
+           prediction_attempt.lower AS lower,
+           prediction_attempt.point AS point,
+           prediction_attempt.upper AS upper,
+           prediction_attempt.risk_label AS risk_label,
+           prediction_attempt.evidence_level AS evidence_level,
+           prediction_attempt.model_policy_version AS model_policy_version,
+           prediction_attempt.capacity_period_id AS capacity_period_id
+         FROM prediction_attempt
+         JOIN prediction_delivery
+           ON prediction_delivery.prediction_attempt_id = prediction_attempt.id
+         WHERE prediction_attempt.source_alias = ?
+         ORDER BY prediction_attempt.generated_at ASC, prediction_attempt.id ASC`,
+      )
+      .all(sourceAlias);
+    return /** @type {ReturnType<typeof readPredictionSnapshots>} */ (
+      /** @type {unknown} */ (rows)
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Attempts of a source, delivered or not. Undelivered ones are diagnostics only.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {number}
+ */
+export function readPredictionAttemptCount(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const row = database
+      .prepare("SELECT COUNT(*) AS attempts FROM prediction_attempt WHERE source_alias = ?")
+      .get(sourceAlias);
+    return Number(/** @type {{attempts: number}} */ (row).attempts);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Attach every unevaluated outcome to the last snapshot delivered before it.
+ *
+ * A prompt that started before any forecast existed stays unevaluated: nothing predicted
+ * it, and attaching it to a later forecast would score that forecast on hindsight.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {string} policyVersion
+ * @returns {number} evaluations created
+ */
+export function linkPrimaryEvaluations(databaseFile, sourceAlias, policyVersion) {
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    database.pragma("foreign_keys = ON");
+    const result = database
+      .prepare(
+        `INSERT INTO prediction_evaluation
+           (prediction_attempt_id, prompt_execution_id, linked_at, is_primary, policy_version)
+         SELECT
+           (SELECT prediction_attempt.id
+              FROM prediction_attempt
+              JOIN prediction_delivery
+                ON prediction_delivery.prediction_attempt_id = prediction_attempt.id
+             WHERE prediction_attempt.source_alias = prompt_execution.source_alias
+               AND prediction_attempt.capacity_period_id = prompt_execution.capacity_period_id
+               AND prediction_attempt.generated_at < prompt_execution.started_at
+             ORDER BY prediction_attempt.generated_at DESC, prediction_attempt.id DESC
+             LIMIT 1),
+           prompt_execution.id,
+           prompt_execution.started_at,
+           1,
+           @policy_version
+         FROM prompt_execution
+         WHERE prompt_execution.source_alias = @source_alias
+           AND NOT EXISTS (
+             SELECT 1 FROM prediction_evaluation
+              WHERE prediction_evaluation.prompt_execution_id = prompt_execution.id
+           )
+           AND EXISTS (
+             SELECT 1
+               FROM prediction_attempt
+               JOIN prediction_delivery
+                 ON prediction_delivery.prediction_attempt_id = prediction_attempt.id
+              WHERE prediction_attempt.source_alias = prompt_execution.source_alias
+                AND prediction_attempt.capacity_period_id = prompt_execution.capacity_period_id
+                AND prediction_attempt.generated_at < prompt_execution.started_at
+           )`,
+      )
+      .run({ source_alias: sourceAlias, policy_version: policyVersion });
+    return Number(result.changes);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * @typedef {object} CalibrationPair
+ * @property {number} prediction_attempt_id
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ * @property {"success" | "restricted" | "excluded"} outcome
+ * @property {string} evidence_level
+ * @property {string} model_policy_version
+ */
+
+/**
+ * Delivered forecasts paired with the outcome that followed them.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {CalibrationPair[]}
+ */
+export function readCalibrationPairs(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT
+           prediction_attempt.id AS prediction_attempt_id,
+           prediction_attempt.lower AS lower,
+           prediction_attempt.point AS point,
+           prediction_attempt.upper AS upper,
+           prediction_attempt.evidence_level AS evidence_level,
+           prediction_attempt.model_policy_version AS model_policy_version,
+           prompt_source_outcome.outcome AS outcome
+         FROM prediction_evaluation
+         JOIN prediction_attempt
+           ON prediction_attempt.id = prediction_evaluation.prediction_attempt_id
+         JOIN prompt_source_outcome
+           ON prompt_source_outcome.prompt_execution_id = prediction_evaluation.prompt_execution_id
+         WHERE prediction_attempt.source_alias = ?
+           AND prediction_evaluation.is_primary = 1
+         ORDER BY prediction_evaluation.linked_at ASC`,
+      )
+      .all(sourceAlias);
+    return /** @type {CalibrationPair[]} */ (/** @type {unknown} */ (rows));
+  } finally {
+    database.close();
   }
 }

@@ -9,6 +9,13 @@ import Database from "better-sqlite3";
 import { resolvePaths } from "../src/paths.js";
 import {
   initializeDatabase,
+  linkPredictionEvaluation,
+  linkPrimaryEvaluations,
+  readCalibrationPairs,
+  readPredictionAttemptCount,
+  readPredictionSnapshots,
+  recordPredictionAttempt,
+  recordPredictionDelivery,
   readCategorizationRows,
   readOutcomeRows,
   writeSizeCategories,
@@ -201,4 +208,174 @@ test("readCategorizationRows exposes the input features and the prompts after a 
       [3, 900],
     ],
   );
+});
+
+/**
+ * @param {Partial<Record<string, unknown>>} [overrides]
+ * @returns {Record<string, unknown>}
+ */
+function attempt(overrides = {}) {
+  return {
+    source_alias: "work",
+    capacity_period_id: 2,
+    generated_at: "2026-01-09T00:00:00.000Z",
+    method_id: "bayesian-pressure-band",
+    method_version: "1",
+    model_policy_version: "stage5-prediction-v1",
+    risk_policy_version: "stage2-risk-v2",
+    evidence_policy_version: "stage5-evidence-v1",
+    weight_policy_version: "stage4-analytics-v1",
+    analytics_policy_version: "stage4-analytics-v1",
+    lower: 0.42,
+    point: 0.71,
+    upper: 0.93,
+    coverage_target: 0.8,
+    risk_label: "high",
+    evidence_level: "low",
+    expected_size_category: "typical",
+    backoff_level: "period",
+    pressure_band: "moderate",
+    pressure_score: 0.55,
+    pressure_contributors_json: '[{"dimension":"prompts","percentile":0.55}]',
+    plan_profile_id: "generic",
+    plan_profile_version: "1.0.0",
+    category_policy_version: "stage5-category-v1",
+    data_as_of: "2026-01-08T00:00:00.000Z",
+    completeness: "partial",
+    ...overrides,
+  };
+}
+
+test("a prediction attempt is stored whole and can never be rewritten", async () => {
+  const { databaseFile } = await makeDatabase();
+
+  const id = recordPredictionAttempt(databaseFile, attempt());
+  assert.ok(Number.isSafeInteger(id) && id > 0);
+
+  const database = new Database(databaseFile);
+  try {
+    assert.throws(
+      () => database.prepare("UPDATE prediction_attempt SET lower = 0.99 WHERE id = ?").run(id),
+      /immutable/iu,
+    );
+    assert.throws(
+      () => database.prepare("DELETE FROM prediction_attempt WHERE id = ?").run(id),
+      /immutable/iu,
+    );
+    const stored = database.prepare("SELECT * FROM prediction_attempt WHERE id = ?").get(id);
+    assert.equal(/** @type {{lower: number}} */ (stored).lower, 0.42);
+    assert.equal(
+      /** @type {{model_policy_version: string}} */ (stored).model_policy_version,
+      "stage5-prediction-v1",
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("only a delivered attempt becomes a prediction snapshot", async () => {
+  const { databaseFile } = await makeDatabase();
+  const delivered = recordPredictionAttempt(databaseFile, attempt());
+  const undelivered = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T01:00:00.000Z" }),
+  );
+
+  recordPredictionDelivery(databaseFile, {
+    prediction_attempt_id: delivered,
+    delivered_at: "2026-01-09T00:00:01.000Z",
+    channel: "stdout",
+    format: "json",
+    invocation_id: "invocation-1",
+  });
+
+  assert.deepEqual(
+    readPredictionSnapshots(databaseFile, "work").map((row) => row.prediction_attempt_id),
+    [delivered],
+  );
+  assert.equal(readPredictionAttemptCount(databaseFile, "work"), 2);
+  assert.ok(undelivered > 0);
+});
+
+test("an outcome accepts one primary live forecast and only a delivered one", async () => {
+  const { databaseFile, seed } = await makeDatabase();
+  seed([{ id: 1, started_at: "2026-01-09T02:00:00.000Z" }]);
+  const first = recordPredictionAttempt(databaseFile, attempt());
+  const second = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T01:00:00.000Z" }),
+  );
+  for (const id of [first, second]) {
+    recordPredictionDelivery(databaseFile, {
+      prediction_attempt_id: id,
+      delivered_at: "2026-01-09T01:30:00.000Z",
+      channel: "stdout",
+      format: "json",
+      invocation_id: `invocation-${id}`,
+    });
+  }
+  const neverDelivered = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T01:45:00.000Z" }),
+  );
+
+  const link = (/** @type {number} */ id, /** @type {boolean} */ primary) =>
+    linkPredictionEvaluation(databaseFile, {
+      prediction_attempt_id: id,
+      prompt_execution_id: 1,
+      linked_at: "2026-01-09T02:00:01.000Z",
+      is_primary: primary,
+      policy_version: "stage5-evaluation-v1",
+    });
+
+  link(first, true);
+  // A second primary forecast for the same outcome would double-count it in calibration.
+  assert.throws(() => link(second, true), /primary/iu);
+  link(second, false);
+  assert.throws(() => link(neverDelivered, false), /delivered/iu);
+});
+
+test("each outcome is evaluated against the last snapshot delivered before it", async () => {
+  const { databaseFile, seed } = await makeDatabase();
+  const stale = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T00:00:00.000Z" }),
+  );
+  const fresh = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T05:00:00.000Z" }),
+  );
+  const later = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T20:00:00.000Z" }),
+  );
+  for (const id of [stale, fresh, later]) {
+    recordPredictionDelivery(databaseFile, {
+      prediction_attempt_id: id,
+      delivered_at: "2026-01-09T05:00:01.000Z",
+      channel: "stdout",
+      format: "json",
+      invocation_id: `invocation-${id}`,
+    });
+  }
+  seed([
+    { id: 1, started_at: "2026-01-09T10:00:00.000Z", outcome: "restricted" },
+    { id: 2, started_at: "2026-01-08T10:00:00.000Z" },
+  ]);
+
+  const linked = linkPrimaryEvaluations(databaseFile, "work", "stage5-evaluation-v1");
+
+  // Prompt 1 follows the 05:00 snapshot. Prompt 2 predates every snapshot, so nothing
+  // forecast it and it is left unevaluated rather than attached to a later forecast.
+  assert.equal(linked, 1);
+  assert.deepEqual(
+    readCalibrationPairs(databaseFile, "work").map((row) => [
+      row.prediction_attempt_id,
+      row.outcome,
+    ]),
+    [[fresh, "restricted"]],
+  );
+
+  // Re-running is idempotent: an outcome already evaluated is not linked twice.
+  assert.equal(linkPrimaryEvaluations(databaseFile, "work", "stage5-evaluation-v1"), 0);
 });

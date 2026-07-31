@@ -29,6 +29,7 @@ import {
   resolveOpenCodeConfig,
   writePluginRegistration,
 } from "./opencode-config.js";
+import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
 import { createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { resolvePlanProfile } from "./plan-profile.js";
@@ -50,6 +51,12 @@ import {
   readRestrictionWindowRows,
   readCategorizationRows,
   readOutcomeRows,
+  linkPrimaryEvaluations,
+  readCalibrationPairs,
+  readPredictionAttemptCount,
+  readPredictionSnapshots,
+  recordPredictionAttempt,
+  recordPredictionDelivery,
   readUsageWindowRows,
   readSpoolCursors,
   readSourceSummary,
@@ -84,6 +91,7 @@ export async function run(argv, options = {}) {
   const stderr = options.stderr ?? process.stderr;
   const stdin = options.stdin ?? process.stdin;
   const now = options.now ?? new Date();
+  const invocationId = randomUUID();
   const paths = resolvePaths({ env: options.env, platform: options.platform, home: options.home });
   let configuredJson = false;
   try {
@@ -464,6 +472,9 @@ export async function run(argv, options = {}) {
             // arrival can move an older prompt, so the whole source is recategorized in
             // chronological order before any forecast reads it.
             recategorizeSource(paths.databaseFile, candidate.alias);
+            // Each new outcome is attached to the forecast that preceded it, so live
+            // calibration compares a prediction with the future it did not know about.
+            linkPrimaryEvaluations(paths.databaseFile, candidate.alias, "stage5-evaluation-v1");
           } catch {
             results.push({
               alias: candidate.alias,
@@ -568,6 +579,8 @@ export async function run(argv, options = {}) {
     .action(async function status(commandOptions) {
       /** @type {ReturnType<typeof createSourceStatus>[]} */
       const statuses = [];
+      /** @type {number[]} */
+      const attemptIds = [];
       /** @type {{code: string, message: string}[]} */
       const statusWarnings = [];
       await withStorageOperationLock(paths, async () => {
@@ -607,7 +620,10 @@ export async function run(argv, options = {}) {
               synchronization = { performed: true, status: "failed" };
             }
           }
-          if (synchronization.performed) recategorizeSource(paths.databaseFile, source.alias);
+          if (synchronization.performed) {
+            recategorizeSource(paths.databaseFile, source.alias);
+            linkPrimaryEvaluations(paths.databaseFile, source.alias, "stage5-evaluation-v1");
+          }
           const summary = readSourceSummary(paths.databaseFile, source.alias);
           const { profile: planProfile, warnings } = resolvePlanProfile(source);
           statusWarnings.push(...warnings);
@@ -637,15 +653,22 @@ export async function run(argv, options = {}) {
               });
             }
           }
-          statuses.push(
-            createSourceStatus(source, summary, now, synchronization, pressure, {
-              outcomes: readOutcomeRows(paths.databaseFile, source.alias),
-              windowSeconds: parseHorizon(primaryHorizon(current)),
-              ...(prospective
-                ? { category: prospective.category, prospective: prospective.prospective }
-                : {}),
-            }),
-          );
+          const sourceStatus = createSourceStatus(source, summary, now, synchronization, pressure, {
+            outcomes: readOutcomeRows(paths.databaseFile, source.alias),
+            windowSeconds: parseHorizon(primaryHorizon(current)),
+            ...(prospective
+              ? { category: prospective.category, prospective: prospective.prospective }
+              : {}),
+          });
+          statuses.push(sourceStatus);
+          if (summary.active_period_id !== null) {
+            attemptIds.push(
+              recordPredictionAttempt(
+                paths.databaseFile,
+                toPredictionAttempt(source.alias, summary.active_period_id, sourceStatus, now),
+              ),
+            );
+          }
         }
         await removeConsumedPendingSegments(paths, configuredSources);
       });
@@ -682,6 +705,12 @@ export async function run(argv, options = {}) {
           for (const caveat of status.caveats) stdout.write(`Caveat: ${caveat}\n`);
         }
       }
+      // Only now, with the bytes written, is an attempt a snapshot the user actually saw.
+      confirmPredictionDelivery(paths.databaseFile, attemptIds, {
+        now,
+        format: wantsJson(this, configuredJson) ? "json" : "human",
+        invocationId: invocationId,
+      });
     });
 
   config
@@ -1089,6 +1118,71 @@ function isConfiguredOpenCodeSource(value) {
  */
 
 /**
+ * Shape a status result as the immutable attempt row that records it.
+ *
+ * Only approved aggregates travel: the pressure contributors keep their dimension and
+ * numbers, never anything derived from prompt content.
+ *
+ * @param {string} alias
+ * @param {number} capacityPeriodId
+ * @param {ReturnType<typeof createSourceStatus>} status
+ * @param {Date} now
+ * @returns {Record<string, unknown>}
+ */
+function toPredictionAttempt(alias, capacityPeriodId, status, now) {
+  return {
+    source_alias: alias,
+    capacity_period_id: capacityPeriodId,
+    generated_at: now.toISOString(),
+    method_id: status.method.id,
+    method_version: status.method.version,
+    model_policy_version: status.model_policy_version,
+    risk_policy_version: status.risk.policy_version,
+    evidence_policy_version: status.evidence.policy_version,
+    weight_policy_version: status.pressure.policy_version,
+    analytics_policy_version: status.pressure.policy_version,
+    category_policy_version:
+      /** @type {{policy_version?: string} | null} */ (status.prospective)?.policy_version ?? null,
+    lower: status.viability.lower,
+    point: status.viability.point,
+    upper: status.viability.upper,
+    coverage_target: status.viability.coverage_target,
+    risk_label: status.risk.label,
+    evidence_level: status.evidence.level,
+    expected_size_category: status.expected_prompt_category,
+    backoff_level: status.contributors.backoff_level,
+    pressure_band: status.pressure.band,
+    pressure_score: /** @type {{score?: number | null}} */ (status.pressure).score ?? null,
+    pressure_contributors_json: JSON.stringify(
+      /** @type {{contributors?: unknown[]}} */ (status.pressure).contributors ?? [],
+    ),
+    plan_profile_id: status.source.plan_profile.id,
+    plan_profile_version: status.source.plan_profile.version,
+    data_as_of: status.freshness.as_of,
+    completeness: status.completeness,
+  };
+}
+
+/**
+ * Confirm that forecasts reached the user, promoting the attempts to snapshots.
+ *
+ * @param {string} databaseFile
+ * @param {number[]} attemptIds
+ * @param {{now: Date, format: string, invocationId: string}} delivery
+ */
+function confirmPredictionDelivery(databaseFile, attemptIds, delivery) {
+  for (const id of attemptIds) {
+    recordPredictionDelivery(databaseFile, {
+      prediction_attempt_id: id,
+      delivered_at: delivery.now.toISOString(),
+      channel: "stdout",
+      format: delivery.format,
+      invocation_id: delivery.invocationId,
+    });
+  }
+}
+
+/**
  * Read an unsent prompt without letting its text reach argv, the log, or storage.
  *
  * @param {string} promptFile Path, or `-` for standard input.
@@ -1288,7 +1382,31 @@ function buildSourceStats(input) {
       // Trend needs pressure history, which only prediction snapshots will carry.
       trend: { status: "not_available", reason: "no_pressure_history_yet" },
     },
-    calibration: { status: "not_available", reason: "no_prediction_model_yet" },
+    calibration: buildCalibrationReport(input.databaseFile, input.source.alias, input.planProfile),
+  };
+}
+
+/**
+ * Report predictive quality from the two streams that must never be mixed: forecasts the
+ * user actually saw, and forecasts replayed from history.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ * @param {import("./plan-profile.js").PlanProfile} planProfile
+ */
+function buildCalibrationReport(databaseFile, alias, planProfile) {
+  const pairs = readCalibrationPairs(databaseFile, alias);
+  const snapshots = readPredictionSnapshots(databaseFile, alias);
+  const replay = backtest(readOutcomeRows(databaseFile, alias), {
+    now: new Date(),
+    prior: { strength: planProfile.prior_strength, viability: 0.5 },
+  });
+  return {
+    policy_version: CALIBRATION_POLICY.version,
+    snapshots: snapshots.length,
+    undelivered_attempts: readPredictionAttemptCount(databaseFile, alias) - snapshots.length,
+    live: summarizeCalibration(pairs),
+    backtest: { ...replay.calibration, forecasts: replay.forecasts },
   };
 }
 
@@ -1343,18 +1461,23 @@ function providerMappings(sources, installationId) {
  * @param {{stdout: {write(chunk: string): unknown}, stderr: {write(chunk: string): unknown}, json: boolean, command: string, message: string, reason: string, exitCode: number, humanDetail?: string, now: Date}} details
  */
 function renderError(details) {
-  if (details.json) {
-    details.stdout.write(
-      formatJson(
-        createEnvelope(details.command, null, {
-          status: "error",
-          errors: [{ code: details.reason, message: details.message }],
-          now: details.now,
-        }),
-      ),
-    );
-  } else {
-    details.stderr.write(details.humanDetail || `Error: ${details.message}\n`);
+  try {
+    if (details.json) {
+      details.stdout.write(
+        formatJson(
+          createEnvelope(details.command, null, {
+            status: "error",
+            errors: [{ code: details.reason, message: details.message }],
+            now: details.now,
+          }),
+        ),
+      );
+    } else {
+      details.stderr.write(details.humanDetail || `Error: ${details.message}\n`);
+    }
+  } catch {
+    // The output stream is already gone — `snack status | head` closes it early. Reporting
+    // the failure is impossible, but the exit code still has to reach the caller.
   }
   return details.exitCode;
 }

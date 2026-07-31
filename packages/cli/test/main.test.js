@@ -38,7 +38,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -2215,4 +2215,148 @@ test("sync assigns a size category to every ingested prompt", async () => {
   } finally {
     database.close();
   }
+});
+
+/**
+ * @param {string} databaseFile
+ * @returns {{attempts: number, deliveries: number, attempt: Record<string, unknown> | undefined}}
+ */
+function readPredictionState(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return {
+      attempts: Number(
+        /** @type {{count: number}} */ (
+          database.prepare("SELECT COUNT(*) AS count FROM prediction_attempt").get()
+        ).count,
+      ),
+      deliveries: Number(
+        /** @type {{count: number}} */ (
+          database.prepare("SELECT COUNT(*) AS count FROM prediction_delivery").get()
+        ).count,
+      ),
+      attempt: /** @type {Record<string, unknown> | undefined} */ (
+        database.prepare("SELECT * FROM prediction_attempt ORDER BY id DESC LIMIT 1").get()
+      ),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+test("a delivered status forecast becomes a prediction snapshot", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  const exitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+  const state = readPredictionState(fixture.paths.databaseFile);
+
+  assert.equal(exitCode, 0);
+  assert.equal(state.attempts, 1);
+  assert.equal(state.deliveries, 1);
+  // The stored attempt reproduces the emitted forecast and names every policy behind it.
+  assert.equal(state.attempt?.lower, document.data.viability.lower);
+  assert.equal(state.attempt?.risk_label, document.data.risk.label);
+  assert.equal(state.attempt?.evidence_level, document.data.evidence.level);
+  assert.equal(state.attempt?.model_policy_version, "stage5-prediction-v1");
+  assert.equal(state.attempt?.evidence_policy_version, "stage5-evidence-v1");
+  assert.equal(state.attempt?.risk_policy_version, "stage2-risk-v2");
+  assert.equal(state.attempt?.analytics_policy_version, "stage4-analytics-v1");
+});
+
+test("a forecast that never reached the user stays an attempt", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  const exitCode = await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    {
+      ...fixture.options,
+      stdout: {
+        write() {
+          throw new Error("stdout is gone");
+        },
+      },
+    },
+  );
+  const state = readPredictionState(fixture.paths.databaseFile);
+
+  // Delivery cannot share a transaction with stdout, so an unconfirmed forecast is
+  // excluded from calibration rather than counted as one the user saw.
+  assert.notEqual(exitCode, 0);
+  assert.equal(state.attempts, 1);
+  assert.equal(state.deliveries, 0);
+});
+
+test("stats separate live snapshot calibration from backtesting", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  assert.equal(
+    await run(
+      ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+      fixture.options,
+    ),
+    0,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  // With one prompt and no forecast that preceded it, both streams must say so instead of
+  // reporting a zero that would read as a perfect score.
+  assert.equal(document.data.calibration.live.status, "not_available");
+  assert.equal(document.data.calibration.live.brier.value, null);
+  assert.equal(document.data.calibration.live.brier.sample_size, 0);
+  assert.equal(document.data.calibration.backtest.status, "not_available");
+  assert.equal(document.data.calibration.backtest.forecasts, 0);
+  assert.equal(document.data.calibration.policy_version, "stage5-calibration-v1");
+  assert.equal(document.data.calibration.snapshots, 0);
+  assert.equal(document.data.calibration.undelivered_attempts, 0);
+});
+
+test("stats report a live Brier score once forecasts precede outcomes", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  // A delivered forecast, then a later prompt that the next sync ingests and evaluates.
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  executeOpenCodeSql(
+    fixture.options.env.OPENCODE_DB,
+    insertOpenCodePrompt("later-1", Date.parse("2026-01-02T04:00:00.000Z")),
+  );
+  fixture.options.now = new Date("2026-01-02T05:00:00.000Z");
+  await run(["node", "snack", "sync", "--source", "personal-anthropic", "--json"], fixture.options);
+
+  fixture.stdout.value = "";
+  assert.equal(
+    await run(
+      ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+      fixture.options,
+    ),
+    0,
+  );
+  const { calibration } = JSON.parse(fixture.stdout.value).data;
+
+  assert.equal(calibration.snapshots, 1);
+  assert.equal(calibration.live.status, "ok");
+  assert.equal(calibration.live.brier.sample_size, 1);
+  assert.ok(calibration.live.brier.value >= 0 && calibration.live.brier.value <= 1);
+  assert.equal(calibration.live.reliability.length, 1);
+  assert.equal(calibration.live.reliability[0].sample_size, 1);
 });
