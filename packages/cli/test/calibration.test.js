@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "../src/calibration.js";
+import { buildForecast } from "../src/prediction.js";
 
 /**
  * @param {number} point
@@ -166,4 +167,69 @@ test("no observation after a prompt can change the forecast made for it", () => 
   const withFuture = backtest(late, backtestOptions);
 
   assert.deepEqual(withFuture.scored.slice(0, withoutFuture.scored.length), withoutFuture.scored);
+});
+
+test("backtesting a long history stays linear in the number of prompts", () => {
+  const short = series(
+    Array.from({ length: 400 }, (_u, index) => (index % 40 === 0 ? "restricted" : "success")),
+  );
+  const long = series(
+    Array.from({ length: 1600 }, (_u, index) => (index % 40 === 0 ? "restricted" : "success")),
+  );
+
+  const time = (/** @type {import("../src/prediction.js").OutcomeRow[]} */ rows) => {
+    const startedAt = process.hrtime.bigint();
+    backtest(rows, backtestOptions);
+    return Number(process.hrtime.bigint() - startedAt) / 1e6;
+  };
+
+  time(short);
+  const shortMs = Math.max(time(short), 1);
+  const longMs = time(long);
+
+  // Four times the history must not cost sixteen times the work; a quadratic replay would.
+  assert.ok(
+    longMs / shortMs < 8,
+    `400 prompts ${shortMs.toFixed(1)}ms, 1600 prompts ${longMs.toFixed(1)}ms`,
+  );
+});
+
+test("the incremental replay scores exactly what a full recomputation would", () => {
+  const rows = series(
+    Array.from({ length: 60 }, (_u, index) => (index % 7 === 0 ? "restricted" : "success")),
+  );
+
+  const replay = backtest(rows, backtestOptions);
+  const naive = rows.slice(CALIBRATION_POLICY.minimum_backtest_history).map((row, offset) => {
+    const index = offset + CALIBRATION_POLICY.minimum_backtest_history;
+    const forecast = buildForecast({
+      now: new Date(Date.parse(row.started_at)),
+      prior: backtestOptions.prior,
+      expectedBand: row.pressure_band ?? "unknown",
+      expectedCategory: row.size_category ?? "typical",
+      outcomes: rows.slice(0, index),
+      dataCompleteness: "unknown",
+    });
+    return {
+      lower: forecast.viability.lower,
+      point: forecast.viability.point,
+      upper: forecast.viability.upper,
+      outcome: row.outcome,
+    };
+  });
+
+  // The replay accumulates decayed weights and re-anchors them; the recomputation sums the
+  // whole prefix each time. The two are the same quantity in a different summation order,
+  // so they agree to floating-point reassociation error, not bit for bit.
+  assert.equal(replay.scored.length, naive.length);
+  for (const [index, expected] of naive.entries()) {
+    const actual = replay.scored[index];
+    assert.equal(actual?.outcome, expected.outcome);
+    for (const field of /** @type {const} */ (["lower", "point", "upper"])) {
+      assert.ok(
+        Math.abs((actual?.[field] ?? Number.NaN) - expected[field]) < 1e-12,
+        `forecast ${index} ${field}: ${actual?.[field]} vs ${expected[field]}`,
+      );
+    }
+  }
 });

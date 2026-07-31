@@ -2,9 +2,6 @@ import { assignPressureBands } from "./analytics.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { buildForecast } from "./prediction.js";
 
-/** Viability the weak prior assumes before any local observation. */
-const PRIOR_VIABILITY = 0.5;
-
 /**
  * Assemble the status document for one capacity source.
  *
@@ -16,7 +13,7 @@ const PRIOR_VIABILITY = 0.5;
  * @param {Date} now
  * @param {{performed: boolean, status: string}} [synchronization]
  * @param {{band: string, policy_version: string}} [pressure] usage pressure for the primary horizon
- * @param {{outcomes?: import("./prediction.js").OutcomeRow[], windowSeconds?: number, category?: string, prospective?: object}} [history]
+ * @param {{outcomes?: import("./prediction.js").OutcomeRow[], windowSeconds?: number, category?: string, prospective?: object, completeness?: {level: "complete" | "partial" | "unknown", reasons: string[], policy_version: string}}} [history]
  */
 export function createSourceStatus(
   source,
@@ -37,14 +34,18 @@ export function createSourceStatus(
       : (history.outcomes ?? []);
 
   const expectedCategory = history.category ?? "typical";
+  const completeness = history.completeness ?? {
+    level: /** @type {"unknown"} */ ("unknown"),
+    reasons: ["never_synchronized"],
+    policy_version: "stage5-evidence-v1",
+  };
   const forecast = buildForecast({
     now,
-    prior: { strength: planProfile.prior_strength, viability: PRIOR_VIABILITY },
+    prior: { strength: planProfile.prior_strength, viability: planProfile.prior_viability },
     expectedBand: pressure.band,
     expectedCategory,
     outcomes,
-    // Ingestion completeness is not yet reported per source; unknown caps evidence at low.
-    dataCompleteness: "unknown",
+    dataCompleteness: completeness.level,
   });
 
   return {
@@ -77,7 +78,7 @@ export function createSourceStatus(
       excluded: observed.excluded,
     },
     freshness: { as_of: asOf, age_seconds: ageSeconds },
-    completeness: "partial",
+    completeness,
     synchronization,
     caveats: [
       forecast.contributors.backoff_level === "period_band_category"

@@ -38,6 +38,7 @@ import {
   removeAcknowledgedSegments,
   removeFullyConsumedSegments,
 } from "./spool.js";
+import { classifyIngestionCompleteness } from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
 import { createSourceStatus } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
@@ -59,6 +60,8 @@ import {
   recordPredictionDelivery,
   readUsageWindowRows,
   readSpoolCursors,
+  readSpoolIssueCount,
+  readPendingMappingCount,
   readSourceSummary,
   rollbackDatabaseInitialization,
   storeObservations,
@@ -656,6 +659,13 @@ export async function run(argv, options = {}) {
           const sourceStatus = createSourceStatus(source, summary, now, synchronization, pressure, {
             outcomes: readOutcomeRows(paths.databaseFile, source.alias),
             windowSeconds: parseHorizon(primaryHorizon(current)),
+            completeness: classifyIngestionCompleteness({
+              synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
+              issues: readSpoolIssueCount(paths.databaseFile, source.alias),
+              pendingMappings: readPendingMappingCount(paths.databaseFile, source),
+              pendingSpoolObservations: readPendingSpoolObservations(paths.databaseFile, source)
+                .length,
+            }),
             ...(prospective
               ? { category: prospective.category, prospective: prospective.prospective }
               : {}),
@@ -1159,7 +1169,7 @@ function toPredictionAttempt(alias, capacityPeriodId, status, now) {
     plan_profile_id: status.source.plan_profile.id,
     plan_profile_version: status.source.plan_profile.version,
     data_as_of: status.freshness.as_of,
-    completeness: status.completeness,
+    completeness: status.completeness.level,
   };
 }
 
@@ -1399,7 +1409,7 @@ function buildCalibrationReport(databaseFile, alias, planProfile) {
   const snapshots = readPredictionSnapshots(databaseFile, alias);
   const replay = backtest(readOutcomeRows(databaseFile, alias), {
     now: new Date(),
-    prior: { strength: planProfile.prior_strength, viability: 0.5 },
+    prior: { strength: planProfile.prior_strength, viability: planProfile.prior_viability },
   });
   return {
     policy_version: CALIBRATION_POLICY.version,

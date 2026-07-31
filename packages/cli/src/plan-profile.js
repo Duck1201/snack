@@ -16,12 +16,20 @@ const ajv = new Ajv2020.default({ allErrors: true, strict: true });
 const validate = ajv.compile(schema);
 
 /**
+ * Viability assumed when a profile declares none. It is deliberately uninformative: SNACK
+ * does not know a provider's real behaviour, and one observed outcome already outweighs it
+ * at the bundled prior strength.
+ */
+const NEUTRAL_PRIOR_VIABILITY = 0.5;
+
+/**
  * @typedef {object} PlanProfile
  * @property {string} id
  * @property {string} version
  * @property {string} as_of
  * @property {"bundled" | "user-defined"} provenance
  * @property {number} prior_strength
+ * @property {number} prior_viability
  * @property {Record<string, number>} weights
  */
 
@@ -83,5 +91,8 @@ function parseProfile(contents) {
   if (!validate(parsed)) {
     throw new Error(ajv.errorsText(validate.errors, { dataVar: "profile" }));
   }
-  return /** @type {PlanProfile} */ (parsed);
+  // A profile that says nothing about how viable prompts are gets the neutral assumption:
+  // claiming anything else on the user's behalf would be an invented plan limit.
+  const profile = /** @type {PlanProfile} */ (parsed);
+  return { ...profile, prior_viability: profile.prior_viability ?? NEUTRAL_PRIOR_VIABILITY };
 }

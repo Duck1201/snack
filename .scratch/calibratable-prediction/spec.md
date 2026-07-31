@@ -65,14 +65,30 @@ that is stated in the test.
   recategorization inside the 2 s sync budget. A property test asserts the indexed and naive paths
   agree exactly.
 
+## Resolved after the stage closed
+
+- **Prior viability is declared, not hidden.** `plan_profile.schema.json` accepts `prior_viability`,
+  the bundled generic profile states `0.5` explicitly, and a profile that omits it inherits the same
+  neutral default in `plan-profile.js`. The forecast no longer carries a constant of its own.
+- **Ingestion completeness is measured.** `classifyIngestionCompleteness` reads the committed
+  cursor, rejected observations, unmapped providers, and withheld live events, and reports
+  `complete`, `partial`, or `unknown` with the reasons behind it. A clean backfill now reaches the
+  top of the evidence ladder instead of being capped at `low`, and `status.completeness` is an
+  object carrying those reasons rather than the string `partial`.
+- **Backtesting is linear.** Each backoff level keeps decayed counts anchored at a point in time;
+  advancing the clock multiplies every weight by one shared factor, so a step is O(1) instead of
+  re-weighting the whole prefix. `chooseCell` and `assembleForecast` are shared with the live
+  forecast, so the replay applies the same policy rather than a copy of it, and a test asserts the
+  incremental and full recomputation agree to floating-point reassociation error.
+- **Evaluation timing was a false alarm.** Outcomes are linked on every synchronization, and
+  `status` synchronizes by default, so a forecast is evaluated as soon as the prompt that followed
+  it is ingested. `--no-sync` ingests nothing, so there is nothing left unlinked, and `stats` stays
+  read-only by design. Covered by a test that never calls `snack sync`.
+
 ## Open items
 
-- `PRIOR_VIABILITY` is fixed at 0.5 in `status.js`. Plan profiles declare `prior_strength` but no
-  prior viability; a profile-declared value would be more honest than a constant.
-- `dataCompleteness` is hard-coded to `unknown`, which caps evidence at `low` regardless of
-  ingestion health. Wiring real per-source completeness would let evidence reach `moderate` and
-  `high` in practice.
-- Live calibration only links outcomes during `sync`. A user who never syncs after a forecast keeps
-  an unevaluated snapshot indefinitely.
-- Backtesting rebuilds each forecast from the whole prefix; it is offline-only today. 5,000 prompts
-  take about 3.5 s, so a full 100,000-prompt backtest is not yet practical.
+- The evidence gates' thresholds (`sample_thresholds`, `restriction_thresholds`) are reasoned but
+  not simulated the way the interval and decay constants are. They deserve the same treatment before
+  the MVP claims them as calibrated.
+- A full 100,000-prompt backtest is now tractable but still unmeasured end to end; the performance
+  suite exercises 5,000.

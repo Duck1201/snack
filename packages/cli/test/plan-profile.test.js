@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 
 import { parseAndValidateConfig } from "../src/config.js";
 import { resolvePaths } from "../src/paths.js";
+import { resolvePlanProfile } from "../src/plan-profile.js";
 import { ensureCapacityPeriod, initializeDatabase } from "../src/storage.js";
 
 /** @type {string[]} */
@@ -55,9 +56,9 @@ function readPeriods(databaseFile) {
   }
 }
 
-/** @param {Partial<{plan: string}>} [overrides] */
+/** @param {Partial<{plan: string, plan_profile: string}>} [overrides] */
 function makeSource(overrides = {}) {
-  return {
+  return /** @type {{alias: string, installation_id: string, adapter: string, provider: string, profile: string, plan: string, fingerprint: string, plan_profile?: string}} */ ({
     alias: "work",
     installation_id: "11111111-1111-4111-8111-111111111111",
     adapter: "opencode",
@@ -66,7 +67,7 @@ function makeSource(overrides = {}) {
     plan: "pro",
     fingerprint: "oc-sqlite-msgpart-v1",
     ...overrides,
-  };
+  });
 }
 
 test("a source may select a plan profile explicitly", () => {
@@ -161,4 +162,60 @@ test("a bundled plan profile version bump keeps the active capacity period", asy
       ended_at: null,
     },
   ]);
+});
+
+test("a plan profile declares the viability its prior assumes", async () => {
+  const { profile } = resolvePlanProfile(makeSource({ plan: "generic" }));
+
+  // The prior is a plan assumption, not a hidden constant in the forecast code.
+  assert.equal(profile.prior_viability, 0.5);
+  assert.equal(profile.prior_strength, 1);
+});
+
+test("a plan profile that omits the prior viability keeps the neutral default", async () => {
+  const root = await mkdtemp(join(tmpdir(), "snack-plan-profile-"));
+  temporaryRoots.push(root);
+  const file = join(root, "custom.json");
+  await writeFile(
+    file,
+    JSON.stringify({
+      schema_version: 1,
+      id: "custom",
+      version: "1.0.0",
+      as_of: "2026-01-01",
+      provenance: "user-defined",
+      prior_strength: 4,
+      weights: { prompts: 1 },
+    }),
+    { mode: 0o600 },
+  );
+
+  const { profile } = resolvePlanProfile(makeSource({ plan: "custom", plan_profile: file }));
+
+  assert.equal(profile.prior_viability, 0.5);
+  assert.equal(profile.prior_strength, 4);
+});
+
+test("a plan profile may declare a different prior viability", async () => {
+  const root = await mkdtemp(join(tmpdir(), "snack-plan-profile-"));
+  temporaryRoots.push(root);
+  const file = join(root, "optimistic.json");
+  await writeFile(
+    file,
+    JSON.stringify({
+      schema_version: 1,
+      id: "optimistic",
+      version: "1.0.0",
+      as_of: "2026-01-01",
+      provenance: "user-defined",
+      prior_strength: 2,
+      prior_viability: 0.9,
+      weights: { prompts: 1 },
+    }),
+    { mode: 0o600 },
+  );
+
+  const { profile } = resolvePlanProfile(makeSource({ plan: "optimistic", plan_profile: file }));
+
+  assert.equal(profile.prior_viability, 0.9);
 });

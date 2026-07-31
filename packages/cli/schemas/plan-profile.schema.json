@@ -29,6 +29,7 @@
       }
     },
     "prior_strength": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+    "prior_viability": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
     "weights": {
       "type": "object",
       "additionalProperties": false,

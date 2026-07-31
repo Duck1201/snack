@@ -517,7 +517,7 @@ test("status reports a broad initial estimate with very low evidence", async () 
             { id: "sample", level: "very_low", limiting: true },
             { id: "restrictions", level: "low", limiting: false },
             { id: "relevance", level: "low", limiting: false },
-            { id: "completeness", level: "low", limiting: false },
+            { id: "completeness", level: "high", limiting: false },
           ],
         },
         method: { id: "bayesian-pressure-band", version: "1" },
@@ -550,7 +550,7 @@ test("status reports a broad initial estimate with very low evidence", async () 
         prospective: null,
         observed: { prompts: 1, successes: 1, restrictions: 0, excluded: 0 },
         freshness: { as_of: "2026-01-02T03:04:10.000Z", age_seconds: 50 },
-        completeness: "partial",
+        completeness: { level: "complete", reasons: [], policy_version: "stage5-evidence-v1" },
         synchronization: { performed: false, status: "not_requested" },
         caveats: [
           "Sparse history; the weak plan-profile prior still dominates this estimate.",
@@ -2465,4 +2465,99 @@ test("prediction attempts, deliveries, and evaluations retain no prompt content"
     assert.doesNotMatch(fixture.stdout.value, pattern);
     assert.doesNotMatch(await readTree(fixture.dataHome), pattern);
   }
+});
+
+test("status reports real ingestion completeness instead of assuming the worst", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  // A clean backfill with a committed cursor and nothing rejected is complete, and the
+  // completeness gate stops being the thing that caps evidence.
+  assert.deepEqual(document.data.completeness, {
+    level: "complete",
+    reasons: [],
+    policy_version: "stage5-evidence-v1",
+  });
+  const completenessGate = document.data.evidence.gates.find(
+    (/** @type {{id: string}} */ gate) => gate.id === "completeness",
+  );
+  assert.equal(completenessGate.level, "high");
+  assert.equal(completenessGate.limiting, false);
+});
+
+test("a source that was never synchronized reports unknown completeness", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(document.data.completeness.level, "unknown");
+  assert.deepEqual(document.data.completeness.reasons, ["never_synchronized"]);
+});
+
+test("a forecast is evaluated even when the user never syncs again", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--no-sync", "--json"],
+    fixture.options,
+  );
+
+  // A later prompt arrives and status picks it up through its own incremental sync; the
+  // evaluation must not wait for a separate `snack sync` invocation.
+  executeOpenCodeSql(
+    fixture.options.env.OPENCODE_DB,
+    insertOpenCodePrompt("evaluated-1", Date.parse("2026-01-02T04:00:00.000Z")),
+  );
+  fixture.options.now = new Date("2026-01-02T05:00:00.000Z");
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  const { calibration } = JSON.parse(fixture.stdout.value).data;
+
+  assert.equal(calibration.live.brier.sample_size, 1);
+  assert.equal(calibration.live.status, "ok");
 });

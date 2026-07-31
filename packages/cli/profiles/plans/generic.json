@@ -5,6 +5,7 @@
   "as_of": "2026-01-01",
   "provenance": "bundled",
   "prior_strength": 1,
+  "prior_viability": 0.5,
   "weights": {
     "prompts": 1,
     "input_tokens": 1,

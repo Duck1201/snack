@@ -94,6 +94,44 @@ export const EVIDENCE_POLICY = Object.freeze({
  */
 
 /**
+ * @typedef {object} IngestionSignals
+ * @property {boolean} synchronized Whether the source has ever committed an ingestion cursor.
+ * @property {number} issues Observations rejected during ingestion.
+ * @property {number} pendingMappings Observations waiting for a provider mapping.
+ * @property {number} pendingSpoolObservations Live events held back by an unknown mapping.
+ */
+
+/**
+ * Judge how complete a source's observations are, for the evidence gate.
+ *
+ * A source that has never synchronized is `unknown` rather than incomplete: nothing is
+ * known about what is missing. Anything held back or rejected makes it `partial`, because
+ * the history the model reads is provably not the history that happened.
+ *
+ * @param {IngestionSignals} signals
+ * @returns {{level: "complete" | "partial" | "unknown", reasons: string[], policy_version: string}}
+ */
+export function classifyIngestionCompleteness(signals) {
+  if (!signals.synchronized) {
+    return {
+      level: "unknown",
+      reasons: ["never_synchronized"],
+      policy_version: EVIDENCE_POLICY.version,
+    };
+  }
+  const reasons = [
+    ...(signals.issues > 0 ? ["rejected_observations"] : []),
+    ...(signals.pendingMappings > 0 ? ["unmapped_providers"] : []),
+    ...(signals.pendingSpoolObservations > 0 ? ["withheld_live_events"] : []),
+  ];
+  return {
+    level: reasons.length === 0 ? "complete" : "partial",
+    reasons,
+    policy_version: EVIDENCE_POLICY.version,
+  };
+}
+
+/**
  * Risk label for a forecast.
  *
  * The label is derived from the lower bound of the interval, never from the point
@@ -163,6 +201,40 @@ function summarizeCell(rows, now, halfLifeSeconds) {
 }
 
 /**
+ * Pick the most specific level that carries enough evidence.
+ *
+ * Candidates arrive most specific first. A level below the minimum still beats the prior
+ * alone, because discarding an observation would misstate the history; only a period with
+ * no eligible outcome at all falls back to the weak prior.
+ *
+ * @param {{level: string, cell: ForecastCell}[]} candidates
+ * @param {typeof PREDICTION_POLICY} policy
+ * @returns {{level: string, cell: ForecastCell}}
+ */
+export function chooseCell(candidates, policy) {
+  for (const candidate of candidates) {
+    if (candidate.cell.effective_samples >= policy.minimum_cell_samples) return candidate;
+  }
+  const widest = candidates.at(-1);
+  if (widest && widest.cell.effective_samples > 0) return widest;
+  return { level: "prior", cell: emptyCell() };
+}
+
+/** @returns {ForecastCell} */
+function emptyCell() {
+  return {
+    successes: 0,
+    restrictions: 0,
+    excluded: 0,
+    weighted_successes: 0,
+    weighted_restrictions: 0,
+    effective_samples: 0,
+    alpha: 0,
+    beta: 0,
+  };
+}
+
+/**
  * Walks the hierarchical backoff until a level carries enough evidence.
  *
  * The order is fixed: capacity period + pressure band + size category, then period +
@@ -180,27 +252,17 @@ function selectCell(input, policy) {
     () => true,
   ];
 
-  /** @type {{level: string, cell: ForecastCell} | null} */
-  let widest = null;
-  for (const [index, matches] of matchers.entries()) {
-    const cell = summarizeCell(
-      input.outcomes.filter(matches),
-      input.now,
-      policy.decay_half_life_seconds,
-    );
-    widest = { level: policy.backoff_levels[index] ?? "prior", cell };
-    if (cell.effective_samples >= policy.minimum_cell_samples) return widest;
-  }
-
-  // Reaching here means no level met the minimum. The period aggregate still carries every
-  // eligible observation, and discarding it would throw away local evidence; the width of
-  // the interval and the evidence gates carry that sparsity instead. Only a period without
-  // any eligible outcome falls back to the weak prior alone.
-  if (widest && widest.cell.effective_samples > 0) return widest;
-  return {
-    level: "prior",
-    cell: summarizeCell([], input.now, policy.decay_half_life_seconds),
-  };
+  return chooseCell(
+    matchers.map((matches, index) => ({
+      level: policy.backoff_levels[index] ?? "prior",
+      cell: summarizeCell(
+        input.outcomes.filter(matches),
+        input.now,
+        policy.decay_half_life_seconds,
+      ),
+    })),
+    policy,
+  );
 }
 
 /**
@@ -266,6 +328,26 @@ function assessEvidence(cell, backoffLevel, completeness) {
 export function buildForecast(input) {
   const policy = input.policy ?? PREDICTION_POLICY;
   const { level, cell } = selectCell(input, policy);
+  return assembleForecast({
+    cell,
+    level,
+    prior: input.prior,
+    policy,
+    dataCompleteness: input.dataCompleteness ?? "unknown",
+  });
+}
+
+/**
+ * Turn one aggregated cell into the published forecast.
+ *
+ * Kept separate so a replay that maintains its own decayed counts produces exactly the
+ * same interval, risk, evidence, and method as a forecast built from raw rows.
+ *
+ * @param {{cell: ForecastCell, level: string, prior: {strength: number, viability: number}, policy: typeof PREDICTION_POLICY, dataCompleteness: "complete" | "partial" | "unknown"}} input
+ * @returns {Forecast}
+ */
+export function assembleForecast(input) {
+  const { cell, level, policy } = input;
 
   const alpha = input.prior.strength * input.prior.viability + cell.weighted_successes;
   const beta = input.prior.strength * (1 - input.prior.viability) + cell.weighted_restrictions;
@@ -286,7 +368,7 @@ export function buildForecast(input) {
       coverage_target: policy.coverage_target,
     },
     risk: classifyRisk(lower),
-    evidence: assessEvidence(cell, level, input.dataCompleteness ?? "unknown"),
+    evidence: assessEvidence(cell, level, input.dataCompleteness),
     model_policy_version: policy.version,
     contributors: {
       backoff_level: level,

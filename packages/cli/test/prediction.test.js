@@ -7,6 +7,7 @@ import {
   EVIDENCE_POLICY,
   PREDICTION_POLICY,
   buildForecast,
+  classifyIngestionCompleteness,
   classifyRisk,
 } from "../src/prediction.js";
 
@@ -327,4 +328,35 @@ test("a prior-only forecast names itself an initial heuristic, not the learned m
   assert.equal(priorOnly.contributors.backoff_level, "prior");
   assert.deepEqual(priorOnly.method, { id: "initial-generic", version: "1" });
   assert.deepEqual(learned.method, { id: "bayesian-pressure-band", version: "1" });
+});
+
+test("ingestion signals decide how complete the observations are", () => {
+  const clean = { synchronized: true, issues: 0, pendingMappings: 0, pendingSpoolObservations: 0 };
+
+  assert.equal(classifyIngestionCompleteness(clean).level, "complete");
+  assert.equal(classifyIngestionCompleteness({ ...clean, synchronized: false }).level, "unknown");
+  assert.equal(classifyIngestionCompleteness({ ...clean, issues: 3 }).level, "partial");
+  assert.equal(classifyIngestionCompleteness({ ...clean, pendingMappings: 1 }).level, "partial");
+  assert.equal(
+    classifyIngestionCompleteness({ ...clean, pendingSpoolObservations: 2 }).level,
+    "partial",
+  );
+
+  // The reason is reported so a user can act on it instead of guessing.
+  assert.deepEqual(classifyIngestionCompleteness({ ...clean, issues: 3 }).reasons, [
+    "rejected_observations",
+  ]);
+  assert.deepEqual(classifyIngestionCompleteness(clean).reasons, []);
+  assert.equal(classifyIngestionCompleteness(clean).policy_version, EVIDENCE_POLICY.version);
+});
+
+test("a complete ingestion lets rich local evidence reach the top of the ladder", () => {
+  const rich = [
+    ...outcomes(120, "moderate", "typical"),
+    ...outcomes(20, "moderate", "typical", "restricted"),
+  ];
+
+  assert.equal(forecast({ outcomes: rich, dataCompleteness: "complete" }).evidence.level, "high");
+  // Without the ingestion signal the completeness gate alone would hold it at low.
+  assert.equal(forecast({ outcomes: rich }).evidence.level, "low");
 });
