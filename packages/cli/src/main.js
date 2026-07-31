@@ -51,6 +51,7 @@ import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./pr
 import { createSourceStatus } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
+  assertReadableStorage,
   ensureCapacityPeriod,
   createSetupDatabaseBackup,
   initializeDatabase,
@@ -582,6 +583,7 @@ export async function run(argv, options = {}) {
       const configuredHorizons = Array.isArray(analysis?.horizons)
         ? /** @type {string[]} */ (analysis.horizons)
         : defaultConfig.analysis.horizons;
+      await assertReadableStorage(paths.databaseFile);
       const horizons = commandOptions.horizon ? [commandOptions.horizon] : configuredHorizons;
       /** @type {{code: string, message: string}[]} */
       const statsWarnings = [];
@@ -637,6 +639,8 @@ export async function run(argv, options = {}) {
         }
         if (commandOptions.sync !== false) {
           await initializeDatabase(paths, { applicationVersion: packageJson.version, now });
+        } else {
+          await assertReadableStorage(paths.databaseFile);
         }
         for (const source of selected) {
           let synchronization = { performed: false, status: "not_requested" };
@@ -868,6 +872,7 @@ export async function run(argv, options = {}) {
         });
       }
       const config = await readConfig(paths.configFile);
+      await assertReadableStorage(paths.databaseFile);
       const scope = buildExportScope(commandOptions, config);
       const json = wantsJson(this, configuredJson);
       const preview = await purgeScope(paths, scope, { now, preview: true });
@@ -944,6 +949,7 @@ export async function run(argv, options = {}) {
         });
       }
       const config = await readConfig(paths.configFile);
+      await assertReadableStorage(paths.databaseFile);
       const scope = buildExportScope(commandOptions, config);
       const provenance = await buildExportProvenance(config, scope);
       const context = { command: "export", now, provenance };
@@ -1580,7 +1586,10 @@ function buildExportScope(commandOptions, config) {
       (source) => isConfiguredOpenCodeSource(source) && source.alias === commandOptions.source,
     )
   ) {
-    throw new SnackError(`Capacity source '${commandOptions.source}' is not configured.`, {
+    // Never echo the value back. An alias arrives from argv, and argv is exactly where someone
+    // pastes something private by accident; a rejected value must not travel into a JSON
+    // document that gets shared.
+    throw new SnackError("The requested capacity source is not configured.", {
       code: ExitCode.unavailable,
       reason: "source_not_configured",
     });
@@ -1666,13 +1675,16 @@ function doctorExitCode(checks) {
 
 /** @param {string[]} argv */
 function commandName(argv) {
-  return (
-    argv
-      .slice(2)
-      .filter((part) => !part.startsWith("-"))
-      .slice(0, 2)
-      .join(" ") || "snack"
-  );
+  // Every invocation is `snack <command> [<subcommand>] [--flag [value]]...`, so scanning stops
+  // at the first flag. Skipping flags but keeping what follows them put option values — a
+  // source alias, a time bound, a configuration value — into the `command` field of every
+  // error envelope, which is a document users share.
+  const tokens = [];
+  for (const part of argv.slice(2)) {
+    if (part.startsWith("-")) break;
+    tokens.push(part);
+  }
+  return tokens.slice(0, 2).join(" ") || "snack";
 }
 
 /**

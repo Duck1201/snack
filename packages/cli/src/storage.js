@@ -2174,3 +2174,38 @@ export function isTombstoned(tombstones, startedAt) {
       (tombstone.until_at === null || startedAt < tombstone.until_at),
   );
 }
+
+/**
+ * Refuse to read storage this build cannot interpret.
+ *
+ * `initializeDatabase` verifies the migration history because it is about to write. The paths
+ * that only read — `status --no-sync`, `stats`, `export`, and the previews and deletions of
+ * `data purge` — used to skip that check and work over whatever they found. Rows written under
+ * a schema a later SNACK introduced may not mean what this build assumes: exporting them would
+ * stamp that assumption with this build's provenance, and purging them would delete records it
+ * cannot interpret.
+ *
+ * Absent storage is not an error here. Each command already reports "nothing observed yet"
+ * through its own contract.
+ *
+ * @param {string} databaseFile
+ */
+export async function assertReadableStorage(databaseFile) {
+  if (!(await pathExists(databaseFile))) return;
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    verifyAppliedMigrations(
+      readAppliedMigrations(database),
+      await loadMigrations(migrationDirectory),
+    );
+  } catch (error) {
+    if (error instanceof SnackError) throw error;
+    throw new SnackError("Storage could not be read.", {
+      code: ExitCode.storage,
+      reason: "storage_read_error",
+      cause: error,
+    });
+  } finally {
+    database.close();
+  }
+}

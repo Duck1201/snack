@@ -189,3 +189,24 @@ size, and missing count instead of totalling into something that looks complete.
 No new query: the usage slices were already read for the horizon totals.
 
 The flag description now matches what it does.
+
+Hardening found and fixed two leaks and one gap where storage was read without being understood.
+
+- Every error envelope carried option values in its `command` field. `commandName` skipped tokens
+  starting with `-` but kept what followed them, so `snack stats --source <value>` reported the
+  command as `stats <value>`. Anything pasted into an alias, a time bound, or a configuration value
+  travelled into a JSON document users share. Scanning now stops at the first flag.
+- `snack export` and `snack data purge` echoed a rejected source alias back in their error message,
+  while the sibling paths in `sync` and `status` already refused to. They now match.
+- `status --no-sync`, `stats`, `export`, and `data purge` read storage without verifying the
+  migration history, so a database written by a later SNACK was read, exported, and purged as if
+  this build understood it. Only the writing paths checked. All four now refuse, which matters most
+  for the two that leave the tool: an export would stamp a misread with this build's provenance, and
+  a purge would delete rows it cannot interpret.
+
+New `test/privacy.test.js` drives all eight command groups in both output modes with canaries
+planted in the source, then asserts no canary reached any output or any byte of any file SNACK
+created — reading files as latin1, so a canary inside a SQLite page or a backup cannot hide behind
+utf8 replacement. New `test/resilience.test.js` covers a corrupted database, a file that is not a
+database, storage that cannot be created, an abandoned lock, an interrupted setup, a failed export,
+a purge that cannot finish, a spool segment cut mid-write, and the future-release refusal above.
