@@ -534,7 +534,17 @@ snack data purge (--source <alias> | --all)
                  [--dry-run] [--yes] [--json]
 ```
 
-`--prevent-reimport` records a local tombstone/cursor policy for the selected source range; without it, a later full synchronization may restore records still present in the source.
+`--prevent-reimport` records a local tombstone/cursor policy for the selected source range; without it, a later full synchronization may restore records still present in the source. The tombstone is enforced during ingestion rather than through the ingestion cursor, so it survives `--full`, which ignores cursors by definition.
+
+Purge deletes exactly the selected scope inside one transaction, and verifies that: the rows counted for the preview and the rows actually deleted must agree, or the transaction rolls back. `--dry-run` reports the same counts, the same resolved half-open window, and the same JSON shape as an applied run, so a preview is verifiably a preview of what will happen.
+
+The ingestion cursor is a single high-watermark and cannot express a purged middle range. When the purged range contains the current watermark, the cursor is reset in the same transaction; otherwise an incremental synchronization would silently never re-import the removed records. Spool segments are never deleted by purge — segment removal remains synchronization's responsibility under the rule that a segment is removed only after every configured source has committed past it.
+
+`--include-config` removes the selected sources from the configuration after the database transaction has committed, because the deletion is unrecoverable while the configuration file is recoverable from its backup. It does not touch the OpenCode plugin registration, which may contain credentials and belongs to `setup`; purge warns that capture continues until `setup` changes it.
+
+Confirmation is required unless `--dry-run` or `--yes` is given, and the confirmation is the source alias typed back rather than a single keystroke. Without a terminal, or in `--json` mode where prompting would break the one-document contract, purge exits `2`.
+
+**Purge takes no pre-purge backup.** Leaving a copy of just-deleted records on disk would contradict what the command promises, and §3.5.7 already states that purged records are not restorable. Consequently purge has no I/O failure of its own: storage failures exit `5`, configuration write failures exit `3`, and misuse exits `2`. Exit code `6` in §12.10 is reached by `export` alone.
 
 ### 12.9 `snack config`
 
@@ -555,7 +565,7 @@ Initial stable categories:
 - `3`: invalid or unsafe configuration;
 - `4`: requested source unavailable or incompatible with no usable result;
 - `5`: storage, migration, or integrity failure;
-- `6`: export/purge I/O failure;
+- `6`: export I/O failure; purge reaches no case of its own, because it takes no backup and writes no file (see §12.8);
 - `10`: unexpected internal failure.
 
 If synchronization partially fails but a valid, explicitly stale forecast can still be returned, status exits `0` and exposes degraded health prominently. If no valid result exists for the requested source, it exits `4`.

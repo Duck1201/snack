@@ -274,6 +274,7 @@ export const EXPORT_TABLES = [
  * @param {string} databaseFile
  * @param {ExportScope} scope
  * @param {string} tableName
+ * @yields {Record<string, unknown>} one exported row
  * @returns {Generator<Record<string, unknown>, void, void>}
  */
 export function* exportTable(databaseFile, scope, tableName) {
@@ -316,6 +317,7 @@ export function* exportTable(databaseFile, scope, tableName) {
  * @param {string} databaseFile
  * @param {ExportScope} scope
  * @param {{command: string, now: Date, provenance: unknown}} context
+ * @yields {string} the next fragment of the document
  * @returns {Generator<string, Record<string, number>, void>} row counts per table
  */
 export function* exportJsonChunks(databaseFile, scope, context) {
@@ -364,6 +366,7 @@ export function toCsvField(value) {
  * @param {string} databaseFile
  * @param {ExportScope} scope
  * @param {{name: string, columns: string[]}} table
+ * @yields {string} the header, then one line per row
  * @returns {Generator<string, number, void>}
  */
 export function* exportCsvChunks(databaseFile, scope, table) {

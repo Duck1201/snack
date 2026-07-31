@@ -416,9 +416,22 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         excluded: 0,
         pending_mapping: 0,
         rejected_invalid: options.rejected?.length ?? 0,
+        tombstoned: 0,
         failed: 0,
       };
+      // Loaded once per batch. Enforcing the tombstone here rather than through the ingestion
+      // cursor is what makes it survive `--full`, which re-reads everything by definition.
+      const tombstones = readPurgeTombstones(database, source.alias);
       for (const observation of batch.observations) {
+        if (
+          tombstones.length > 0 &&
+          observation.started_at !== null &&
+          observation.started_at !== undefined &&
+          isTombstoned(tombstones, observation.started_at)
+        ) {
+          counts.tombstoned += 1;
+          continue;
+        }
         const inputFeatures = observation.input_features ?? null;
         const mappedCount =
           observation.provider === null
@@ -1933,4 +1946,231 @@ export function readCalibrationPairs(databaseFile, sourceAlias) {
   } finally {
     database.close();
   }
+}
+
+/**
+ * @typedef {object} PurgeScope
+ * @property {string} [source] One capacity source; absent means every configured source.
+ * @property {string} [since] Inclusive lower bound.
+ * @property {string} [until] Exclusive upper bound.
+ */
+
+/**
+ * Delete exactly one scope of observations, and nothing else.
+ *
+ * Runs under the storage operation lock so a concurrent synchronization cannot re-insert rows
+ * midway through, and inside one immediate transaction so a failure leaves the history intact.
+ * The counts gathered for the preview are compared against the rows actually deleted before the
+ * transaction commits, which turns "purge never exceeds its selection" into something the
+ * command checks rather than something it claims.
+ *
+ * @param {{databaseFile: string, stateDir: string}} paths
+ * @param {PurgeScope} scope
+ * @param {{now: Date, preview?: boolean, preventReimport?: boolean}} options
+ * @returns {Promise<{counts: Record<string, number>, cursor_reset: string[], tombstones: number}>}
+ */
+export async function purgeScope(paths, scope, options) {
+  return withStorageOperationLock(paths, async () => purgeScopeLocked(paths, scope, options));
+}
+
+/**
+ * @param {{databaseFile: string}} paths
+ * @param {PurgeScope} scope
+ * @param {{now: Date, preview?: boolean, preventReimport?: boolean}} options
+ */
+function purgeScopeLocked(paths, scope, options) {
+  const database = new Database(paths.databaseFile, { fileMustExist: true });
+  try {
+    database.pragma("foreign_keys = ON");
+    database.pragma("busy_timeout = 5000");
+    // A TEMP table is visible only to this connection, so it lifts the immutability trigger on
+    // prediction snapshots here and nowhere else. See migrations/009_purge_tombstone.sql.
+    // ponytail: per-connection sentinel, not a capability system. Upgrade to a signed operation
+    // token only if a second write path ever needs this exception.
+    database.exec("CREATE TEMP TABLE IF NOT EXISTS snack_purge (marker INTEGER)");
+    const parameters = {
+      source: scope.source ?? null,
+      since: scope.since ?? null,
+      until: scope.until ?? null,
+    };
+    const promptFilter = `
+      (@source IS NULL OR prompt_execution.source_alias = @source)
+      AND (@since IS NULL OR prompt_execution.started_at >= @since)
+      AND (@until IS NULL OR prompt_execution.started_at < @until)`;
+    const attemptFilter = `
+      (@source IS NULL OR prediction_attempt.source_alias = @source)
+      AND (@since IS NULL OR prediction_attempt.generated_at >= @since)
+      AND (@until IS NULL OR prediction_attempt.generated_at < @until)`;
+
+    const apply = database.transaction(() => {
+      const counted = {
+        prompts: countRows(
+          database,
+          `SELECT COUNT(*) AS total FROM prompt_execution WHERE ${promptFilter}`,
+          parameters,
+        ),
+        predictions: countRows(
+          database,
+          `SELECT COUNT(*) AS total FROM prediction_attempt WHERE ${attemptFilter}`,
+          parameters,
+        ),
+      };
+      if (options.preview === true) {
+        return { counts: counted, cursor_reset: previewCursorResets(database, scope, parameters) };
+      }
+
+      // Evaluations first: they reference attempts, and nothing cascades from the attempt side.
+      database
+        .prepare(
+          `DELETE FROM prediction_evaluation
+            WHERE prediction_attempt_id IN (
+              SELECT id FROM prediction_attempt WHERE ${attemptFilter})
+               OR prompt_execution_id IN (
+              SELECT id FROM prompt_execution WHERE ${promptFilter})`,
+        )
+        .run(parameters);
+      database
+        .prepare(
+          `DELETE FROM prediction_delivery
+            WHERE prediction_attempt_id IN (
+              SELECT id FROM prediction_attempt WHERE ${attemptFilter})`,
+        )
+        .run(parameters);
+      const deletedPredictions = database
+        .prepare(`DELETE FROM prediction_attempt WHERE ${attemptFilter}`)
+        .run(parameters).changes;
+      // Usage slices, outcomes, and restrictions cascade from prompt_execution.
+      const deletedPrompts = database
+        .prepare(`DELETE FROM prompt_execution WHERE ${promptFilter}`)
+        .run(parameters).changes;
+
+      if (deletedPrompts !== counted.prompts || deletedPredictions !== counted.predictions) {
+        throw new SnackError("Purge would have removed a different set than it previewed.", {
+          code: ExitCode.storage,
+          reason: "purge_scope_mismatch",
+        });
+      }
+
+      const cursorReset = resetContainedCursors(database, scope, parameters);
+      const tombstones =
+        options.preventReimport === true ? writeTombstones(database, scope, options.now) : 0;
+      return { counts: counted, cursor_reset: cursorReset, tombstones };
+    });
+    const result = apply.immediate();
+    return { tombstones: 0, ...result };
+  } finally {
+    database.exec("DROP TABLE IF EXISTS temp.snack_purge");
+    database.close();
+  }
+}
+
+/** @param {import("better-sqlite3").Database} database @param {string} sql @param {Record<string, unknown>} parameters */
+function countRows(database, sql, parameters) {
+  const row = database.prepare(sql).get(parameters);
+  return Number(typeof row === "object" && row !== null && "total" in row ? row.total : Number.NaN);
+}
+
+/**
+ * Which sources would lose their ingestion cursor, without touching it.
+ *
+ * @param {import("better-sqlite3").Database} database
+ * @param {PurgeScope} scope
+ * @param {Record<string, unknown>} parameters
+ */
+function previewCursorResets(database, scope, parameters) {
+  return database
+    .prepare(cursorResetSelect())
+    .all(parameters)
+    .map((row) => String(/** @type {{source_alias: unknown}} */ (row).source_alias));
+}
+
+/**
+ * Reset the ingestion cursor of any source whose watermark falls inside the purged range.
+ *
+ * The cursor is a single high-watermark and cannot describe a hole. Leaving it in place after
+ * purging recent data would make the next incremental synchronization skip straight past the
+ * removed records and never restore them, with nothing reported. Purging strictly older data
+ * leaves the cursor alone, because the watermark still describes reality.
+ *
+ * @param {import("better-sqlite3").Database} database
+ * @param {PurgeScope} scope
+ * @param {Record<string, unknown>} parameters
+ */
+function resetContainedCursors(database, scope, parameters) {
+  const affected = previewCursorResets(database, scope, parameters);
+  if (affected.length > 0) {
+    database
+      .prepare(
+        `DELETE FROM ingestion_cursor WHERE source_alias IN (${affected.map(() => "?").join(",")})`,
+      )
+      .run(...affected);
+  }
+  return affected;
+}
+
+function cursorResetSelect() {
+  // An open upper bound means the purge reaches the present, so any watermark is inside it.
+  return `SELECT source_alias
+            FROM ingestion_cursor
+           WHERE (@source IS NULL OR source_alias = @source)
+             AND (@until IS NULL OR time_updated < @until)`;
+}
+
+/**
+ * @param {import("better-sqlite3").Database} database
+ * @param {PurgeScope} scope
+ * @param {Date} now
+ */
+function writeTombstones(database, scope, now) {
+  const aliases =
+    scope.source === undefined
+      ? database
+          .prepare("SELECT alias FROM capacity_source")
+          .all()
+          .map((row) => String(/** @type {{alias: unknown}} */ (row).alias))
+      : [scope.source];
+  const insert = database.prepare(
+    `INSERT INTO purge_tombstone
+       (source_alias, from_at, until_at, purged_at, blocks_reimport)
+     VALUES (?, ?, ?, ?, 1)`,
+  );
+  for (const alias of aliases) {
+    insert.run(alias, scope.since ?? null, scope.until ?? null, now.toISOString());
+  }
+  return aliases.length;
+}
+
+/**
+ * Ranges a source refuses to re-import because they were purged on purpose.
+ *
+ * @param {import("better-sqlite3").Database} database
+ * @param {string} sourceAlias
+ * @returns {{from_at: string | null, until_at: string | null}[]}
+ */
+export function readPurgeTombstones(database, sourceAlias) {
+  return database
+    .prepare(
+      `SELECT from_at, until_at FROM purge_tombstone
+        WHERE source_alias = ? AND blocks_reimport = 1`,
+    )
+    .all(sourceAlias)
+    .map((row) => {
+      const record = /** @type {{from_at: unknown, until_at: unknown}} */ (row);
+      return {
+        from_at: record.from_at === null ? null : String(record.from_at),
+        until_at: record.until_at === null ? null : String(record.until_at),
+      };
+    });
+}
+
+/**
+ * @param {{from_at: string | null, until_at: string | null}[]} tombstones
+ * @param {string} startedAt
+ */
+export function isTombstoned(tombstones, startedAt) {
+  return tombstones.some(
+    (tombstone) =>
+      (tombstone.from_at === null || startedAt >= tombstone.from_at) &&
+      (tombstone.until_at === null || startedAt < tombstone.until_at),
+  );
 }

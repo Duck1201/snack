@@ -40,15 +40,14 @@ Pre-0.6 contracts remain experimental; this release changes some of them:
 `snack export` is the first of the two remaining MVP commands.
 
 - Both formats carry the same flat tables joined by key — `capacity_periods`, `prompts`,
-  `usage_slices`, `restrictions`, `predictions`, `prediction_evaluations` — rather than one
-  nesting and the other flattening. Each table declares its columns, so a later migration cannot
-  widen an export by adding one, and operational tables are excluded. `pending_spool_observation`
-  is excluded in particular: its payload column is the one place an unreviewed field from a future
-  capture schema could reach an export, so live events appear only once a synchronization commits
-  them.
-- The document streams. A 100,000-prompt export produces roughly 54 MB while growing resident
-  memory by about 15 MB, because no table is ever materialized; buffering the same export measured
-  around four times its own size.
+  `usage_slices`, `restrictions`, `predictions`, `prediction_evaluations` — rather than one nesting
+  and the other flattening. Each table declares its columns, so a later migration cannot widen an
+  export by adding one, and operational tables are excluded. `pending_spool_observation` is excluded
+  in particular: its payload column is the one place an unreviewed field from a future capture
+  schema could reach an export, so live events appear only once a synchronization commits them.
+- The document streams. A 100,000-prompt export produces roughly 54 MB while growing resident memory
+  by about 15 MB, because no table is ever materialized; buffering the same export measured around
+  four times its own size.
 - Provenance is recorded at two levels. Row-level versions come from the rows and are never
   re-stamped, while a document-level block names the exporting build and the plan profile each
   source resolved to. `export_schema_version` is independent of the envelope `schema_version`.
@@ -57,6 +56,37 @@ Pre-0.6 contracts remain experimental; this release changes some of them:
   understands. CSV writes one file per table into a directory beside a `manifest.json`.
 - `--since` is inclusive and `--until` exclusive, matching the analysis horizons.
 
-A closed pipe now ends any command quietly. `snack export --output - | head` previously died with
-an unhandled EPIPE and printed a stack trace where the JSON should have been; a streaming command
-makes that the common case rather than a rarity.
+A closed pipe now ends any command quietly. `snack export --output - | head` previously died with an
+unhandled EPIPE and printed a stack trace where the JSON should have been; a streaming command makes
+that the common case rather than a rarity.
+
+`snack data purge` completes the eight MVP command groups.
+
+- Deletion runs under the storage operation lock inside one immediate transaction, and the rows
+  counted for the preview are compared against the rows actually deleted before it commits. "Purge
+  never exceeds its selection" is checked rather than claimed.
+- `--dry-run` reports the same counts, scope, and JSON shape an applied run reports, so a preview is
+  verifiably a preview.
+- `--prevent-reimport` records a tombstone enforced during ingestion rather than through the
+  ingestion cursor, so it survives `snack sync --full`, which ignores cursors by definition. Refused
+  observations are reported as a new `tombstoned` count alongside the existing sync counts.
+- Purging a range that contains a source's ingestion watermark resets that cursor in the same
+  transaction. The cursor is a single high-watermark and cannot describe a hole, so leaving it would
+  make the next incremental synchronization skip the removed records forever, silently.
+- Spool segments are never deleted; segment removal stays with synchronization, which alone knows
+  when every source has committed past them.
+- `--include-config` removes the sources after the transaction commits, because the deletion is
+  unrecoverable while the configuration is recoverable from its backup. It leaves the OpenCode
+  plugin registration alone — that file may hold credentials and belongs to `setup` — and warns that
+  capture continues until `setup` changes it.
+- Confirmation is required unless `--dry-run` or `--yes` is given. Without a terminal, or in
+  `--json` mode where prompting would break the one-document contract, purge exits 2 and deletes
+  nothing.
+- Purge takes no pre-purge backup: leaving a copy of just-deleted records on disk would contradict
+  what the command promises. It therefore has no I/O failure of its own, and `docs/specification.md`
+  records that exit code 6 is reached by `export` alone.
+
+Migration 009 adds the tombstone table and recreates the two `BEFORE DELETE` triggers from 007 with
+a connection-scoped escape, so purge can remove the prediction snapshots inside its scope while
+those rows stay immutable to every other connection and every other command. The `ON UPDATE`
+triggers are untouched: nothing may ever rewrite a snapshot.

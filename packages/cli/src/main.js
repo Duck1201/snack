@@ -68,6 +68,7 @@ import {
   readSpoolCursors,
   readSpoolIssueCount,
   readPendingMappingCount,
+  purgeScope,
   readSourceSummary,
   rollbackDatabaseInitialization,
   storeObservations,
@@ -501,6 +502,7 @@ export async function run(argv, options = {}) {
               excluded: 0,
               pending_mapping: 0,
               rejected_invalid: 0,
+              tombstoned: 0,
               failed: 1,
             });
           }
@@ -529,7 +531,7 @@ export async function run(argv, options = {}) {
       } else {
         for (const result of results) {
           stdout.write(
-            `${result.alias}: ${result.read} read, ${result.inserted} inserted, ${result.updated} updated, ${result.unchanged} unchanged, ${result.excluded} excluded, ${result.pending_mapping} pending_mapping, ${result.rejected_invalid} rejected_invalid, ${result.failed} failed.\n`,
+            `${result.alias}: ${result.read} read, ${result.inserted} inserted, ${result.updated} updated, ${result.unchanged} unchanged, ${result.excluded} excluded, ${result.pending_mapping} pending_mapping, ${result.rejected_invalid} rejected_invalid, ${result.tombstoned ?? 0} tombstoned, ${result.failed} failed.\n`,
           );
         }
       }
@@ -824,6 +826,88 @@ export async function run(argv, options = {}) {
       commandExitCode = doctorExitCode(result.checks);
     });
 
+  const data = program.command("data").description("manage locally stored observations");
+
+  data
+    .command("purge")
+    .description("permanently delete stored observations for a selected scope")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--all", "every configured capacity source")
+    .option("--since <time>", "delete records at or after this time")
+    .option("--until <time>", "delete records before this time")
+    .option("--include-config", "also remove the selected sources from configuration")
+    .option("--prevent-reimport", "refuse to re-import the purged range on a later sync")
+    .option("--dry-run", "report what would be deleted without deleting it")
+    .option("--yes", "confirm the deletion without prompting")
+    .option("--json", "emit one versioned JSON document")
+    .action(async function dataPurge(commandOptions) {
+      if ((commandOptions.source === undefined) === (commandOptions.all !== true)) {
+        throw new SnackError("Purge requires exactly one of --source or --all.", {
+          code: ExitCode.usage,
+          reason: "purge_scope_required",
+        });
+      }
+      const config = await readConfig(paths.configFile);
+      const scope = buildExportScope(commandOptions, config);
+      const json = wantsJson(this, configuredJson);
+      const preview = await purgeScope(paths, scope, { now, preview: true });
+
+      if (commandOptions.dryRun !== true && commandOptions.yes !== true) {
+        // Prompting is impossible without a terminal, and impossible in JSON mode without
+        // breaking the one-document contract. Refuse rather than delete unasked.
+        throw new SnackError(
+          "Purge permanently deletes records; re-run with --yes to confirm, or --dry-run to preview.",
+          { code: ExitCode.usage, reason: "confirmation_required" },
+        );
+      }
+
+      const result =
+        commandOptions.dryRun === true
+          ? preview
+          : await purgeScope(paths, scope, {
+              now,
+              ...(commandOptions.preventReimport === true ? { preventReimport: true } : {}),
+            });
+      /** @type {{code: string, message: string}[]} */
+      const warnings = [];
+      if (commandOptions.dryRun !== true && commandOptions.preventReimport !== true) {
+        warnings.push({
+          code: "reimport_possible",
+          message:
+            "These records remain in the source; a later synchronization may restore them. " +
+            "Use --prevent-reimport to refuse them.",
+        });
+      }
+      if (commandOptions.includeConfig === true && commandOptions.dryRun !== true) {
+        warnings.push(...(await removePurgedSources(paths, config, scope, options.writeConfig)));
+      }
+
+      const document = {
+        dry_run: commandOptions.dryRun === true,
+        scope,
+        counts: result.counts,
+        cursor_reset: result.cursor_reset,
+        tombstones: result.tombstones ?? 0,
+      };
+      if (json) {
+        stdout.write(
+          formatJson(
+            createEnvelope("data purge", document, {
+              now,
+              ...(warnings.length > 0 ? { status: "degraded", warnings } : {}),
+            }),
+          ),
+        );
+      } else {
+        const verb = commandOptions.dryRun === true ? "Would delete" : "Deleted";
+        stdout.write(
+          `${verb} ${document.counts.prompts} prompts and ${document.counts.predictions} prediction snapshots` +
+            `${scope.source === undefined ? " across every source" : ` for ${scope.source}`}.\n`,
+        );
+        for (const warning of warnings) stderr.write(`${warning.message}\n`);
+      }
+    });
+
   program
     .command("export")
     .description("write observed usage and predictions to an interpretable file")
@@ -1075,6 +1159,7 @@ function emptySyncResult(alias, path, failed) {
     excluded: 0,
     pending_mapping: 0,
     rejected_invalid: 0,
+    tombstoned: 0,
     failed,
   };
 }
@@ -1121,6 +1206,57 @@ function formatHumanValue(value) {
   if (typeof value === "string") return `${value}\n`;
   if (value === null || typeof value !== "object") return `${String(value)}\n`;
   return formatJson(value);
+}
+
+/**
+ * Remove purged sources from the configuration, after their records are already gone.
+ *
+ * The database deletion is unrecoverable while the configuration file is recoverable from its
+ * backup, so the transaction commits first and a failed configuration write degrades with a
+ * named warning instead of reversing anything. The OpenCode plugin registration is left alone:
+ * that file may contain credentials and belongs to `setup`.
+ *
+ * @param {import("./paths.js").SnackPaths} paths
+ * @param {Record<string, unknown>} config
+ * @param {import("./export.js").ExportScope} scope
+ * @param {typeof writePrivateAtomic | undefined} writeConfig
+ */
+async function removePurgedSources(paths, config, scope, writeConfig) {
+  const sources = Array.isArray(config.sources) ? config.sources : [];
+  const remaining = sources.filter((source) =>
+    scope.source !== undefined &&
+    isConfiguredOpenCodeSource(source) &&
+    source.alias !== scope.source
+      ? true
+      : scope.source === undefined
+        ? false
+        : !isConfiguredOpenCodeSource(source),
+  );
+  try {
+    await withConfigLock(paths.configFile, async () => {
+      const prepared = await prepareConfigValues(paths.configFile, [["sources", remaining]]);
+      await (writeConfig ?? writePrivateAtomic)(paths.configFile, prepared.content, {
+        backup: true,
+      });
+    });
+  } catch (error) {
+    return [
+      {
+        code: "config_not_updated",
+        message: `Records were deleted, but the configuration still lists the source: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      },
+    ];
+  }
+  return [
+    {
+      code: "plugin_still_registered",
+      message:
+        "The OpenCode plugin is still registered and will keep writing to the spool; " +
+        "run `snack setup opencode` to change that.",
+    },
+  ];
 }
 
 /**

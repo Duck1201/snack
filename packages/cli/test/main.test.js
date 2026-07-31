@@ -37,7 +37,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -361,6 +361,7 @@ test("full sync converges without duplicating OpenCode usage records", async () 
           excluded: 0,
           pending_mapping: 0,
           rejected_invalid: 0,
+          tombstoned: 0,
           failed: 0,
         },
       ],
@@ -376,6 +377,7 @@ test("full sync converges without duplicating OpenCode usage records", async () 
           excluded: 0,
           pending_mapping: 0,
           rejected_invalid: 0,
+          tombstoned: 0,
           failed: 0,
         },
       ],
@@ -416,7 +418,7 @@ test("human sync reports every required count", async () => {
 
   assert.match(
     fixture.stdout.value,
-    /personal-anthropic: 1 read, 1 inserted, 0 updated, 0 unchanged, 0 excluded, 0 pending_mapping, 0 rejected_invalid, 0 failed\./u,
+    /personal-anthropic: 1 read, 1 inserted, 0 updated, 0 unchanged, 0 excluded, 0 pending_mapping, 0 rejected_invalid, 0 tombstoned, 0 failed\./u,
   );
 });
 
