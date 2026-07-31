@@ -1,36 +1,87 @@
 # @snack-ai/cli
 
-OpenCode tracer preview for SNACK. This version provides read-only OpenCode backfill plus optional
-fail-open live capture through `@snack-ai/opencode`, explicit capacity-source mappings, source
-diagnostics, and a broad initial next-prompt estimate with very-low evidence. It stores metadata
-only and does not claim to know provider capacity.
+**Know before you feed the model.** SNACK reads your local AI-tool history, describes how you have
+actually been using it, and estimates whether your next prompt is likely to complete without hitting
+a restriction.
 
-`snack stats` describes observed usage over rolling analysis horizons: prompt counts by outcome,
-restrictions by class, token dimensions kept separate, cost per currency, and duration percentiles.
-Anything the source did not report stays `unknown` and never becomes zero.
-
-`snack status` also reports usage pressure, which ranks the current window against your own
-preceding windows of the same length. Pressure is relative to your local history. It is not a share
-of provider capacity, which remains unknown.
-
-OpenCode backfill supports fingerprint family `oc-sqlite-msgpart-v1`, validated against OpenCode
-`1.17.19`, `1.17.20`, `1.18.1`, and `1.18.9`; `1.18.10` additionally supports live capture.
-Compatibility is determined by structural and JSON fingerprints, not by version strings; unknown
-shapes fail closed before canonical writes.
-
-## Getting started
-
-Requires Node.js 24. `0.6.0` is the MVP and the default install:
+It runs entirely on your machine. No account, no telemetry, no network client, no service behind it.
 
 ```bash
 npm install -g @snack-ai/cli
+snack setup opencode   # guided: finds your OpenCode database, asks only what it cannot observe
+snack status
 ```
 
-Run `snack setup opencode` and it walks you through it, discovering your OpenCode database, its
-schema fingerprint, and the providers already present in it, then asking only for what it cannot
-observe. Nothing is written until you confirm, and `Ctrl+D` cancels.
+```text
+work: 86-97% viability; risk low; evidence moderate; method bayesian-pressure-band@1;
+period 2026-07-24T09:12:03.000Z; pressure elevated; contributors output_tokens 88th, prompts 71st;
+category typical; as_of 2026-07-31T10:41:55.000Z; sync ok.
+Caveat: Real provider capacity is unknown.
+```
 
-To script it instead, pass every value as a flag:
+Requires Node.js 24, on Linux, macOS, or Windows through WSL2. `0.6.0` is the MVP and supports
+OpenCode; Claude Code follows in `0.7`.
+
+## What it will not tell you
+
+SNACK does not know your provider's real quota, and nothing in it pretends otherwise. You will never
+see a percentage of quota, a balance, or a count of prompts remaining, because those would be
+fabrications dressed as measurements.
+
+What you get instead is an estimate with its uncertainty attached: an interval, an evidence level
+that says how much local history stands behind it, the named and versioned method that produced it,
+and the caveats that apply. A fresh install reports `very_low` evidence and a wide interval, because
+that is the truth about a fresh install.
+
+Nothing you write is stored. Prompt text, response text, credentials, and project paths never reach
+the database, the spool, the logs, an export, or an error message. That is enforced by tests that
+drive canary strings through every command in both output modes and assert they appear in no byte
+SNACK writes.
+
+## The commands
+
+| Command                | What it does                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` | Maps an OpenCode installation to a capacity source. Offers to register the fail-open capture plugin. Writes nothing until you confirm. |
+| `snack status`         | The next-prompt assessment: viability interval, risk, evidence, usage pressure and what drove it, freshness.                           |
+| `snack stats`          | What your usage actually looks like over rolling horizons, and how well past forecasts scored.                                         |
+| `snack sync`           | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                               |
+| `snack export`         | Streams everything to JSON or CSV with schema and provenance, so the data stays yours to read elsewhere.                               |
+| `snack data purge`     | Deletes a scope you choose, transactionally, after previewing exactly what goes.                                                       |
+| `snack config`         | Reads and edits local configuration.                                                                                                   |
+| `snack doctor`         | Diagnoses the installation without changing it: permissions, schema fingerprints, plugin registration, storage integrity.              |
+
+Every command takes `--json` and answers with one versioned document, so scripting it does not mean
+parsing prose.
+
+## How it decides
+
+Observed outcomes update a weighted Beta-Binomial baseline, which backs off from the narrowest
+comparable cell to broader ones when evidence is thin, and reports which level it used. Risk follows
+the lower bound of the interval rather than the point estimate, so a wide interval cannot look
+confident.
+
+Evidence gates cap what a history is allowed to claim: a source that has never been restricted
+cannot reach high evidence about restrictions, and incomplete ingestion caps the level no matter how
+long the history is. Forecasts are recorded and later scored against the prompts that followed them,
+which is what `snack stats` reports — including when it has nothing to report yet.
+
+Usage pressure ranks your current window against your own preceding windows of the same length. It
+is a comparison with your history, never a share of capacity.
+
+## Upgrading from an earlier preview
+
+`0.1.x` through `0.5.x` were technical previews: `0.1.0` proved installation and storage, `0.2.0`
+added the OpenCode tracer and a broad initial estimate. If you installed one of those, you were
+running something that could not yet do most of what is described above.
+
+`0.6.0` is also the first guaranteed migration-preservation baseline: from here forward, documented
+migrations preserve your data and configuration into later releases. Data written by a preview
+before it is not covered by that promise. Run `snack doctor` after upgrading; if it reports storage
+it cannot read, `snack data purge --all --yes` followed by `snack sync --full` rebuilds everything
+from your OpenCode history, which SNACK only ever reads.
+
+## Setup without the questions
 
 ```bash
 snack setup opencode --non-interactive \
@@ -49,8 +100,21 @@ snack setup opencode --non-interactive \
   it away as history accumulates.
 - `--install-plugin` registers `@snack-ai/opencode` in the global OpenCode configuration and needs
   `--yes` to confirm; `--dry-run` shows the proposal and changes nothing.
-- `--enable-prospective-analysis` is opt-in, and only enables local ephemeral, allowlisted
-  prompt-size features.
+- `--enable-prospective-analysis` is opt-in and enables local, ephemeral, allowlisted prompt-size
+  features only. The text itself is never stored, and no option accepts it on the command line,
+  where other processes could read it.
 
-Then `snack doctor` to check the installation, `snack sync` to import history, and `snack status` to
-assess the next prompt.
+## Supported OpenCode versions
+
+Backfill supports fingerprint family `oc-sqlite-msgpart-v1`, validated against OpenCode `1.17.19`,
+`1.17.20`, `1.18.1`, and `1.18.9`; `1.18.10` additionally supports live capture. Compatibility is
+determined by structural and JSON fingerprints, not by version strings, and an unrecognized shape
+refuses rather than guesses.
+
+## More
+
+Source, roadmap, threat model, and the full specification live at
+[github.com/Duck1201/snack](https://github.com/Duck1201/snack). Security reports go through the
+private channel in [SECURITY.md](https://github.com/Duck1201/snack/blob/main/SECURITY.md).
+
+Apache-2.0.
