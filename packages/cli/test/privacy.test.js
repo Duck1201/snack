@@ -3,6 +3,7 @@ import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
+import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
@@ -153,6 +154,29 @@ test("an error carries no trace of the input that caused it", async () => {
       assert.doesNotMatch(fixture.stdout.value, pattern, argv.join(" "));
       assert.doesNotMatch(fixture.stderr.value, pattern, argv.join(" "));
     }
+  }
+});
+
+test("prospective text has no way into argv", async () => {
+  const fixture = await makeRunFixture("snack-privacy-argv-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+
+  // Acceptance criterion 9. Argv is readable by every other process on the machine, so the
+  // protection is that no option takes prompt text at all: it arrives from a file or from stdin,
+  // and both stay inside this process. An option added later that accepted text inline would
+  // defeat every other prospective-analysis control, and this is what would notice.
+  for (const option of ["--prompt", "--prompt-text", "--text", "--input"]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(
+      ["node", "snack", "status", option, String(privacyCanaries.prompt), "--json"],
+      fixture.options,
+    );
+
+    assert.equal(exitCode, ExitCode.usage, option);
+    const pattern = new RegExp(String(privacyCanaries.prompt), "u");
+    assert.doesNotMatch(fixture.stdout.value, pattern, option);
+    assert.doesNotMatch(fixture.stderr.value, pattern, option);
   }
 });
 

@@ -239,3 +239,12 @@ share one open that classifies any failure as `source_unavailable` with exit `4`
 `npm run pack:smoke` now asserts that `better-sqlite3` resolved a published prebuild instead of
 compiling from source, so a platform without a prebuild fails the gate rather than silently
 requiring a compiler toolchain from every user of that platform.
+
+The two MVP acceptance criteria that had no test now have one. Criterion 15 —
+no interface calls observed usage a quota percentage or a remaining balance — is
+checked by driving every command group in both output modes and refusing the
+vocabulary CONTEXT.md rejects, plus the shape of any promised prompt count, on
+stdout, stderr, and inside a CSV export. Criterion 9's argv clause is checked by
+asserting that no option accepts prompt text inline at all: prospective text
+reaches SNACK from a file or from stdin, never from a command line other
+processes can read.
