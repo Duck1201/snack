@@ -141,3 +141,36 @@ and `--plan` are missing instead of failing on the first one. Without a terminal
 `--non-interactive`, setup exits 2 naming the flags rather than waiting on input that will never
 arrive. Both entry points resolve the same values and then run the identical journal, backup, and
 rollback path, so idempotency and rollback are covered once for both.
+
+`snack stats` reports a real usage trend. It was previously hardcoded to `not_available` with the
+reason `no_pressure_history_yet`.
+
+The trend ranks the five most recent windows against one shared baseline — the windows preceding all
+of them — because ranking each window against its own history would put the scores on different
+scales and make the sequence between them meaningless. Direction comes from a strict majority of the
+steps between consecutive scores. It ships in `stats` only: `status` answers whether the next prompt
+is viable, and a direction across past windows is not part of that answer.
+
+The window count is measured rather than assumed. As the share of stationary runs reporting
+`steady`, and of rising runs reported as `rising` at 10% / 20% / 50% growth per window:
+
+    windows 3 -> 0.744 | 0.416 / 0.819 / 0.997
+    windows 4 -> 0.181 | 0.758 / 0.992 / 1.000
+    windows 5 -> 0.689 | 0.652 / 0.986 / 0.994
+    windows 6 -> 0.243 | 0.863 / 1.000 / 0.993
+    windows 7 -> 0.678 | 0.801 / 0.999 / 0.000
+
+An even window count leaves an odd number of steps, where no tie is possible and a strict majority
+arises by chance, so those rows report a direction on stationary usage four times out of five. Among
+the odd counts, three under-reports a gentle rise and seven goes blind on a steep one. Five is the
+only count that neither misses a slow climb nor loses a fast one.
+
+Seven collapses because a percentile cannot exceed 1: once a window clears the entire baseline the
+steps after it are all zero however steeply usage keeps climbing. That same saturation appears on
+real histories, so a trend whose compared windows all sit above the baseline reports
+`not_available (above_baseline)` rather than `steady` — reporting steadiness there would read as
+reassurance about the one situation that deserves it least.
+
+`TREND_POLICY` is versioned separately as `stage6-trend-v1`. `ANALYTICS_POLICY` is stamped onto
+every stored prediction attempt, so bumping it for something that does not affect a forecast would
+put a false signal into the audit trail permanently.

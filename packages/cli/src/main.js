@@ -16,7 +16,9 @@ import {
 } from "./config.js";
 import {
   ANALYTICS_POLICY,
+  TREND_POLICY,
   computeUsagePressure,
+  computeUsageTrend,
   horizonWindow,
   parseHorizon,
   summarizeUsageProfile,
@@ -1853,7 +1855,10 @@ function primaryHorizon(config) {
 /**
  * Rank the current analysis window against the preceding windows of the same length.
  *
- * @param {{databaseFile: string, source: {alias: string}, planProfile: import("./plan-profile.js").PlanProfile, horizon: string, now: Date}} input
+ * The trend is reported by `stats` only. `status` answers whether the next prompt is viable,
+ * and a direction over past windows is not part of that answer.
+ *
+ * @param {{databaseFile: string, source: {alias: string}, planProfile: import("./plan-profile.js").PlanProfile, horizon: string, now: Date, includeTrend?: boolean}} input
  */
 function computeSourcePressure(input) {
   const horizonSeconds = parseHorizon(input.horizon);
@@ -1876,6 +1881,10 @@ function computeSourcePressure(input) {
   const current = summarizeWindow(/** @type {typeof rows} */ (buckets[0]), input.now);
   /** @type {Record<string, number[]>} */
   const baselines = {};
+  /** @type {Record<string, number[]>} */
+  const trendBaselines = {};
+  /** @type {Record<string, number>[]} */
+  const trendWindows = [];
   let observedWindows = 0;
   for (let offset = 1; offset <= windowCount; offset += 1) {
     const past = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
@@ -1886,8 +1895,26 @@ function computeSourcePressure(input) {
     observedWindows += 1;
     for (const [dimension, value] of Object.entries(past.values)) {
       (baselines[dimension] ??= []).push(value);
+      // The trend ranks the recent windows against what came before all of them, so the
+      // windows it compares are excluded from the baseline it compares them against.
+      if (offset > TREND_POLICY.windows) (trendBaselines[dimension] ??= []).push(value);
     }
   }
+  for (let offset = TREND_POLICY.windows - 1; offset >= 0; offset -= 1) {
+    const window = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
+    if ((window.values.prompts ?? 0) > 0) trendWindows.push(window.values);
+  }
+  const trend =
+    input.includeTrend === true
+      ? {
+          trend: computeUsageTrend({
+            windows: trendWindows,
+            baselines: trendBaselines,
+            profileWeights: input.planProfile.weights,
+            effectiveSampleSize: current.effectiveSampleSize,
+          }),
+        }
+      : {};
   if (observedWindows < ANALYTICS_POLICY.pressure_minimum_baseline_windows) {
     return {
       horizon: input.horizon,
@@ -1898,11 +1925,13 @@ function computeSourcePressure(input) {
       completeness: "partial",
       contributors: [],
       baseline_windows: observedWindows,
+      ...trend,
     };
   }
   return {
     horizon: input.horizon,
     baseline_windows: observedWindows,
+    ...trend,
     ...computeUsagePressure({
       current: current.values,
       baselines,
@@ -1967,9 +1996,8 @@ function buildSourceStats(input) {
         planProfile: input.planProfile,
         horizon: /** @type {string} */ (input.horizons[0]),
         now: input.now,
+        includeTrend: true,
       }),
-      // Trend needs pressure history, which only prediction snapshots will carry.
-      trend: { status: "not_available", reason: "no_pressure_history_yet" },
     },
     calibration: buildCalibrationReport(input.databaseFile, input.source.alias, input.planProfile),
   };
@@ -2025,12 +2053,30 @@ function describeCalibration(calibration) {
 }
 
 /**
+ * Describe which way pressure has been moving, without implying where it goes next.
+ *
+ * `steady` rather than `stable`: stable hints at a claim about the future, and a trend only
+ * describes windows already observed.
+ *
+ * @param {ReturnType<typeof computeUsageTrend> | undefined} trend
+ */
+function describeTrend(trend) {
+  if (trend === undefined || trend.status !== "observed" || trend.direction === null) {
+    return `trend not_available (${trend?.reason ?? "unknown"})`;
+  }
+  return (
+    `trend ${trend.direction} over ${trend.windows_compared} windows ` +
+    `against ${trend.baseline_windows} baseline windows (policy ${trend.policy_version})`
+  );
+}
+
+/**
  * @param {ReturnType<typeof buildSourceStats>} report
  * @param {boolean} verbose
  */
 function renderStats(report, verbose) {
   let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
-  text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); trend ${report.pressure.trend.status}.\n`;
+  text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); ${describeTrend(report.pressure.trend)}.\n`;
   text += `  calibration: ${describeCalibration(report.calibration)}\n`;
   for (const horizon of report.horizons) {
     const restrictions = Object.entries(horizon.restrictions.by_class);

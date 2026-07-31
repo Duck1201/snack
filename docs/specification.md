@@ -405,6 +405,12 @@ number whose meaning has to be inferred.
 - data freshness and completeness;
 - forecast count, Brier score, and interval coverage when meaningful.
 
+The trend describes which way pressure has been moving across the most recent windows, and never where it is going next. All compared windows are ranked against one shared baseline — the windows preceding all of them — because ranking each against its own history would place the scores on different scales and make the sequence meaningless. Direction comes from a strict majority of the steps between consecutive scores, and is reported as `rising`, `falling`, or `steady`; `steady` rather than `stable`, since stable would hint at a claim about the future.
+
+A trend is reported by `stats` only. `status` answers whether the next prompt is viable, and a direction across past windows is not part of that answer.
+
+The direction is `not_available` with a stated reason rather than a fabricated `steady` whenever it cannot be observed: too few baseline windows, too few compared windows, or — the case that matters most — every compared window sitting above the entire baseline. A percentile cannot exceed 1, so once usage clears everything previously seen the steps between windows are all zero however steeply it is still climbing, and reporting `steady` there would read as reassurance about precisely the situation that deserves it least.
+
 Calibration metrics are reported as not available until enough delivered forecasts have been
 followed by outcomes. They are never reported as zero.
 

@@ -9,8 +9,10 @@ import fc from "fast-check";
 
 import {
   ANALYTICS_POLICY,
+  TREND_POLICY,
   assignPressureBands,
   computeUsagePressure,
+  computeUsageTrend,
   effectiveSampleSize,
   horizonWindow,
   parseHorizon,
@@ -1051,4 +1053,139 @@ test("pressure bands are independent of the order rows arrive in", () => {
     [...reordered].sort((left, right) => left.started_at.localeCompare(right.started_at)),
     [...direct].sort((left, right) => left.started_at.localeCompare(right.started_at)),
   );
+});
+
+test("a usage trend ranks every compared window against one shared baseline", () => {
+  // Scoring each window against its own preceding history would rank them on different
+  // scales, and the sequence would not mean anything. Identical windows must score
+  // identically, which is only true when the baseline is shared.
+  const baseline = Array.from({ length: 20 }, (_unused, index) => 100 + index);
+  const identical = Array.from({ length: TREND_POLICY.windows }, () => ({ prompts: 110 }));
+
+  const trend = computeUsageTrend({
+    windows: identical,
+    baselines: { prompts: baseline },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  assert.equal(trend.status, "observed");
+  assert.equal(trend.direction, "steady");
+  assert.equal(new Set(trend.scores).size, 1);
+  assert.equal(trend.windows_compared, TREND_POLICY.windows);
+  assert.equal(trend.baseline_windows, 20);
+  assert.equal(trend.policy_version, TREND_POLICY.version);
+});
+
+test("a usage trend reports direction from the sequence of comparable scores", () => {
+  const baseline = Array.from({ length: 20 }, (_unused, index) => 100 + index * 5);
+  /** @param {number[]} levels */
+  const directionFor = (levels) =>
+    computeUsageTrend({
+      windows: levels.map((prompts) => ({ prompts })),
+      baselines: { prompts: baseline },
+      profileWeights: { prompts: 1 },
+      effectiveSampleSize: 0,
+    }).direction;
+
+  assert.equal(directionFor([100, 120, 140, 160, 180]), "rising");
+  assert.equal(directionFor([180, 160, 140, 120, 100]), "falling");
+  assert.equal(directionFor([150, 150, 150, 150, 150]), "steady");
+  // A single step out of line does not make a direction; a strict majority does.
+  assert.equal(directionFor([100, 120, 110, 160, 180]), "rising");
+});
+
+test("a usage trend admits it cannot see past the top of its own baseline", () => {
+  // Every compared window clears the whole baseline, so every percentile saturates at 1 and
+  // the steps between them are all zero. Reporting `steady` here would read as reassurance
+  // while usage was in fact climbing hard; the direction is simply not observable.
+  const baseline = Array.from({ length: 20 }, () => 100);
+  const climbing = [200, 400, 800, 1600, 3200].map((prompts) => ({ prompts }));
+
+  const trend = computeUsageTrend({
+    windows: climbing,
+    baselines: { prompts: baseline },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  assert.equal(trend.status, "not_available");
+  assert.equal(trend.direction, null);
+  assert.equal(trend.reason, "above_baseline");
+});
+
+test("a usage trend refuses to invent a direction it cannot see", () => {
+  const baseline = Array.from({ length: 20 }, (_unused, index) => 100 + index);
+
+  const tooFewWindows = computeUsageTrend({
+    windows: [{ prompts: 150 }, { prompts: 160 }],
+    baselines: { prompts: baseline },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 0,
+  });
+  const noBaseline = computeUsageTrend({
+    windows: Array.from({ length: TREND_POLICY.windows }, () => ({ prompts: 150 })),
+    baselines: { prompts: [] },
+    profileWeights: { prompts: 1 },
+    effectiveSampleSize: 0,
+  });
+
+  // `steady` is a claim. Absence of evidence reports itself instead of borrowing one.
+  assert.equal(tooFewWindows.status, "not_available");
+  assert.equal(tooFewWindows.direction, null);
+  assert.equal(tooFewWindows.reason, "insufficient_windows");
+  assert.equal(noBaseline.status, "not_available");
+  assert.equal(noBaseline.direction, null);
+  assert.equal(noBaseline.reason, "insufficient_baseline");
+});
+
+test("simulation: a usage trend stays steady on stationary usage and rises on a real rise", () => {
+  // Evidence for TREND_POLICY.windows and the strict-majority rule. A gentle rise is the case
+  // that decides the window count: three windows report it barely more often than a coin, and
+  // seven go blind on a steep one once the percentile saturates.
+  const random = mulberry32(20260501);
+  const trials = 2000;
+  let steadyOnStationary = 0;
+  /** @type {Record<string, number>} */
+  const risingOnRise = { 0.1: 0, 0.2: 0, 0.5: 0 };
+
+  for (let trial = 0; trial < trials; trial += 1) {
+    const baseline = Array.from({ length: 20 }, () => 100 * (0.5 + random()));
+    const directionFor = (/** @type {number[]} */ levels) =>
+      computeUsageTrend({
+        windows: levels.map((prompts) => ({ prompts })),
+        baselines: { prompts: baseline },
+        profileWeights: { prompts: 1 },
+        effectiveSampleSize: 0,
+      }).direction;
+
+    const stationary = Array.from({ length: TREND_POLICY.windows }, () => 100 * (0.5 + random()));
+    if (directionFor(stationary) === "steady") steadyOnStationary += 1;
+
+    for (const growth of [0.1, 0.2, 0.5]) {
+      // Starts below the baseline median so it has room to climb through it.
+      const rising = Array.from(
+        { length: TREND_POLICY.windows },
+        (_unused, index) => 55 * (0.95 + 0.1 * random()) * Math.pow(1 + growth, index),
+      );
+      if (directionFor(rising) === "rising") {
+        risingOnRise[String(growth)] = (risingOnRise[String(growth)] ?? 0) + 1;
+      }
+    }
+  }
+
+  assert.ok(
+    steadyOnStationary / trials > 0.6,
+    `stationary usage reported a direction too often: steady ${steadyOnStationary / trials}`,
+  );
+  assert.ok(
+    (risingOnRise["0.1"] ?? 0) / trials > 0.6,
+    `a gentle rise went unreported: ${(risingOnRise["0.1"] ?? 0) / trials}`,
+  );
+  for (const growth of ["0.2", "0.5"]) {
+    assert.ok(
+      (risingOnRise[growth] ?? 0) / trials > 0.9,
+      `a ${growth} rise went unreported: ${(risingOnRise[growth] ?? 0) / trials}`,
+    );
+  }
 });
