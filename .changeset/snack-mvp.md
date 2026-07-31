@@ -246,3 +246,17 @@ in both output modes and refusing the vocabulary CONTEXT.md rejects, plus the sh
 prompt count, on stdout, stderr, and inside a CSV export. Criterion 9's argv clause is checked by
 asserting that no option accepts prompt text inline at all: prospective text reaches SNACK from a
 file or from stdin, never from a command line other processes can read.
+
+An independent tester pass against the installed binary found nine defects the suite could not see,
+and they are fixed here. Three blocked the MVP: a CSV export reported destination failures as an
+internal error instead of export I/O; human mode collected warnings for the JSON envelope and never
+spoke them, so a mistyped `--prompt-file` silently changed the prompt assumption behind a forecast;
+and `stats` was quadratic in the usage slices a window holds, taking 26 s and 928 MB where the
+budget is 150 MB.
+
+Six more were behaviour a user would meet: a file that is not a database at `OPENCODE_DB` crashed
+`setup` rather than reporting an unavailable source; a never-migrated database reached the query
+layer instead of being refused as storage; `data purge` never asked for confirmation even on a
+terminal; `--horizon all` and `doctor --source` were documented but rejected; human `status` omitted
+the active period and the pressure contributors the specification requires; and a forecast built
+from tens of thousands of prompts still described itself as sparse history dominated by the prior.
