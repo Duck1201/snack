@@ -303,7 +303,10 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 3 - Reliable Live Capture
 
 - **Release:** `0.3.0` on npm `next`; first independent `@snack-ai/opencode` release
-- **Status:** Complete (2026-07-30)
+- **Status:** Implemented (2026-07-30); **not released**. `0.3.0` was never published: the
+  registry holds `0.1.0`, `0.2.0`, and `0.4.0`. The publish workflow reported success on a
+  run whose job was skipped by its own confirmation gate, which is why this was recorded as
+  complete. `0.3.0` is superseded by `0.4.0`; the plugin release moves to Stage 4.
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Add live event fidelity without allowing SNACK to block OpenCode or double-count backfilled history.
 
@@ -376,7 +379,10 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 4 - Explainable Analytics
 
 - **Release:** `0.4.0` on npm `next`
-- **Status:** Waves 1-3 implemented (2026-07-30); release gates pending
+- **Status:** Implemented and partially released (2026-07-30). `@snack-ai/cli@0.4.0` is
+  published to `next` with provenance. `@snack-ai/opencode` is **not published**: npm
+  rejects its first publication with `404 on PUT`, which is the account lacking permission
+  to create that package. The stage closes when the plugin reaches `next`.
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Make observed usage, relative pressure, data quality, and plan assumptions useful before introducing a learned predictor.
 
@@ -950,11 +956,14 @@ Strict SemVer applies:
 
 ## npm Channel Policy
 
-- `0.1-0.5`: CLI releases publish to `next`.
+- `0.1-0.5`: CLI releases publish to `next`. `latest` resolves to `0.1.0` because npm
+  assigns that tag to a package's first published version and rejects removing it; see
+  [docs/release/identity.md](./docs/release/identity.md). A plain `npm install
+  @snack-ai/cli` therefore installs the oldest preview until `0.6.0` moves `latest`.
 - `0.6.0 MVP`: CLI is promoted to `latest`.
 - `0.7-0.9` and `1.0.0-rc.N`: publish to `next` while MVP remains `latest`.
 - `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and replaces MVP on `latest` after checksum verification.
-- `@snack-ai/opencode` first publishes its own `0.1.0` to `next` in Stage 3; changed pre-MVP versions remain on `next`.
+- `@snack-ai/opencode` first publishes its own `0.1.0` to `next`; changed pre-MVP versions remain on `next`. This was planned for Stage 3 and has not happened yet: the package does not exist on the registry, and creating it is blocked on npm permissions.
 - the MVP-compatible OpenCode plugin version is promoted to plugin `latest` in Stage 6; later plugin development remains on `next`.
 - CLI/plugin RCs publish to each package's `next`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then both `latest` and `next` move to stable and temporary tags are removed after checksum verification.
 

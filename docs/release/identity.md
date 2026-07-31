@@ -50,3 +50,34 @@ Stage 2 publication: passed
 `51696842098cbf58cd55c9ee9c05acb6c265f12a` by protected release run
 [30575846623](https://github.com/Duck1201/snack/actions/runs/30575846623). The registry confirms
 `next` resolves to `0.2.0`; `latest` remains `0.1.0`.
+
+Stage 3 publication: not performed
+
+`0.3.0` was never published. The registry holds `0.1.0`, `0.2.0`, and `0.4.0` only. Release run
+[30575846623](https://github.com/Duck1201/snack/actions/runs/30575846623) is recorded as
+successful, but its `publish` job was skipped by the workflow's own confirmation gate, and a
+skipped job reports success. Workflow success is therefore not evidence of publication; the
+registry is. The release workflow now verifies both packages on the registry before a run can
+report success.
+
+Stage 4 publication: partial
+
+`@snack-ai/cli@0.4.0` was published to the `next` channel from commit
+`980b6a94a9f99c1eebddb5610aa6f403f174c0e6` by protected release run
+[30596314853](https://github.com/Duck1201/snack/actions/runs/30596314853), with a provenance
+statement recorded in the Sigstore transparency log at index `2297397654`. The registry confirms
+`next` resolves to `0.4.0`; `latest` remains `0.1.0`.
+
+`@snack-ai/opencode@0.1.0` was not published in that run. npm rejected its first publication:
+
+```text
+npm error code E404
+npm error 404 Not Found - PUT https://registry.npmjs.org/@snack-ai%2fopencode
+```
+
+On a `PUT`, that status means the authenticated identity may not create the package, not that
+the package is missing. Creating `@snack-ai/opencode` for the first time is therefore an open
+release gate: either the scope's trusted publisher must cover this package for this repository
+and workflow, or the package must be created once by an authorized manual publication. Until
+then, `@snack-ai/cli@0.4.0` documents a capture plugin that cannot be installed, and live
+capture is unavailable to anyone installing from `next`.
