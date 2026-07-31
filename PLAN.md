@@ -376,6 +376,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 4 - Explainable Analytics
 
 - **Release:** `0.4.0` on npm `next`
+- **Status:** Waves 1-3 implemented (2026-07-30); release gates pending
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Make observed usage, relative pressure, data quality, and plan assumptions useful before introducing a learned predictor.
 
@@ -413,10 +414,16 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 **Pending items resolved**
 
-- analysis-horizon defaults;
-- initial pressure boundaries and weight-blending policy;
-- plan-profile provenance/age behavior;
-- treatment of incomplete and late observations.
+- analysis-horizon defaults: `PT1H`, `PT5H`, `P1D`, `P7D`, with half-open windows;
+- initial pressure boundaries and weight-blending policy, recorded as `stage4-analytics-v1`:
+  band boundaries `0.5 / 0.75 / 0.9`, decay half-life of one day, blend constant of ten
+  equivalent samples, and a minimum of five observed baseline windows before any window is
+  ranked;
+- plan-profile provenance/age behavior: profile identity and version are stamped on the
+  capacity period, only an identity change opens a new period, and `doctor` warns past one
+  year from the profile's `as_of` date;
+- treatment of incomplete and late observations: absent source fields stay unknown rather
+  than zero, and a baseline window with no prompts is excluded as absence of observation.
 
 **Exit criteria**
 

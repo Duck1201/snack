@@ -75,6 +75,7 @@ No ORM is used. SQL and numbered migrations remain explicit.
 |-- schemas/
 |   |-- config.schema.json
 |   |-- spool-event.schema.json
+|   |-- plan-profile.schema.json
 |   `-- output.schema.json
 |-- profiles/
 |   `-- plans/*.json
@@ -107,6 +108,11 @@ No ORM is used. SQL and numbered migrations remain explicit.
 ```
 
 This layout is a starting constraint, not a requirement to create one file per concept. Small cohesive behavior stays together until a real seam emerges.
+
+Schemas, plan profiles, and migrations are shown here at the root because they are shared
+assets. Each one physically lives inside the package that consumes and publishes it, and it
+must be listed in that package's published files, or a released tarball would validate
+against schemas it does not carry.
 
 ## 5. Module Responsibilities
 
@@ -171,6 +177,7 @@ Prediction owns:
 - rolling-horizon feature extraction;
 - historical decay;
 - percentile normalization and pressure contributors;
+- one versioned analytics policy object holding the decay half-life, the blend constant, the pressure-band boundaries, and the baseline-window counts, so that every derived result can name the policy that produced it;
 - history-independent prompt feature allowlist plus CLI-side size categorization;
 - weak plan/generic priors;
 - weighted Beta-Binomial pressure-band + prompt-size model with hierarchical backoff;
@@ -229,7 +236,9 @@ Repository contracts are use-case focused rather than one generic repository:
 - capacity-source/period configuration;
 - prompt usage upsert/reconciliation;
 - ingestion cursor, pending mapping, and sanitized issue reporting;
-- usage-profile queries;
+- usage-profile queries, which return the prompts, usage slices, and restrictions of a
+  half-open analysis window and aggregate nothing; horizon statistics and pressure are
+  computed by pure code from those rows, so storage stays free of thresholds and policy;
 - immutable prediction attempts, delivery confirmations/snapshot views, and outcome evaluations;
 - export and purge.
 
@@ -337,6 +346,12 @@ The alias identifies a stable local lineage, not a provider/account/plan combina
 - created timestamp.
 
 Constraints prevent overlapping active periods for one source unless an explicit future model supports them.
+
+The plan-profile ID and version are written when the period opens. A different profile ID
+opens a new period; a new version of the same profile does not, so that shipping an updated
+bundled profile never resets local evidence. Every write path resolves the same profile
+before storing observations, otherwise storing an observation would reopen the period that
+setup had just stamped.
 
 ### 8.5 `source_binding`
 

@@ -157,7 +157,19 @@ A plan profile provides weak initial assumptions, pressure weights, and provenan
 - include profile ID, version, publication/as-of date, source/provenance, supported provider/plan identifiers, prior strength, and dimension weights;
 - may not claim a quota value that SNACK presents as real capacity.
 
-Custom profiles may be defined locally in JSONC and are labeled `user-defined`. Invalid profiles are rejected. Missing profiles fall back to a generic, deliberately broad prior.
+A source selects its profile through `sources[].plan_profile`, which names either a bundled
+profile or a local file. Custom profiles may be defined locally in JSONC and are labeled
+`user-defined`.
+
+Invalid profiles are rejected: a profile that fails schema validation is never used. A
+rejected or missing profile falls back to a generic, deliberately broad prior, and the
+command reports a warning naming the fallback. A command still succeeds, because an
+unusable assumption must not stop SNACK from describing observed usage, but the
+substitution is never silent.
+
+Changing which profile a source uses starts a new capacity period. Publishing a new version
+of the same profile does not, because that would reset local evidence on every upgrade;
+`doctor` reports the profile in use and its age instead.
 
 Local evidence always gains precedence over profile assumptions. An observed restriction has more evidentiary weight than an unsupported profile claim.
 
@@ -243,16 +255,27 @@ For each configured dimension and analysis horizon:
 5. Assign a versioned pressure band.
 6. retain the leading contributors for explanation.
 
+The historical context is the run of preceding windows of the same length. A window in
+which no prompt was observed is absence of observation, not evidence of low usage, and is
+excluded from the baseline; ranking against such windows would report a first prompt as
+the heaviest window on record. Below the versioned minimum of observed baseline windows
+the result declares an insufficient baseline and an `unknown` band rather than a score.
+
+A dimension with no baseline is reported with an unknown percentile and contributes
+nothing; it never counts as zero pressure. Contributions are shares of the score and
+always sum to it.
+
 A pressure result includes:
 
 - score or band;
 - policy version;
 - horizons considered;
-- top contributing dimensions;
+- number of observed baseline windows;
+- top contributing dimensions, each with its observed value, baseline sample size, percentile, weight, and contribution;
 - data completeness;
 - whether generic/profile/local baselines were used.
 
-Pressure boundaries, the profile-to-neutral blending curve, and weights require simulation and calibration before release. Effective weights and their policy version are included in prediction attempts and therefore in delivered snapshots. They are model policy, not user-configurable risk appetite in the MVP. Plan-profile influence on the forecast prior decays separately through Bayesian evidence.
+Pressure boundaries, the profile-to-neutral blending curve, and weights require simulation and calibration before release. The boundaries are chosen by the alarm rate they produce: under stationary usage a window ranks uniformly against its own history, so the released boundaries target a fixed split across the bands. The decay half-life and the blend constant are chosen together, so that an occasional user keeps leaning on the plan profile while a moderate daily user is driven mostly by local observations. Effective weights and their policy version are included in prediction attempts and therefore in delivered snapshots. They are model policy, not user-configurable risk appetite in the MVP. Plan-profile influence on the forecast prior decays separately through Bayesian evidence.
 
 ## 9. Forecast Model
 
@@ -356,16 +379,23 @@ Calibration shown to users must distinguish live prediction snapshots from retro
 
 ## 11. Statistics Behavior
 
-The default `stats` view is concise and actionable. For a selected source and horizon it shows:
+The default `stats` view is concise and actionable. It reports every horizon configured
+under `analysis.horizons`, or only the one given by `--horizon`. For a selected source and
+horizon it shows:
 
+- the resolved window, which is half-open: the start is inclusive and the end is exclusive;
 - prompt count and eligible/excluded outcomes;
 - observed restrictions by explicit class;
-- token dimensions as separate values;
-- observed cost and currency where available;
+- token dimensions as separate values, each with its own sample size and missing count;
+- observed cost per currency, totalled in exact decimal arithmetic and never converted between currencies;
 - median and p90 duration;
+- time-decayed effective sample size over eligible outcomes;
 - current pressure and trend;
 - data freshness and completeness;
 - forecast count, Brier score, and interval coverage when meaningful.
+
+Calibration metrics are reported as not available until a prediction model exists. They are
+never reported as zero.
 
 `--verbose` may add distributions, means, additional percentiles, EWMA, per-model breakdowns, and historical bands. It must include sample sizes and avoid statistics that cannot be interpreted from the available data.
 

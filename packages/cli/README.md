@@ -5,6 +5,14 @@ fail-open live capture through `@snack-ai/opencode`, explicit capacity-source ma
 diagnostics, and a broad initial next-prompt estimate with very-low evidence. It stores metadata
 only and does not claim to know provider capacity.
 
+`snack stats` describes observed usage over rolling analysis horizons: prompt counts by outcome,
+restrictions by class, token dimensions kept separate, cost per currency, and duration percentiles.
+Anything the source did not report stays `unknown` and never becomes zero.
+
+`snack status` also reports usage pressure, which ranks the current window against your own
+preceding windows of the same length. Pressure is relative to your local history. It is not a share
+of provider capacity, which remains unknown.
+
 OpenCode backfill supports fingerprint family `oc-sqlite-msgpart-v1`, validated against OpenCode
 `1.17.19`, `1.17.20`, `1.18.1`, and `1.18.9`. Compatibility is determined by structural and JSON
 fingerprints, not by version strings; unknown shapes fail closed before canonical writes.
