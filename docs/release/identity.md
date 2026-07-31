@@ -107,20 +107,42 @@ reminder that the registry, not a workflow's colour, is the evidence.
 
 `0.6.0` is the first release that publishes to `latest` rather than `next`. The protected
 `Publish release` workflow runs from `main` with the confirmation string `publish-0.6.0`, and it
-verifies afterwards that both packages resolve on the registry and that `@snack-ai/cli@latest` and
-`@snack-ai/opencode@latest` are the versions this commit declares.
+verifies afterwards that both packages resolve on the registry and that `latest` and `next` point
+at the versions the released commit declares.
 
-`@snack-ai/opencode@0.1.1` is already published to `next` and unchanged by the MVP, so its publish
-step skips and the tag move is the only work left for it. That move runs through
-`npm dist-tag add` against the trusted-publisher token. If npm refuses the tag operation for a
-token provisioned by OIDC, the run fails at that step rather than reporting a release that left
-`latest` on a pre-MVP plugin; recover by moving both tags manually from an authenticated npm login:
+Stage 6 publication: partial
 
-```bash
-npm dist-tag add @snack-ai/cli@0.6.0 latest
-npm dist-tag add @snack-ai/opencode@0.1.1 latest
+`@snack-ai/cli@0.6.0` was published from commit `cbad0b378f3b0e529a795313d209bcec680c2952` by
+protected release run
+[30625883811](https://github.com/Duck1201/snack/actions/runs/30625883811). The registry records 39
+files, `sha512-ewmyyYpI0CwpOcTVMzzKObWLt4Ltjt8oYEfeX9szIAng/buK5hcH4VBIhf3HQHP8/X4KAdcX1ErABxw8c+T27A==`,
+and both a publish attestation and an SLSA provenance statement. `@snack-ai/cli@latest` resolves to
+`0.6.0`.
+
+That run is recorded as a failure, and it is one: it stopped before finishing the tag moves.
+
+```text
+npm error code E401
+npm error Unable to authenticate, your authentication token seems to be invalid.
 ```
 
-Record the run URL, the resolved dist-tags, and the provenance attestation index here once the
-release has happened, as earlier stages did. The registry is the evidence, not the workflow's
-colour.
+Trusted publishing provisions credentials per package, as a side effect of publishing that package.
+`@snack-ai/opencode@0.1.1` was already on the registry and unchanged by the MVP, so its publish step
+skipped, no credentials for it existed in the run, and `npm dist-tag add` against it answered E401.
+The step aborted there, which also left `@snack-ai/cli@next` behind at `0.5.0`.
+
+The workflow now publishes and tags each package in one step, so it only writes tags where the token
+exists, and its verification covers `latest` and `next` for both packages instead of `latest` alone.
+A release whose tags are not all in place fails, because a default install would resolve to
+something other than what the released commit declares.
+
+Two tags still have to be moved by hand from an authenticated npm login, and this is the only part
+of `0.6.0` that a re-run cannot repair:
+
+```bash
+npm dist-tag add @snack-ai/opencode@0.1.1 latest
+npm dist-tag add @snack-ai/cli@0.6.0 next
+```
+
+Record the resulting dist-tags here once that is done. The registry is the evidence, not the
+workflow's colour.
