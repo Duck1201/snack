@@ -2,16 +2,15 @@
 name: verify-snack-against-real-cli
 description: >
   Drive the real `snack` binary — and for anything about a release, the published npm artifact —
-  before claiming a command works or a defect is real. The fakes a green `npm run check` runs on
-  cannot reach these paths, and a shell harness can invent a defect that is not there. Use after
-  changing any SNACK command, anything that reads storage, stdout streaming, interactive prompts,
-  wall-clock windows (pressure, trend, horizons, freshness), performance budgets, or a source
-  adapter; when driving the real OpenCode host to check live capture; and before recording a defect
-  observed from a shell loop rather than a test.
+  before claiming a command works or a defect is real. Use after changing any SNACK command,
+  anything that reads storage, stdout streaming, interactive prompts, wall-clock windows (pressure,
+  trend, horizons, freshness), performance budgets, or a source adapter; when driving the real
+  OpenCode host to check live capture; and before recording a defect observed from a shell loop
+  rather than a test.
 license: MIT
 metadata:
   author: Duck
-  version: "2.0"
+  version: "2.1"
 ---
 
 # Verify SNACK against the real CLI, not only the test suite
@@ -25,22 +24,17 @@ never closes a pipe, the fake prompt resolves instantly and never closes stdin, 
 pays module-load cost once instead of every run, and a frozen `now` puts seeded data inside windows
 that the real clock puts outside.
 
-**Verified by:** `npm run check` green at 295 tests **while** four defects it did not catch were
-found by driving the real binary, then each confirmed fixed by re-running the real command — plugin
-registration landing under `$XDG_CONFIG_HOME`, `export --output - | head` exiting 0 with no stack
-trace, `Ctrl+D` during setup exiting 0 having written nothing, and `stats` reporting
-`above_baseline` instead of `steady` on a fivefold climb.
+**Verified by:** `npm run check` green at 295 tests while four defects it did not catch were found by
+driving the real binary — plugin registration landing under `$XDG_CONFIG_HOME`, `export --output - |
+head` exiting 0 with no stack trace, `Ctrl+D` during setup exiting 0 having written nothing, and
+`stats` reporting `above_baseline` instead of `steady` on a fivefold climb. Verified again, harder,
+by the Phase 1 review of the published `1.0.0`: twelve findings, three release-blocking, against a
+suite green at 413 tests — a `setup` re-run erasing a source's evidence from every forecast, the CLI
+installing a plugin three minors old, and live capture emitting a null provider so no live
+observation could ever be attributed. Each was reproduced on the artifact installed from npm.
 
-**Verified again, harder,** by the Phase 1 review of the published `1.0.0`: twelve findings, three
-of them release-blocking, against a suite green at 413 tests — a `setup` re-run erasing a source's
-evidence from every forecast, the CLI installing a plugin three minors old, and live capture
-emitting a null provider so no live observation could ever be attributed. Each was reproduced on the
-artifact installed from npm and confirmed fixed on the artifact that replaced it.
-
-**And one finding was wrong**, which is why this skill now carries "Prove the harness before
-believing it". A reported two-minute hang was the harness closing a pty under a working command. It
-cost a fix, a revert and a retraction, and it was caught only by reproducing the defect on the
-published build before trusting it.
+**And one finding was wrong**, which is why this skill carries "Prove the harness before believing
+it".
 
 ## When to use this
 
@@ -51,24 +45,23 @@ published build before trusting it.
   because these are computed against the real clock.
 - Before recording a performance budget as met.
 - Before telling the user a command works.
-- After writing or changing a **source adapter**, before believing its fixtures — see "Reconcile an
-  adapter against its real source" below.
+- After writing or changing a **source adapter**, before believing its fixtures — read
+  `references/adapter-reconciliation.md`.
 - **Before recording a defect** you observed from a shell loop rather than from a test — see "Prove
   the harness before believing it".
-- **Before and after a release**, against the published artifact rather than the tree — see "Verify
-  a released defect against the published artifact".
-- After changing the capture plugin, against the real OpenCode host — see "Drive the real OpenCode
-  host". The packed-plugin host test is the harness; keep it runnable.
+- **Before and after a release**, against the published artifact rather than the tree — see "Verify a
+  released defect against the published artifact".
+- After changing the capture plugin, against the real OpenCode host — read
+  `references/opencode-host.md`. The packed-plugin host test is the harness; keep it runnable.
 
 ## Procedure
 
 - [ ] 1. Run the gate first: `npm run check` from the repo root. Green here is necessary, not
       sufficient.
-- [ ] 2. Build a throwaway environment. Every SNACK path is env-driven, so a temp root fully
-      isolates the run — never point it at your real config.
-- [ ] 3. Seed data **anchored to `new Date()`**, not to a fixed historical date. See
-      `references/seeding.md` for the working script; the schema constraints there are the part that
-      bites.
+- [ ] 2. Build a throwaway environment. Every SNACK path is env-driven, so a temp root fully isolates
+      the run — never point it at your real config.
+- [ ] 3. Seed data **anchored to `new Date()`**, not to a fixed historical date. `references/seeding.md`
+      has the working script; the schema constraints there are the part that bites.
 - [ ] 4. Drive the actual binary: `node packages/cli/src/cli.js <command>`. Not `run()` in-process.
 - [ ] 5. Exercise the paths the fakes cannot reach — the checklist below.
 - [ ] 6. Re-run `npm run check` to confirm nothing regressed, then delete the temp root.
@@ -100,8 +93,8 @@ is unset, and a leaked real `HOME` would write into your own OpenCode configurat
 | Permissions        | `find $ROOT -type f -exec stat -c '%a %n' {} +`                                                               | files created outside `0600`/`0700`                            |
 
 `script -qec` gives a pty, which is what makes `process.stdin.isTTY` true and the prompt wire up at
-all. Feed answers with a `sleep` between them: a pty delivers a whole buffer at once and readline
-may consume it as one line.
+all. Feed answers with a `sleep` between them: a pty delivers a whole buffer at once and readline may
+consume it as one line.
 
 **Keep the feeder open after the last answer, or you will invent a hang that is not there.**
 
@@ -114,10 +107,7 @@ script -qec "$CLI setup claude" /dev/null < <(sleep 2; printf '\004'; sleep 30)
 ```
 
 When `script`'s own stdin reaches EOF, `script` starts tearing the pty down while the child is still
-working, and a `timeout` around it measures that teardown. This produced a two-minute "hang" that
-was recorded as a P2 defect, scoped into a release, and fixed — before the same command was driven
-with the feeder held open and answered `Setup cancelled; nothing was changed.`, exit 0, on the
-unmodified published build. The fix was reverted. See "Prove the harness before believing it".
+working, and a `timeout` around it measures that teardown.
 
 ## Prove the harness before believing it
 
@@ -125,7 +115,7 @@ This skill exists because a green test suite is not evidence about what a user e
 symmetric claim is the one that is easy to skip: **a red result from a shell harness is not evidence
 either, until the harness is shown able to tell the two answers apart.**
 
-Before recording a defect observed from a shell loop rather than from a test file, run the control
+Before recording a defect observed from a shell loop rather than from a test file, run the **control**
 that distinguishes the outcome you are claiming from the one you are not:
 
 | Claiming              | The control that proves the harness                                                                        |
@@ -136,7 +126,10 @@ that distinguishes the outcome you are claiming from the one you are not:
 
 The finding-08 control was `script -qec 'read -r x; echo' /dev/null < /dev/null`, which exits in
 microseconds. It proved the harness could observe an **exit**. It never proved the harness could
-observe a **wait**, which was the thing being measured — so it licensed a defect that did not exist.
+observe a **wait**, which was the thing being measured — so it licensed a defect that did not exist:
+a two-minute "hang" recorded as P2, scoped into a release, and fixed, before the same command was
+driven with the feeder held open and answered `Setup cancelled; nothing was changed.`, exit 0, on the
+unmodified published build. The fix was reverted. Cost: a fix, a revert and a retraction.
 
 This is the same rule the project already applies to tests — confirm the check disagrees with the
 unfixed code before trusting that it agrees with the fixed one. It applies to a shell loop too.
@@ -160,98 +153,11 @@ Two things only this reaches:
 - **whether a defect was ever real.** Reproducing it on the published build _before_ fixing it is
   what separates a product defect from a harness artifact, and it costs one `npm install`.
 
-Re-verify the fix the same way after publishing. `npm pack @snack-ai/cli@<version>` downloads the
-published tarball as-is, so its digest is what a consumer receives — compare it against
-`docs/release/artifacts.md` before believing a version is what the gates approved.
-
-## Drive the real OpenCode host
-
-Live capture cannot be verified any other way: the plugin only routes when a real host dispatches
-real hooks. `opencode run "…"` is the non-interactive entry point.
-
-**The plugin must be registered by npm specifier.** A local path or a `plugin/` directory entry
-makes OpenCode hang at `init` with no output and no log line — several variants were tried and every
-one hung. Either point at a published version, or install a packed tarball into the config directory
-and reference the **installed directory**, which is what
-`packages/opencode/test/host.integration.test.js` does.
-
-```bash
-# publish-free route: pack, install into the config dir, reference the installed directory
-npm pack --workspace @snack-ai/opencode --pack-destination "$V"
-npm install --prefix "$V/config/opencode" --ignore-scripts --engine-strict=false "$V"/*.tgz
-# opencode.json plugin entry: [ "<V>/config/opencode/node_modules/@snack-ai/opencode", { … } ]
-
-env XDG_CONFIG_HOME=$V/config XDG_DATA_HOME=$V/data XDG_CACHE_HOME=$V/cache \
-    OPENCODE_DISABLE_MODELS_FETCH=true OPENCODE_DISABLE_AUTOUPDATE=true \
-  opencode run "reply with the single word ok"
-```
-
-Those two `OPENCODE_DISABLE_*` variables are not optional in a throwaway root — without them the run
-stalls fetching models or checking for an update, which looks exactly like the plugin hanging the
-host.
-
-Then assert **where** the segment landed, never just that one exists:
-
-```bash
-find "$SPOOL" -type f -printf '%m %p\n'     # expect 600, and the bound alias directory
-```
-
-`_pending/` is where an unattributable event goes, so a test that reads it passes whether routing
-works or not. That is precisely how a null-provider defect survived a stable release.
-
-**OpenCode does not honour `XDG_DATA_HOME` for its own database** — it keeps writing to
-`~/.local/share/opencode/opencode.db` whatever you set. Redirecting it is not isolation; treat the
-real database as read-only input and isolate only SNACK's own state.
-
-## Reconcile an adapter against its real source
-
-Fixtures only contain the shapes you already knew about. A source adapter can be green across every
-fixture and still drop whole classes of real records, silently — no error, no warning, just a
-smaller number. For SNACK that is worse than a crash: an under-counted **observed restriction**
-biases the forecast optimistic, and restrictions are the scarcest evidence it has.
-
-So after writing an adapter, count what the raw source contains and compare it with what the adapter
-emitted, per class of evidence. Read-only, and it takes a few lines:
-
-```js
-// count the evidence in the raw source, independently of the adapter
-let raw = 0;
-for (const file of sourceFiles)
-  for (const line of readFileSync(file, "utf8").split("\n"))
-    try {
-      if (JSON.parse(line).error === "rate_limit") raw += 1;
-    } catch {}
-
-// count what the adapter attributed, and list what it missed
-const captured = new Set();
-for (const o of adapter.readAll().observations)
-  for (const r of o.restrictions) captured.add(r.observed_at);
-console.log(`${captured.size}/${raw}`);
-```
-
-Then **chase every gap to a named cause** — do not accept "close enough". Each gap is a shape of
-real history the fixtures never had. Trace one missed record by hand: walk its parent chain, check
-whether the file it lives in is reachable at all, check whether the record that links it exists.
-
-On the Claude adapter this found three defects a green `npm run check` could not:
-
-| Gap                             | Cause                                                                                  |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| Subagent usage missing entirely | Claude Code writes subagent turns to `<session>/subagents/agent-*.jsonl`, never inline |
-| Whole turns missing             | A resumed session roots its continued turn at a record that is not a submission        |
-| A restriction missing           | An agent interrupted before reporting back leaves a transcript the session never links |
-
-Restrictions went 13/17 → 17/17 and prompts 374 → 423. Nothing in the fixture suite moved.
-
-Run the same reconciliation once more at the end: the number is the check.
+Re-verify the fix the same way after publishing. Comparing the published tarball's digest against
+`docs/release/artifacts.md` belongs to `.claude/skills/snack-release-a-version/SKILL.md`, step 7.
 
 ## Gotchas
 
-- **Do not assume the parent record already accounts for a child's usage.** Verify it. On Claude
-  Code the parent's `toolUseResult` for a subagent carries
-  `{isAsync, status, agentId, description, outputFile}` and no token counts at all, so reading the
-  subagent file adds usage rather than double-counting it. Assuming either way without looking gives
-  a silently wrong total.
 - **Anchor seeded data to `new Date()`.** The CLI uses the real clock; only tests inject `now`. Data
   seeded at a fixed date falls outside every rolling window and every command reports "nothing
   observed", which reads as a bug in your change.
@@ -259,62 +165,47 @@ Run the same reconciliation once more at the end: the number is the check.
   takes `started_at` from `time.created` inside `message.data`, not from the `time_created` /
   `time_updated` columns. Updating only the columns produces the most misleading state there is:
   `sync` reports `1 read, 1 inserted` and every horizon then reports `0 prompts`, so the ingestion
-  path looks healthy while nothing is in range. Rewrite the timestamps inside the `data` blob too,
-  or pass a wide `--horizon` (for example `P365D`) when the point is to exercise a command rather
-  than the windows themselves.
+  path looks healthy while nothing is in range. Rewrite the timestamps inside the `data` blob too, or
+  pass a wide `--horizon` (for example `P365D`) when the point is to exercise a command rather than
+  the windows themselves.
 - **`prompt_execution.completion` is CHECK-constrained** to `provisional` or `completed`, and
-  `Observation` requires `source_session_id` (not `source_session_fingerprint`, which is a column
-  but not a field of the type). Both produce confusing failures when seeding.
-- **SNACK normalizes permissions on directories it owns.** `ensurePrivateDirectory` chmods to
-  `0700`, so making a directory read-only to simulate a failure gets corrected rather than obeyed.
-  To simulate unwritable storage, put a plain _file_ where the data directory belongs.
+  `Observation` requires `source_session_id` (not `source_session_fingerprint`, which is a column but
+  not a field of the type). Both produce confusing failures when seeding.
+- **SNACK normalizes permissions on directories it owns.** `ensurePrivateDirectory` chmods to `0700`,
+  so making a directory read-only to simulate a failure gets corrected rather than obeyed. To
+  simulate unwritable storage, put a plain _file_ where the data directory belongs.
 - **Percentiles saturate at 1.** Once a window clears the entire baseline, further growth is
   invisible. Seed a _varied_ baseline the recent windows can rank inside, or you will only ever
   exercise the saturated branch.
 - **Migrations apply before any write** (`initializeDatabase` runs first in `sync` and `status`), so
   temporarily removing a migration file to simulate an older build makes commands fail loudly — that
   is the fixture breaking, not the product.
-- **OpenCode's own configuration may hold credentials.** When you need to look at it, render only
-  the `plugin` array.
 
 ## What didn't work
 
 - **Measuring `status --no-sync` p95 with 20 in-process `run()` calls.** One process loads modules
   once, hiding ~100 ms the installed command pays every time. It measured 144 ms against a 250 ms
   budget and passed, while the real spawn was **279 ms and over budget**. Spawn the binary.
-- **Measuring peak RSS inside the shared test process.** Absolute RSS belongs to the whole process
-  and carried ~200 MB from earlier tests in the same file, so the assertion failed at 324 MB with
-  nothing wrong. Assert on _growth_ relative to the work done instead — an export must cost less
-  memory than the document it produces.
+- **Measuring peak RSS inside the shared test process.** Absolute RSS belongs to the whole process and
+  carried ~200 MB from earlier tests in the same file, so the assertion failed at 324 MB with nothing
+  wrong. Assert on _growth_ relative to the work done instead — an export must cost less memory than
+  the document it produces.
+- **Measuring a quality budget while the machine is busy.** At load 5–7 on 12 cores,
+  `status --no-sync` p95 read 245 ms against a 250 ms budget and one assertion stepped aside; idle,
+  the same tree read 196 ms. A budget measured under contention measures the contention — wait for
+  the load average, and record it beside the figure.
 - **Opening and closing a `readline` interface per question.** Stdin pauses between them and the
   second question waits forever. One interface must serve the whole run, created lazily and closed
   once.
 - **Driving the pty with `pty.fork()` and a single `os.write` of all answers.** It hung and produced
   no output; `script -qec` with paced input worked.
 - **Trusting a green fixture suite for a new source adapter.** Seventeen fixture assertions passed
-  while the adapter dropped 4 of 17 real restrictions and 47 whole prompts. Fixtures encode the
-  shapes you already thought of; only the real source has the ones you did not.
-- **Locating a gap by grepping for an identifier across the source tree.** The subagent identifier
-  appears inside the subagent's own transcript, so the grep "found" a link that did not exist in the
-  parent and pointed at the wrong cause. Read the specific record and walk its parent chain instead.
-- **`script -qec CMD /dev/null < /dev/null` to test a closed stdin.** It gives `script` an
-  immediately-closed stdin, so `script` tears the pty down under a command that is still working,
-  and the `timeout` measures the teardown. It reported a two-minute hang for a command that cancels
-  in milliseconds. Keep the feeder open: `< <(sleep 2; printf '\004'; sleep 30)`.
-- **Registering the plugin by local path, by tarball path, or via a `plugin/` directory** to drive
-  the real OpenCode host. All three hung OpenCode at `init` with no output. Only an npm specifier or
-  an installed `node_modules` directory works.
-- **Redirecting `XDG_DATA_HOME` to isolate OpenCode's database.** OpenCode ignores it and keeps
-  writing to the real one. What that actually isolates is nothing, while making you believe the run
-  was contained.
-- **Measuring a quality budget while the machine is busy.** At load 5–7 on 12 cores,
-  `status --no-sync` p95 read 245 ms against a 250 ms budget and one assertion stepped aside; idle,
-  the same tree read 196 ms. A budget measured under contention measures the contention — wait for
-  the load average, and record it beside the figure.
-- **Trusting a defect found by a shell loop without a control that can observe the claimed
-  outcome.** Cost a fix, a revert, and a retraction. See "Prove the harness before believing it".
+  while the adapter dropped 4 of 17 real restrictions and 47 whole prompts. Fixtures encode the shapes
+  you already thought of; only the real source has the ones you did not.
 
 ## Reference
 
-Load `references/seeding.md` when you need the seeding script itself — the SQL is long and only
-needed at step 3.
+- `references/seeding.md` — the seeding script itself, needed at step 3.
+- `references/adapter-reconciliation.md` — counting a real source against what an adapter emitted,
+  and chasing every gap to a named cause.
+- `references/opencode-host.md` — driving the real OpenCode host for live capture.
