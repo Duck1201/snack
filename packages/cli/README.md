@@ -145,6 +145,13 @@ broader group when the narrow one is thin, in the spirit of Efron & Morris (1975
 period with no eligible outcome at all falls through to the prior alone, and that case reports its
 method as `initial-generic` rather than pretending to be a learned estimate.
 
+**A capacity period starts over when you change your provider, profile, plan or plan profile** —
+running `snack setup` again with a different `--plan` is enough. That is deliberate: a different
+plan is a different capacity regime, and outcomes from the old one are not evidence about the new
+one. So the next forecasts lean on the plan profile until the new regime has its own history, and
+`setup` tells you how many observed prompts stop informing the estimate before it happens. Nothing
+is deleted — `stats`, `observed` and `as_of` still report everything the source holds.
+
 #### Evidence gates, and why a long history can still be weak
 
 A range on its own invites over-reading, so every forecast carries an evidence level on the ladder
@@ -439,6 +446,13 @@ esconde o quão específica era a evidência dela. Isso é pooling parcial hier�
 força emprestada do grupo mais amplo quando o estreito está ralo, no espírito de Efron & Morris
 (1975). Só um período de capacidade sem nenhum desfecho elegível cai para o prior sozinho, e esse
 caso reporta o método como `initial-generic` em vez de fingir ser uma estimativa aprendida.
+
+**Um período de capacidade recomeça quando você muda o provedor, o perfil, o plano ou o perfil de
+plano** — rodar `snack setup` de novo com um `--plan` diferente já basta. Isso é deliberado: um
+plano diferente é um regime de capacidade diferente, e desfechos do antigo não são evidência sobre o
+novo. Então as próximas previsões se apoiam no perfil de plano até o novo regime ter história
+própria, e o `setup` avisa quantos prompts observados deixam de informar a estimativa antes de isso
+acontecer. Nada é apagado — `stats`, `observed` e `as_of` seguem reportando tudo que a fonte guarda.
 
 #### Portões de evidência, e por que um histórico longo ainda pode ser fraco
 
