@@ -21,18 +21,28 @@ afterEach(cleanupRunFixtures);
  * an answer for, so a question added without updating a test fails loudly instead of
  * silently taking a default.
  *
- * @param {Record<string, string>} answers
+ * An array of answers is consumed one per asking of that question, which is how a question that
+ * refuses its own answer and asks again is scripted; the last one is repeated if it is asked
+ * beyond the end of the script.
+ *
+ * @param {Record<string, string | string[]>} answers
  */
 function scriptedPrompt(answers) {
   /** @type {{id: string, message: string, choices?: {value: string, label: string}[], default?: string}[]} */
   const asked = [];
+  /** @type {Record<string, number>} */
+  const takenPerId = {};
   /** @param {{id: string, message: string, choices?: {value: string, label: string}[], default?: string}} question */
   const prompt = async (question) => {
     asked.push(question);
-    if (!(question.id in answers)) {
+    const scripted = answers[question.id];
+    if (scripted === undefined) {
       throw new Error(`the guided setup asked an unscripted question: ${question.id}`);
     }
-    return /** @type {string} */ (answers[question.id]);
+    if (typeof scripted === "string") return scripted;
+    const taken = takenPerId[question.id] ?? 0;
+    takenPerId[question.id] = taken + 1;
+    return /** @type {string} */ (scripted[Math.min(taken, scripted.length - 1)]);
   };
   return { prompt, asked };
 }
@@ -217,7 +227,8 @@ test("guided setup offers the providers actually present in the database", async
   const openCodeDatabase = await createOpenCodeDatabase(fixture.root);
   executeOpenCodeSql(
     openCodeDatabase,
-    `INSERT INTO session (id, version) VALUES ('session-2', '1.18.9');
+    `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES
+       ('session-2', 'project-1', 'slug-2', '/workspace', 'session title', '1.18.9', 1767323045000, 1767323050000);
      INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
        ('user-2', 'session-2', 1767323100000, 1767323100000,
         '{"role":"user","time":{"created":1767323100000},"agent":"build","model":{"providerID":"openai","modelID":"gpt-5"}}'),
@@ -292,6 +303,61 @@ test("re-running guided setup proposes the source it already configured", async 
   // Setup is idempotent: re-running it shows current state rather than duplicating a source.
   assert.equal(script.asked.find((question) => question.id === "alias")?.default, "work");
   assert.equal(second.installation_id, first.installation_id);
+});
+
+test("a guided answer the configuration would refuse is refused at the question", async () => {
+  const fixture = await makeRunFixture("snack-setup-reask-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  // A local account named the way people name accounts. The schema takes no spaces, and finding
+  // that out at the end of the questionnaire costs every other answer.
+  const script = scriptedPrompt({ ...defaultAnswers, profile: ["Claude Fortex", "fortex"] });
+
+  const exitCode = await run(["node", "snack", "setup", "opencode"], {
+    ...fixture.options,
+    prompt: script.prompt,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal((await soleSource(fixture.paths.configFile)).profile, "fortex");
+  assert.equal(script.asked.filter((question) => question.id === "profile").length, 2);
+  assert.match(fixture.stdout.value, /profile "Claude Fortex" is not usable/u);
+  // The rule is on the question itself, so the shape is known before the answer is typed.
+  assert.match(
+    /** @type {string} */ (script.asked.find((question) => question.id === "profile")?.message),
+    /must match/u,
+  );
+});
+
+test("--non-interactive refuses a malformed identifier before it writes anything", async () => {
+  const fixture = await makeRunFixture("snack-setup-invalid-flags-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+
+  const exitCode = await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "work",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "Claude Fortex",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 2);
+  assert.equal(document.errors[0].code, "setup_values_invalid");
+  assert.match(document.errors[0].message, /profile "Claude Fortex"/u);
+  assert.match(document.errors[0].message, /must match/u);
+  await assert.rejects(() => readFile(fixture.paths.configFile, "utf8"));
 });
 
 test("--non-interactive still demands every value as a flag", async () => {

@@ -159,7 +159,9 @@ async function makeLargeOpenCodeHistory(root) {
     );
     database.exec("DELETE FROM part; DELETE FROM message; DELETE FROM session;");
     const insertSession = database.prepare(
-      "INSERT INTO session (id, version) VALUES (?, '1.18.9')",
+      `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+       VALUES (?, 'project-1', 'slug', '/workspace',
+               'session title', '1.18.9', 1767323045000, 1767323050000)`,
     );
     const insertMessage = database.prepare(
       `INSERT INTO message (id, session_id, time_created, time_updated, data)

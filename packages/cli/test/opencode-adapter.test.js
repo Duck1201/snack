@@ -606,7 +606,8 @@ test("incremental reads do not hydrate sessions older than the cursor boundary",
   const cursor = adapter.readAll().cursor;
   executeSql(
     databaseFile,
-    `INSERT INTO session (id, version) VALUES ('session-old', '1.18.9');
+    `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES
+       ('session-old', 'project-1', 'slug-old', '/workspace', 'session title', '1.18.9', 1767323045000, 1767323050000);
      INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
       ('user-old', 'session-old', 1, 1, '{"role":"user","time":{"created":9000000000000000000},"agent":"build","model":{"providerID":"anthropic","modelID":"claude-sonnet"}}'),
       ('assistant-old', 'session-old', 2, 2, '{"role":"assistant","time":{"created":9000000000000000000,"completed":9000000000000000001},"parentID":"user-old","providerID":"anthropic","modelID":"claude-sonnet","finish":"stop","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}');`,
@@ -624,7 +625,8 @@ test("a revised compaction part re-emits its external prompt incrementally", asy
   const databaseFile = await createFixtureDatabase("supported-v1.sql");
   executeSql(
     databaseFile,
-    `INSERT INTO session (id, version) VALUES ('session-other', '1.18.9');
+    `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES
+       ('session-other', 'project-1', 'slug-other', '/workspace', 'session title', '1.18.9', 1767323045000, 1767323050000);
      INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
       ('user-compaction', 'session-1', 1767323051000, 1767323051000, '{"role":"user","time":{"created":1767323051000},"agent":"compaction","model":{"providerID":"anthropic","modelID":"claude-sonnet"}}'),
       ('assistant-summary', 'session-1', 1767323052000, 1767323053000, '{"role":"assistant","time":{"created":1767323052000,"completed":1767323053000},"parentID":"user-compaction","providerID":"anthropic","modelID":"claude-sonnet","summary":true,"finish":"stop","cost":0.001,"tokens":{"input":40,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}'),
@@ -827,7 +829,8 @@ test("keeps concurrent sessions separate when grouping assistants by prompt", as
   // A second session whose messages interleave in time with the fixture session.
   executeSql(
     databaseFile,
-    `INSERT INTO session (id, version) VALUES ('session-2', '1.18.9');
+    `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES
+       ('session-2', 'project-1', 'slug-2', '/workspace', 'session title', '1.18.9', 1767323045000, 1767323050000);
      INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
       (
         'user-s2',
@@ -877,7 +880,8 @@ test("ignores an assistant whose parent prompt belongs to another session", asyn
   // Malformed history: the assistant lives in session-2 but claims a session-1 parent.
   executeSql(
     databaseFile,
-    `INSERT INTO session (id, version) VALUES ('session-2', '1.18.9');
+    `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES
+       ('session-2', 'project-1', 'slug-2', '/workspace', 'session title', '1.18.9', 1767323045000, 1767323050000);
      INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
       (
         'assistant-cross',

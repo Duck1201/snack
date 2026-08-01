@@ -555,8 +555,11 @@ function hasSupportedStructure(database) {
           (column) =>
             column.name === name &&
             column.type.toUpperCase() === type &&
-            column.notnull === 1 &&
-            (primary ? column.pk === 1 : column.pk === 0),
+            // A primary key is asserted through `pk`, never through `notnull`. SQLite reports
+            // `notnull = 0` for a `TEXT PRIMARY KEY` outside a STRICT table, and OpenCode's own
+            // DDL is not STRICT, so demanding it here rejects every real installation while a
+            // hand-written STRICT fixture keeps passing.
+            (primary ? column.pk === 1 : column.pk === 0 && column.notnull === 1),
         ),
       )
     ) {
