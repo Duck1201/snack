@@ -167,8 +167,13 @@ scores the usage-pressure sparkline is drawn from. `status.schema.json` has decl
 `object | null` since the `0.9` freeze and `status` simply never populated it, so this fills a
 reserved slot rather than widening the contract. It is additive, a consumer pinned to `1.0` is
 unaffected, and the roadmap criterion it amends — "`--json` bytes unchanged from `1.0.x`" — is
-amended in `PLAN.md` in the open rather than quietly missed. Colour, layout and the sparkline's own
-rendering remain human formatting and reach no JSON document.
+amended in `PLAN.md` in the open rather than quietly missed.
+
+Everything else the interface work changes is human formatting, which this document has always
+listed as not public: `status` now prints one panel per capacity source instead of one dense line,
+and colours the risk label, the pressure band and the sparkline. `--json` is never coloured. A
+consumer parsing the human output was already outside the contract, and the `--json` document it
+should have been reading is unchanged but for the field named above.
 
 ## Upgrading from 0.6+
 

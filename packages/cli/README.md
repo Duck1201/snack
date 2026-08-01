@@ -29,11 +29,14 @@ snack status
 ```
 
 ```text
-work: 95-100% viability; risk low; evidence moderate; method bayesian-pressure-band@1;
-period 2026-01-02T03:04:05.000Z; pressure high; contributors prompts 100th, input_tokens 100th;
-category typical; as_of 2026-01-02T03:04:10.000Z; sync ok.
-Caveat: Real provider capacity is unknown.
-Caveat: Usage pressure compares this window with local history; it is not a share of capacity.
+work
+  viability  95-100%   risk low          evidence moderate
+  pressure   high      category typical  ▁▄▅▇█
+  drivers    prompts 100th, input_tokens 100th
+  method     bayesian-pressure-band@1
+  as of      40s ago · sync ok · period since 2026-01-02
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 In plain words, that line says: **go ahead, you are almost certainly fine — but you are having one
@@ -342,11 +345,14 @@ snack status
 ```
 
 ```text
-work: 95-100% viability; risk low; evidence moderate; method bayesian-pressure-band@1;
-period 2026-01-02T03:04:05.000Z; pressure high; contributors prompts 100th, input_tokens 100th;
-category typical; as_of 2026-01-02T03:04:10.000Z; sync ok.
-Caveat: Real provider capacity is unknown.
-Caveat: Usage pressure compares this window with local history; it is not a share of capacity.
+work
+  viability  95-100%   risk low          evidence moderate
+  pressure   high      category typical  ▁▄▅▇█
+  drivers    prompts 100th, input_tokens 100th
+  method     bayesian-pressure-band@1
+  as of      40s ago · sync ok · period since 2026-01-02
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 Em português claro, essa linha diz: **pode ir, você está quase certamente bem — mas está vivendo uma

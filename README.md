@@ -43,9 +43,14 @@ SNACK reads that history and turns it into three things:
   you can check whether SNACK has been right.
 
 ```text
-work: 95-100% viability; risk low; evidence moderate; method bayesian-pressure-band@1;
-pressure high; contributors prompts 100th, input_tokens 100th; category typical; sync ok.
-Caveat: Real provider capacity is unknown.
+work
+  viability  95-100%   risk low          evidence moderate
+  pressure   high      category typical  ▁▄▅▇█
+  drivers    prompts 100th, input_tokens 100th
+  method     bayesian-pressure-band@1
+  as of      40s ago · sync ok · period since 2026-01-02
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 Go ahead — but you are having one of your heaviest hours ever, so do not be surprised if that
@@ -183,9 +188,14 @@ O SNACK lê esse histórico e transforma em três coisas:
   aconteceu, então dá para conferir se o SNACK vem acertando.
 
 ```text
-work: 95-100% viability; risk low; evidence moderate; method bayesian-pressure-band@1;
-pressure high; contributors prompts 100th, input_tokens 100th; category typical; sync ok.
-Caveat: Real provider capacity is unknown.
+work
+  viability  95-100%   risk low          evidence moderate
+  pressure   high      category typical  ▁▄▅▇█
+  drivers    prompts 100th, input_tokens 100th
+  method     bayesian-pressure-band@1
+  as of      40s ago · sync ok · period since 2026-01-02
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 Pode ir — mas você está vivendo uma das suas horas mais pesadas de todas, então não se assuste se
