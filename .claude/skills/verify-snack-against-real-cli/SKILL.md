@@ -1,14 +1,17 @@
 ---
 name: verify-snack-against-real-cli
 description: >
-  Drive the installed `snack` binary against a seeded database before claiming a command works — the
-  fakes a green `npm run check` runs on cannot reach these paths. Use after changing any SNACK
-  command, anything that reads storage, stdout streaming, interactive prompts, wall-clock windows
-  (pressure, trend, horizons, freshness), performance budgets, or a source adapter.
+  Drive the real `snack` binary — and for anything about a release, the published npm artifact —
+  before claiming a command works or a defect is real. The fakes a green `npm run check` runs on
+  cannot reach these paths, and a shell harness can invent a defect that is not there. Use after
+  changing any SNACK command, anything that reads storage, stdout streaming, interactive prompts,
+  wall-clock windows (pressure, trend, horizons, freshness), performance budgets, or a source
+  adapter; when driving the real OpenCode host to check live capture; and before recording a defect
+  observed from a shell loop rather than a test.
 license: MIT
 metadata:
   author: Duck
-  version: "1.0"
+  version: "2.0"
 ---
 
 # Verify SNACK against the real CLI, not only the test suite
@@ -28,6 +31,17 @@ registration landing under `$XDG_CONFIG_HOME`, `export --output - | head` exitin
 trace, `Ctrl+D` during setup exiting 0 having written nothing, and `stats` reporting
 `above_baseline` instead of `steady` on a fivefold climb.
 
+**Verified again, harder,** by the Phase 1 review of the published `1.0.0`: twelve findings, three
+of them release-blocking, against a suite green at 413 tests — a `setup` re-run erasing a source's
+evidence from every forecast, the CLI installing a plugin three minors old, and live capture
+emitting a null provider so no live observation could ever be attributed. Each was reproduced on the
+artifact installed from npm and confirmed fixed on the artifact that replaced it.
+
+**And one finding was wrong**, which is why this skill now carries "Prove the harness before
+believing it". A reported two-minute hang was the harness closing a pty under a working command. It
+cost a fix, a revert and a retraction, and it was caught only by reproducing the defect on the
+published build before trusting it.
+
 ## When to use this
 
 - After changing a command's output path, especially anything that streams (`export`) or prompts
@@ -39,6 +53,12 @@ trace, `Ctrl+D` during setup exiting 0 having written nothing, and `stats` repor
 - Before telling the user a command works.
 - After writing or changing a **source adapter**, before believing its fixtures — see "Reconcile an
   adapter against its real source" below.
+- **Before recording a defect** you observed from a shell loop rather than from a test — see "Prove
+  the harness before believing it".
+- **Before and after a release**, against the published artifact rather than the tree — see "Verify
+  a released defect against the published artifact".
+- After changing the capture plugin, against the real OpenCode host — see "Drive the real OpenCode
+  host". The packed-plugin host test is the harness; keep it runnable.
 
 ## Procedure
 
@@ -82,6 +102,106 @@ is unset, and a leaked real `HOME` would write into your own OpenCode configurat
 `script -qec` gives a pty, which is what makes `process.stdin.isTTY` true and the prompt wire up at
 all. Feed answers with a `sleep` between them: a pty delivers a whole buffer at once and readline
 may consume it as one line.
+
+**Keep the feeder open after the last answer, or you will invent a hang that is not there.**
+
+```bash
+# WRONG — reports a hang for a command that cancels cleanly
+script -qec "$CLI setup claude" /dev/null < /dev/null
+
+# RIGHT — the pty stays up long enough for the command to print and exit
+script -qec "$CLI setup claude" /dev/null < <(sleep 2; printf '\004'; sleep 30)
+```
+
+When `script`'s own stdin reaches EOF, `script` starts tearing the pty down while the child is still
+working, and a `timeout` around it measures that teardown. This produced a two-minute "hang" that
+was recorded as a P2 defect, scoped into a release, and fixed — before the same command was driven
+with the feeder held open and answered `Setup cancelled; nothing was changed.`, exit 0, on the
+unmodified published build. The fix was reverted. See "Prove the harness before believing it".
+
+## Prove the harness before believing it
+
+This skill exists because a green test suite is not evidence about what a user experiences. The
+symmetric claim is the one that is easy to skip: **a red result from a shell harness is not evidence
+either, until the harness is shown able to tell the two answers apart.**
+
+Before recording a defect observed from a shell loop rather than from a test file, run the control
+that distinguishes the outcome you are claiming from the one you are not:
+
+| Claiming              | The control that proves the harness                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| "it hangs"            | the same harness around a command that is **known to wait and then finish** — not one that exits instantly |
+| "it exits non-zero"   | the same harness around a command known to exit zero                                                       |
+| "nothing was written" | write a file through the same harness and see it                                                           |
+
+The finding-08 control was `script -qec 'read -r x; echo' /dev/null < /dev/null`, which exits in
+microseconds. It proved the harness could observe an **exit**. It never proved the harness could
+observe a **wait**, which was the thing being measured — so it licensed a defect that did not exist.
+
+This is the same rule the project already applies to tests — confirm the check disagrees with the
+unfixed code before trusting that it agrees with the fixed one. It applies to a shell loop too.
+
+## Verify a released defect against the published artifact
+
+Driving `node packages/cli/src/cli.js` proves the tree. For anything claimed about a **release** — a
+defect found in it, or a fix shipped in it — install by name and version instead:
+
+```bash
+npm install --prefix "$ROOT/npm" @snack-ai/cli@1.0.1
+S="$ROOT/npm/node_modules/.bin/snack"
+"$S" --version                       # believe nothing until this prints what you expect
+```
+
+Two things only this reaches:
+
+- **the artifact a user receives**, which traversed the publish path the tree never does. Phase 1
+  found the CLI installing a plugin three minors old this way, and `doctor` telling anyone on the
+  current one to downgrade;
+- **whether a defect was ever real.** Reproducing it on the published build _before_ fixing it is
+  what separates a product defect from a harness artifact, and it costs one `npm install`.
+
+Re-verify the fix the same way after publishing. `npm pack @snack-ai/cli@<version>` downloads the
+published tarball as-is, so its digest is what a consumer receives — compare it against
+`docs/release/artifacts.md` before believing a version is what the gates approved.
+
+## Drive the real OpenCode host
+
+Live capture cannot be verified any other way: the plugin only routes when a real host dispatches
+real hooks. `opencode run "…"` is the non-interactive entry point.
+
+**The plugin must be registered by npm specifier.** A local path or a `plugin/` directory entry
+makes OpenCode hang at `init` with no output and no log line — several variants were tried and every
+one hung. Either point at a published version, or install a packed tarball into the config directory
+and reference the **installed directory**, which is what
+`packages/opencode/test/host.integration.test.js` does.
+
+```bash
+# publish-free route: pack, install into the config dir, reference the installed directory
+npm pack --workspace @snack-ai/opencode --pack-destination "$V"
+npm install --prefix "$V/config/opencode" --ignore-scripts --engine-strict=false "$V"/*.tgz
+# opencode.json plugin entry: [ "<V>/config/opencode/node_modules/@snack-ai/opencode", { … } ]
+
+env XDG_CONFIG_HOME=$V/config XDG_DATA_HOME=$V/data XDG_CACHE_HOME=$V/cache \
+    OPENCODE_DISABLE_MODELS_FETCH=true OPENCODE_DISABLE_AUTOUPDATE=true \
+  opencode run "reply with the single word ok"
+```
+
+Those two `OPENCODE_DISABLE_*` variables are not optional in a throwaway root — without them the run
+stalls fetching models or checking for an update, which looks exactly like the plugin hanging the
+host.
+
+Then assert **where** the segment landed, never just that one exists:
+
+```bash
+find "$SPOOL" -type f -printf '%m %p\n'     # expect 600, and the bound alias directory
+```
+
+`_pending/` is where an unattributable event goes, so a test that reads it passes whether routing
+works or not. That is precisely how a null-provider defect survived a stable release.
+
+**OpenCode does not honour `XDG_DATA_HOME` for its own database** — it keeps writing to
+`~/.local/share/opencode/opencode.db` whatever you set. Redirecting it is not isolation; treat the
+real database as read-only input and isolate only SNACK's own state.
 
 ## Reconcile an adapter against its real source
 
@@ -177,6 +297,22 @@ Run the same reconciliation once more at the end: the number is the check.
 - **Locating a gap by grepping for an identifier across the source tree.** The subagent identifier
   appears inside the subagent's own transcript, so the grep "found" a link that did not exist in the
   parent and pointed at the wrong cause. Read the specific record and walk its parent chain instead.
+- **`script -qec CMD /dev/null < /dev/null` to test a closed stdin.** It gives `script` an
+  immediately-closed stdin, so `script` tears the pty down under a command that is still working,
+  and the `timeout` measures the teardown. It reported a two-minute hang for a command that cancels
+  in milliseconds. Keep the feeder open: `< <(sleep 2; printf '\004'; sleep 30)`.
+- **Registering the plugin by local path, by tarball path, or via a `plugin/` directory** to drive
+  the real OpenCode host. All three hung OpenCode at `init` with no output. Only an npm specifier or
+  an installed `node_modules` directory works.
+- **Redirecting `XDG_DATA_HOME` to isolate OpenCode's database.** OpenCode ignores it and keeps
+  writing to the real one. What that actually isolates is nothing, while making you believe the run
+  was contained.
+- **Measuring a quality budget while the machine is busy.** At load 5–7 on 12 cores,
+  `status --no-sync` p95 read 245 ms against a 250 ms budget and one assertion stepped aside; idle,
+  the same tree read 196 ms. A budget measured under contention measures the contention — wait for
+  the load average, and record it beside the figure.
+- **Trusting a defect found by a shell loop without a control that can observe the claimed
+  outcome.** Cost a fix, a revert, and a retraction. See "Prove the harness before believing it".
 
 ## Reference
 
