@@ -108,6 +108,7 @@ test("no Claude history, however broken, makes the adapter throw or invent an ob
   // observations it can stand behind or refuses. Anything else -- a crash, or a plausible-looking
   // observation assembled from a record it did not understand -- is worse than reading nothing,
   // because an under-counted history biases the forecast without saying so.
+  let readThrough = 0;
   await fc.assert(
     fc.asyncProperty(
       fc.array(mutation, { maxLength: 6 }),
@@ -123,6 +124,7 @@ test("no Claude history, however broken, makes the adapter throw or invent an ob
           assert.equal(error.reason, "source_schema_unsupported");
           return;
         }
+        readThrough += 1;
 
         for (const observation of result.observations) {
           assert.equal(typeof observation.source_prompt_id, "string");
@@ -148,4 +150,8 @@ test("no Claude history, however broken, makes the adapter throw or invent an ob
     ),
     { numRuns: 200 },
   );
+
+  // Without this the property could pass by refusing everything, and a reader that grew stricter
+  // would turn a real test into a green one that reads nothing.
+  assert.ok(readThrough > 0, "every generated history was refused; the read path went untested");
 });
