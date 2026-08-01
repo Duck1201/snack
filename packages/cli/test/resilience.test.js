@@ -341,6 +341,39 @@ test("a database from a future release is refused by every path that touches it"
   assert.equal(countPrompts(install.resolved.databaseFile), before);
 });
 
+test("a migration that changed after it was applied is refused, and named as drift", async () => {
+  // The other half of the guard above, and the one `npm run upgrade:smoke` exists to catch: not a
+  // database from the future, but a released migration edited in place under its own checksum. The
+  // two are told apart deliberately -- `storage_newer_than_application` sends the reader to a newer
+  // release, `migration_history_mismatch` sends them to the backup -- so the reason code is part of
+  // what is asserted here, not just the exit code.
+  const install = await makeWorkingInstall("snack-migration-drift-");
+  const before = countPrompts(install.resolved.databaseFile);
+  const database = new Database(install.resolved.databaseFile);
+  try {
+    // Migration 1 is the one every supported database has applied, so drifting it is the case that
+    // reaches every installation rather than only the recently upgraded ones.
+    database.prepare("UPDATE schema_migration SET checksum = 'drifted' WHERE number = 1").run();
+  } finally {
+    database.close();
+  }
+
+  for (const argv of [
+    ["sync", "--full"],
+    ["status", "--no-sync"],
+    ["stats"],
+    ["export", "--format", "json", "--output", "-"],
+  ]) {
+    install.stdout.value = "";
+    install.stderr.value = "";
+    const exitCode = await run(["node", "snack", ...argv, "--json"], install.options);
+    assert.equal(exitCode, ExitCode.storage, argv.join(" "));
+    const document = JSON.parse(install.stdout.value || install.stderr.value);
+    assert.equal(document.errors[0].code, "migration_history_mismatch", argv.join(" "));
+  }
+  assert.equal(countPrompts(install.resolved.databaseFile), before);
+});
+
 test("cleanup keeps a pre-migration backup when migrating an existing database", async () => {
   const install = await makeWorkingInstall("snack-backup-");
   const backups = await readdir(install.resolved.backupDir).catch(() => []);
