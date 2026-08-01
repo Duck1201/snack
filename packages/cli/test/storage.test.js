@@ -421,6 +421,40 @@ test("a 0.6 database reaches 0.8 through 0.7 without a reset", async () => {
   assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
 });
 
+test("a database written by a newer release says so instead of blaming the migration history", async () => {
+  // Running an older binary against a database a newer one already upgraded is a thing people do
+  // -- a rollback, a second machine, an npm install that resolved differently. Until now it
+  // produced `migration_history_mismatch`, the same answer given for a tampered or hand-edited
+  // migration, which sends someone hunting for corruption that is not there. The two situations
+  // are distinguishable: a stored number nobody has heard of and higher than anything available
+  // means the database is ahead, not damaged.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+  const older = await copyMigrationsThrough(11);
+
+  await assert.rejects(
+    () => initializeDatabase(paths, { migrationsDir: older, applicationVersion: "0.7.0", now }),
+    (error) => {
+      assert.ok(error instanceof SnackError);
+      assert.equal(error.reason, "storage_newer_than_application");
+      // The message has to name both numbers and where the way back is. No downgrade is offered:
+      // the pre-migration backup is the only route, and it already exists.
+      assert.match(error.message, /12/u);
+      assert.match(error.message, /11/u);
+      assert.match(error.message, /backup/iu);
+      return true;
+    },
+  );
+
+  // And the read-only inspection reports it rather than throwing, so `doctor` can say which of the
+  // two problems this is instead of reporting storage as unreadable.
+  assert.deepEqual(await inspectDatabase(paths.databaseFile, { migrationsDir: older }), {
+    exists: true,
+    integrity: "ok",
+    migrations: "ahead",
+  });
+});
+
 test("a prompt stored before the second client arrived keeps an honest unknown attribution", async () => {
   // The upgrade can only attribute a prompt when its source has one binding, because then there is
   // one client it could have come from. Where two clients already shared a source, naming either

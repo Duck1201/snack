@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { runDoctor } from "../src/doctor.js";
 import { run } from "../src/main.js";
 import { pluginPackageSpec } from "../src/opencode-config.js";
-import { initializeDatabase } from "../src/storage.js";
+import { initializeDatabase, migrationDirectory } from "../src/storage.js";
 import { cleanupRunFixtures, createClaudeHistory, makeRunFixture } from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
@@ -126,3 +126,41 @@ test("a Claude-only installation is not told about the OpenCode plugin", async (
   assert.ok(ids.includes("source_fingerprint:claude"));
   assert.equal(document.status, "ok");
 });
+
+test("doctor names a newer-release database instead of calling storage inaccessible", async () => {
+  // The check people actually reach for when something is wrong. Reporting "storage is invalid or
+  // inaccessible" for a database a newer release merely upgraded describes damage that has not
+  // happened and hides the one thing that would fix it: run the newer release.
+  const fixture = await makeRunFixture("snack-doctor-ahead-");
+  await initializeDatabase(fixture.paths, { applicationVersion: "0.8.0", now });
+
+  const report = await runDoctor(fixture.paths, {
+    now,
+    nodeVersion: "24.18.1",
+    platform: "linux",
+    migrationsDir: await migrationsThrough(fixture.root, 11),
+  });
+
+  const byId = new Map(report.checks.map((check) => [check.id, check]));
+  assert.equal(byId.get("storage")?.status, undefined, "storage was reported as unreadable");
+  assert.equal(byId.get("storage_integrity")?.status, "pass");
+  const migrations = byId.get("storage_migrations");
+  assert.equal(migrations?.status, "fail");
+  assert.match(migrations.message, /newer release/iu);
+});
+
+/**
+ * Copy the released migrations up to a number, so an older application can be pointed at them.
+ *
+ * @param {string} root
+ * @param {number} through
+ */
+async function migrationsThrough(root, through) {
+  const directory = join(root, `migrations-${through}`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  for (const name of await readdir(migrationDirectory)) {
+    if (Number(name.slice(0, 3)) > through) continue;
+    await writeFile(join(directory, name), await readFile(join(migrationDirectory, name), "utf8"));
+  }
+  return directory;
+}

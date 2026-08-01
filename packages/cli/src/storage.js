@@ -285,10 +285,21 @@ export async function inspectDatabase(databaseFile, options = {}) {
     const foreignKeyViolations = /** @type {unknown[]} */ (database.pragma("foreign_key_check"));
     const migrations = await loadMigrations(options.migrationsDir ?? migrationDirectory);
     const applied = readAppliedMigrations(database);
-    verifyAppliedMigrations(applied, migrations);
+    const healthy = integrity === "ok" && foreignKeyViolations.length === 0;
+    // Reported rather than thrown. This is the read-only inspection `doctor` runs, and a database
+    // written by a newer release is intact and readable by that release -- describing it as
+    // inaccessible storage would be both wrong and unactionable.
+    try {
+      verifyAppliedMigrations(applied, migrations);
+    } catch (error) {
+      if (error instanceof SnackError && error.reason === "storage_newer_than_application") {
+        return { exists: true, integrity: healthy ? "ok" : "failed", migrations: "ahead" };
+      }
+      throw error;
+    }
     return {
       exists: true,
-      integrity: integrity === "ok" && foreignKeyViolations.length === 0 ? "ok" : "failed",
+      integrity: healthy ? "ok" : "failed",
       migrations: applied.size === migrations.length ? "current" : "pending",
     };
   } catch (error) {
@@ -1757,8 +1768,21 @@ function readAppliedMigrations(database) {
  */
 function verifyAppliedMigrations(applied, available) {
   const byNumber = new Map(available.map((migration) => [migration.number, migration]));
+  const highestAvailable = Math.max(0, ...byNumber.keys());
   for (const [number, stored] of applied) {
     const migration = byNumber.get(number);
+    // A migration this build has never heard of, numbered beyond everything it ships, is a database
+    // a newer release already upgraded. That is a different situation from a history that was
+    // edited or corrupted, and reporting both as a mismatch sent someone looking for damage that
+    // was not there. Told apart here so the reader can say which one it is.
+    if (!migration && number > highestAvailable) {
+      throw new SnackError(
+        `Storage was written by a newer release: it holds migration ${number}, and this ` +
+          `application ships up to ${highestAvailable}. Install the newer release to use it, ` +
+          "or restore the pre-migration backup taken before the upgrade from the backup directory.",
+        { code: ExitCode.storage, reason: "storage_newer_than_application" },
+      );
+    }
     if (!migration || migration.name !== stored.name || migration.checksum !== stored.checksum) {
       throw new SnackError("Stored migration history does not match this application version.", {
         code: ExitCode.storage,

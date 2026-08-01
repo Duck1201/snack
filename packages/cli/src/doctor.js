@@ -28,7 +28,7 @@ const PLAN_PROFILE_STALE_DAYS = 365;
 
 /**
  * @param {import("./paths.js").SnackPaths} paths
- * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string}} [options]
+ * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string, migrationsDir?: string}} [options]
  * @returns {Promise<{status: "ok" | "degraded" | "error", checks: DoctorCheck[]}>}
  */
 export async function runDoctor(paths, options = {}) {
@@ -72,7 +72,10 @@ export async function runDoctor(paths, options = {}) {
   try {
     const storageLock = await checkLock(`${paths.databaseFile}.lock`, "storage_lock");
     if (storageLock) checks.push(storageLock);
-    const storage = await inspectDatabase(paths.databaseFile);
+    const storage = await inspectDatabase(
+      paths.databaseFile,
+      options.migrationsDir === undefined ? {} : { migrationsDir: options.migrationsDir },
+    );
     if (!storage.exists) {
       checks.push(warn("storage", "Storage has not been initialized."));
     } else {
@@ -84,7 +87,16 @@ export async function runDoctor(paths, options = {}) {
       checks.push(
         storage.migrations === "current"
           ? pass("storage_migrations", "Storage migrations are current.")
-          : fail("storage_migrations", "Storage migrations are not current."),
+          : storage.migrations === "ahead"
+            ? // Intact, readable, and simply beyond this build. Naming it is what turns a dead end
+              // into an instruction, and no downgrade is implied: the newer release is the way
+              // forward, and the pre-migration backup is the way back.
+              fail(
+                "storage_migrations",
+                "Storage was written by a newer release; install that release to use it, " +
+                  "or restore the pre-migration backup taken before the upgrade.",
+              )
+            : fail("storage_migrations", "Storage migrations are not current."),
       );
     }
   } catch {
