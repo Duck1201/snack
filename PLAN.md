@@ -847,7 +847,10 @@ no owner:
 ### Stage 9 - Feature Freeze and Public Beta
 
 - **Release:** `0.9.0` on npm `latest`
-- **Status:** In progress — Waves 1 and 2 complete, unreleased. Wave 2 hardening found six defects,
+- **Status:** Complete (2026-08-01). `@snack-ai/cli@0.9.0` and `@snack-ai/opencode@0.1.3` published
+  to `latest` with SLSA provenance from `5a5e8f1` by run
+  [30694400969](https://github.com/Duck1201/snack/actions/runs/30694400969), tagged `v0.9.0`;
+  `stable` stays at `0.6.1`. Wave 2 hardening found six defects,
   four on frozen surfaces and three of them P1, every one found by a test written for that wave and
   none visible to the fixture suite that was already green: read-only commands crashed against an
   older schema, the Claude reader stored a timestamp that was not a time, the published spool schema
@@ -856,11 +859,15 @@ no owner:
   and summarized in [docs/compatibility.md](./docs/compatibility.md). The migration floor is now
   proven against the published `0.6.1` artifact rather than only in-tree, four trust boundaries have
   property tests, and the budgets have a recorded developer-machine measurement that `release:check`
-  gates on. Wave 3 is cut and awaiting publication: `@snack-ai/cli` at `0.9.0` and
-  `@snack-ai/opencode` at `0.1.3` — the plugin moves only to republish the corrected spool schema,
-  which ships inside its tarball — with the `0.6+` upgrade path documented in
-  [docs/compatibility.md](./docs/compatibility.md) and beta feedback recorded there as consultative
-  evidence that cannot itself reset the freeze. The public surface is frozen and recorded
+  gates on. Wave 3 published the beta with the `0.6+` upgrade path documented in
+  [docs/compatibility.md](./docs/compatibility.md), where beta feedback is also recorded as
+  consultative evidence that cannot itself reset the freeze. The plugin moved for the first time in
+  four releases, to republish the corrected spool schema: its behaviour is unchanged since `0.1.2`,
+  but the schema is named in the package's `files` and therefore ships inside the tarball, so the
+  question deciding a republish is not whether the behaviour changed but whether anything named in
+  `files` did. The published `0.1.2` artifact refuses to compile under the product's own Ajv and
+  `0.1.3` compiles, checked against both tarballs rather than against the tree. The public surface is
+  frozen and recorded
   in [docs/compatibility.md](./docs/compatibility.md), which `release:check` now gates on. The three
   P3s carried from Stage 8 are fixed: `doctor` refuses an unknown alias with exit 4 like every other
   command, `data purge --include-config` no longer reports a plugin that was never registered, and a
