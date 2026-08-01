@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type publish-0.7.0 after reviewing the release evidence
+        description: Type publish-0.8.0 after reviewing the release evidence
         required: true
         type: string
       dist_tag:
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   publish:
-    if: inputs.confirmation == 'publish-0.7.0' && github.ref == 'refs/heads/main'
+    if: inputs.confirmation == 'publish-0.8.0' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:
