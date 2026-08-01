@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/data-purge.schema.json",
+  "title": "snack data purge payload",
+  "description": "The `data` of a `snack data purge --json` document. A dry run reports what it would delete under the same shape as a real one, so the preview and the deletion cannot describe different things. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["dry_run", "scope", "counts", "cursor_reset", "tombstones"],
+  "properties": {
+    "dry_run": {
+      "type": "boolean"
+    },
+    "scope": {
+      "description": "What was selected. A half-open window: `since` is included, `until` is not.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        },
+        "until": {
+          "type": "string"
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["prompts", "predictions"],
+      "properties": {
+        "prompts": {
+          "type": "integer"
+        },
+        "predictions": {
+          "type": "integer"
+        }
+      }
+    },
+    "cursor_reset": {
+      "description": "Ingestion cursors moved back, so the deleted window is not silently re-read.",
+      "type": "array"
+    },
+    "tombstones": {
+      "description": "Records refused on a later synchronization, written only for --prevent-reimport.",
+      "type": "integer"
+    }
+  }
+}

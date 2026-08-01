@@ -37,28 +37,72 @@ const ajv = new Ajv2020.default({ allErrors: true, strict: true });
 const compiled = new Map();
 
 /** @param {string} name */
+async function readSchema(name) {
+  return JSON.parse(await readFile(new URL(`../schemas/${name}`, import.meta.url), "utf8"));
+}
+
+/**
+ * The envelope routes each command to its payload schema by `$id`, so every command schema has to
+ * be known to Ajv before the envelope compiles. Registered once, for the same reason the compiled
+ * validators are cached: Ajv keys a schema by its `$id` and refuses to see the same one twice.
+ */
+let registered = false;
+async function registerCommandSchemas() {
+  if (registered) return;
+  registered = true;
+  for (const name of await readdir(new URL("../schemas/commands/", import.meta.url))) {
+    ajv.addSchema(await readSchema(`commands/${name}`));
+  }
+}
+
+/** @param {string} name */
 async function compileSchema(name) {
   const cached = compiled.get(name);
   if (cached) return cached;
-  const schema = JSON.parse(await readFile(new URL(`../schemas/${name}`, import.meta.url), "utf8"));
-  const validate = ajv.compile(schema);
+  await registerCommandSchemas();
+  const schema = await readSchema(name);
+  const validate = ajv.getSchema(schema.$id) ?? ajv.compile(schema);
   compiled.set(name, validate);
   return validate;
 }
 
-/** Every command that emits an envelope, driven exactly as a user would. */
+/**
+ * Every command that emits an envelope, driven exactly as a user would. `command` is the string the
+ * envelope carries, which is what the payload schemas are named and routed by; `name` is only how
+ * the captured fixture is filed.
+ */
 const invocations = [
-  { name: "setup-opencode", argv: ["setup", "opencode", ...setupFlags("work")] },
-  { name: "setup-claude", argv: ["setup", "claude", ...setupFlags("personal")] },
-  { name: "sync", argv: ["sync", "--full"] },
-  { name: "stats", argv: ["stats", "--verbose"] },
-  { name: "status", argv: ["status", "--no-sync"] },
-  { name: "doctor", argv: ["doctor"] },
-  { name: "config-get", argv: ["config", "get"] },
-  { name: "config-path", argv: ["config", "path"] },
-  { name: "config-set", argv: ["config", "set", "analysis.horizons", '["PT2H"]'] },
-  { name: "data-purge-dry-run", argv: ["data", "purge", "--source", "work", "--dry-run"] },
+  {
+    name: "setup-opencode",
+    command: "setup opencode",
+    argv: ["setup", "opencode", ...setupFlags("work")],
+  },
+  {
+    name: "setup-claude",
+    command: "setup claude",
+    argv: ["setup", "claude", ...setupFlags("personal")],
+  },
+  { name: "sync", command: "sync", argv: ["sync", "--full"] },
+  { name: "stats", command: "stats", argv: ["stats", "--verbose"] },
+  { name: "status", command: "status", argv: ["status", "--no-sync"] },
+  { name: "doctor", command: "doctor", argv: ["doctor"] },
+  { name: "config-get", command: "config get", argv: ["config", "get"] },
+  { name: "config-path", command: "config path", argv: ["config", "path"] },
+  {
+    name: "config-set",
+    command: "config set",
+    argv: ["config", "set", "analysis.horizons", '["PT2H"]'],
+  },
+  {
+    name: "data-purge-dry-run",
+    command: "data purge",
+    argv: ["data", "purge", "--source", "work", "--dry-run"],
+  },
 ];
+
+/** The published payload schema for a command, named by the command the envelope reports. */
+const payloadSchemaFor = (/** @type {string} */ command) =>
+  `${command.replaceAll(" ", "-")}.schema.json`;
 
 /** @param {string} alias */
 function setupFlags(alias) {
@@ -126,9 +170,7 @@ test("an error document is an envelope too", async () => {
 test("the export schema and the exported columns cannot drift apart", async () => {
   // This is what makes the schema file trustworthy without generating it: the declared columns are
   // the contract, and a column added to the exporter without being declared here fails.
-  const schema = JSON.parse(
-    await readFile(new URL("../schemas/export.schema.json", import.meta.url), "utf8"),
-  );
+  const schema = await readSchema("export.schema.json");
   const declared = schema.properties.data.properties.tables;
 
   assert.deepEqual(
@@ -175,6 +217,64 @@ async function capturedDocuments(version) {
   );
 }
 
+/**
+ * Every top-level property name a payload schema declares, gathered across the `oneOf` branches and
+ * `$defs` it is written with. The union rather than one branch: `status` and `stats` answer with a
+ * single report or with one per source, and both spellings are the same contract.
+ *
+ * @param {Record<string, unknown>} schema
+ * @returns {Set<string>}
+ */
+function declaredProperties(schema) {
+  /** @type {Set<string>} */
+  const names = new Set();
+  /** @param {unknown} node */
+  const walk = (node) => {
+    if (typeof node !== "object" || node === null) return;
+    const { properties, oneOf, $defs } = /** @type {Record<string, unknown>} */ (node);
+    if (typeof properties === "object" && properties !== null) {
+      for (const name of Object.keys(properties)) names.add(name);
+    }
+    if (Array.isArray(oneOf)) for (const branch of oneOf) walk(branch);
+    if (typeof $defs === "object" && $defs !== null) {
+      for (const definition of Object.values($defs)) walk(definition);
+    }
+  };
+  walk(schema);
+  return names;
+}
+
+test("every payload declares each field it emits", async () => {
+  // The other half of the freeze, and the half a validator cannot give. The published schemas stay
+  // permissive about extra fields on purpose: a consumer pinned to 0.9.0 must survive a field a
+  // later minor adds, so `additionalProperties: false` would break exactly the consumer the
+  // compatibility policy promises to protect. The guard against a field entering the contract
+  // unnoticed is therefore this test, not the validator -- the same trick that makes the
+  // hand-written export schema trustworthy without generating it.
+  const fixture = await makeConfiguredFixture();
+
+  for (const invocation of invocations) {
+    const schema = await readSchema(`commands/${payloadSchemaFor(invocation.command)}`);
+    const declared = declaredProperties(schema);
+    fixture.stdout.value = "";
+    await run(["node", "snack", ...invocation.argv, "--json"], fixture.options);
+    const { data } = JSON.parse(fixture.stdout.value);
+
+    // `status` and `stats` answer with one report or with one per source under `sources`, and the
+    // schema says so by being a `oneOf`. There the keys to check are the report's own. Everywhere
+    // else `sources` is an ordinary property and the payload is what it looks like.
+    const payloads = schema.oneOf && Array.isArray(data?.sources) ? data.sources : [data];
+    for (const payload of payloads) {
+      for (const key of Object.keys(payload ?? {})) {
+        assert.ok(
+          declared.has(key),
+          `${invocation.command} emits ${key}, which its published schema never declares`,
+        );
+      }
+    }
+  }
+});
+
 test("every command declares the frozen envelope version", async () => {
   const fixture = await makeConfiguredFixture();
 
@@ -208,21 +308,23 @@ test("a document from before the freeze announces itself as version 1", async ()
   }
 });
 
-test("the envelope frame did not change beyond its version", async () => {
-  // The bump is not licence to reshape the document. Every field a 0.7 or 0.8 consumer read is
-  // still there, still named the same, still meaning the same -- so a captured document with only
-  // its version relabelled validates. A frame change would have to be argued for on its own.
+test("the freeze broke exactly one payload and left every other document alone", async () => {
+  // The bump is not licence to reshape everything under cover of one break. Relabelling a captured
+  // document with the new version is the question "would this still be valid today?", and the
+  // answer has to be yes for every command except the one deliberately changed -- `config set`,
+  // whose storage keys moved to snake_case. Any other name on this list is an unintended break.
   const envelope = await compileSchema("envelope.schema.json");
+  /** @type {string[]} */
+  const broken = [];
 
   for (const version of ["0.7", "0.8"]) {
     for (const { name, document } of await capturedDocuments(version)) {
       const relabelled = { ...document, schema_version: ENVELOPE_SCHEMA_VERSION };
-      assert.ok(
-        envelope(relabelled),
-        `${version} ${name}: ${JSON.stringify(envelope.errors, null, 2)}`,
-      );
+      if (!envelope(relabelled)) broken.push(`${version}/${name}`);
     }
   }
+
+  assert.deepEqual(broken, ["0.7/config-set.json", "0.8/config-set.json"]);
 });
 
 test("the export changed shape under a new version rather than under the old one", async () => {
@@ -424,10 +526,24 @@ test("the packaged files carry every published schema", async () => {
 
   assert.ok(packageJson.files.includes("schemas"), packageJson.files.join(", "));
   assert.deepEqual(schemas.sort(), [
+    "commands",
     "config.schema.json",
     "envelope.schema.json",
     "export.schema.json",
     "plan-profile.schema.json",
     "spool-event.schema.json",
   ]);
+});
+
+test("every command that publishes a payload publishes a schema for it", async () => {
+  // Derived from the command list rather than from the directory, or it would prove only that the
+  // directory contains what it contains. A command added without a payload schema is a payload
+  // outside the freeze. `export` is absent because its whole document, not just its `data`, already
+  // has a published schema of its own.
+  const published = await readdir(new URL("../schemas/commands/", import.meta.url));
+
+  assert.deepEqual(
+    published.sort(),
+    invocations.map((invocation) => payloadSchemaFor(invocation.command)).sort(),
+  );
 });

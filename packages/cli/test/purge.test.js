@@ -300,8 +300,10 @@ test("--include-config does not report a plugin that was never registered", asyn
 
   assert.equal(exitCode, 0);
   assert.ok(
-    !(/** @type {{code: string}[]} */ (document.warnings) ?? []).some(
-      (warning) => warning.code === "plugin_still_registered",
+    !(
+      /** @type {{code: string}[]} */ (document.warnings ?? []).some(
+        (warning) => warning.code === "plugin_still_registered",
+      )
     ),
     JSON.stringify(document.warnings),
   );

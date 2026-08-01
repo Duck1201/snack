@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/stats.schema.json",
+  "title": "snack stats payload",
+  "description": "The `data` of a `snack stats --json` document. One report when the installation has a single capacity source, otherwise one per source under `sources`. Describes observed usage; it never states a share of a provider's real capacity. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/report"
+    },
+    {
+      "type": "object",
+      "required": ["sources"],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/report"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "report": {
+      "type": "object",
+      "required": ["source", "horizons", "pressure", "calibration"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "required": ["alias", "provider", "profile", "plan", "plan_profile"],
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "plan": {
+              "type": "string"
+            },
+            "plan_profile": {
+              "$ref": "https://snack-ai.dev/schemas/commands/status.schema.json#/$defs/planProfile"
+            }
+          }
+        },
+        "horizons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/horizon"
+          }
+        },
+        "pressure": {
+          "$ref": "https://snack-ai.dev/schemas/commands/status.schema.json#/$defs/pressure"
+        },
+        "calibration": {
+          "description": "How past forecasts actually scored. Absent numbers stay null rather than being reported as zero.",
+          "type": "object",
+          "required": ["policy_version", "snapshots", "undelivered_attempts", "live", "backtest"],
+          "properties": {
+            "policy_version": {
+              "type": "string"
+            },
+            "snapshots": {
+              "type": "integer"
+            },
+            "undelivered_attempts": {
+              "type": "integer"
+            },
+            "live": {
+              "type": ["object", "null"]
+            },
+            "backtest": {
+              "type": ["object", "null"]
+            }
+          }
+        },
+        "by_client": {
+          "description": "Present only for `--by-client`: the same window split per client feeding the source.",
+          "type": ["array", "null"]
+        }
+      }
+    },
+    "horizon": {
+      "type": "object",
+      "required": [
+        "horizon",
+        "window",
+        "dimensions",
+        "cost",
+        "by_model",
+        "duration",
+        "restrictions",
+        "freshness",
+        "effective_sample_size",
+        "policy_version",
+        "prompts"
+      ],
+      "properties": {
+        "horizon": {
+          "description": "The ISO-8601 duration this window covers, half-open.",
+          "type": "string"
+        },
+        "window": {
+          "type": "object",
+          "required": ["from", "to"],
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          }
+        },
+        "dimensions": {
+          "type": "object",
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens"
+          ],
+          "properties": {
+            "input_tokens": {
+              "type": "object",
+              "required": ["sample_size", "missing", "complete"],
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                },
+                "sample_size": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "output_tokens": {
+              "type": "object",
+              "required": ["sample_size", "missing", "complete"],
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                },
+                "sample_size": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "reasoning_tokens": {
+              "type": "object",
+              "required": ["sample_size", "missing", "complete"],
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                },
+                "sample_size": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "cache_read_tokens": {
+              "type": "object",
+              "required": ["sample_size", "missing", "complete"],
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                },
+                "sample_size": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "cache_write_tokens": {
+              "type": "object",
+              "required": ["sample_size", "missing", "complete"],
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                },
+                "sample_size": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "cost": {
+          "type": "object",
+          "required": ["sample_size", "missing", "complete"],
+          "properties": {
+            "by_currency": {
+              "type": ["object", "null"]
+            },
+            "sample_size": {
+              "type": "integer"
+            },
+            "missing": {
+              "type": "integer"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        },
+        "by_model": {
+          "type": "array"
+        },
+        "duration": {
+          "type": "object",
+          "required": ["sample_size", "missing", "complete"],
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            },
+            "sample_size": {
+              "type": "integer"
+            },
+            "missing": {
+              "type": "integer"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        },
+        "restrictions": {
+          "type": "object",
+          "required": ["sample_size"],
+          "properties": {
+            "by_class": {
+              "type": ["object", "null"]
+            },
+            "unit": {
+              "type": "string"
+            },
+            "sample_size": {
+              "type": "integer"
+            }
+          }
+        },
+        "freshness": {
+          "$ref": "https://snack-ai.dev/schemas/commands/status.schema.json#/$defs/freshness"
+        },
+        "effective_sample_size": {
+          "description": "How much the window is really worth after time weighting, which is smaller than the raw count.",
+          "type": "object",
+          "required": ["value", "unit", "sample_size", "half_life_seconds"],
+          "properties": {
+            "value": {
+              "type": ["number", "null"]
+            },
+            "unit": {
+              "type": "string"
+            },
+            "sample_size": {
+              "type": "integer"
+            },
+            "half_life_seconds": {
+              "type": ["number", "null"]
+            }
+          }
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "prompts": {
+          "type": "object",
+          "required": ["count", "eligible", "successes", "restrictions", "excluded"],
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "eligible": {
+              "type": "integer"
+            },
+            "successes": {
+              "type": "integer"
+            },
+            "restrictions": {
+              "type": "integer"
+            },
+            "excluded": {
+              "type": "integer"
+            },
+            "unit": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

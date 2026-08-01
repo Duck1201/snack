@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/config-path.schema.json",
+  "title": "snack config path payload",
+  "description": "The `data` of a `snack config path --json` document: where the configuration file is resolved to, without creating it. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["path"],
+  "properties": {
+    "path": {
+      "type": "string"
+    }
+  }
+}

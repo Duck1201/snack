@@ -147,7 +147,7 @@ test("a rejected configuration says which rule refused it", () => {
     throw new Error("the configuration was accepted");
   };
 
-  const { plan: _plan, ...missingRequired } = valid;
+  const missingRequired = { ...valid, plan: undefined };
   const unknownAdapter = rejectionOf({ ...valid, adapter: "sardine-cli" });
   const missing = rejectionOf(missingRequired);
   const malformed = rejectionOf({ ...valid, provider: "not a provider" });
