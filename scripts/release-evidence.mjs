@@ -31,11 +31,40 @@ export function compareArtifacts(first, second) {
   return [...names].filter((name) => first[name] !== second[name]).sort();
 }
 
+/** The two packages this repository publishes, in the order the evidence lists them. */
+export const PACKAGES = ["@snack-ai/cli", "@snack-ai/opencode"];
+
+/**
+ * The sha256 of each package's tarball as this working tree packs it right now.
+ *
+ * Exported so `release:check` can compare the evidence against the source rather than trusting that
+ * whoever last edited a packaged file remembered to regenerate it. That is not a hypothetical: the
+ * `1.0.0` evidence was written before a later commit changed `packages/cli/README.md`, which is
+ * named in the CLI's `files` array, and the digest published in `docs/release/artifacts.md` was
+ * therefore for a tarball nobody would ever receive.
+ *
+ * @returns {Promise<Record<string, string>>} package name to `sha256:...`
+ */
+export async function currentTarballDigests() {
+  const workspace = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+  const temporary = await mkdtemp(join(tmpdir(), "snack-digest-"));
+  try {
+    /** @type {Record<string, string>} */
+    const digests = {};
+    for (const name of PACKAGES) {
+      digests[name] = await digestOf(await packInto(workspace, name, temporary));
+    }
+    return digests;
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
 if (import.meta.filename === process.argv[1]) await main();
 
 async function main() {
   const workspace = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-  const packages = ["@snack-ai/cli", "@snack-ai/opencode"];
+  const packages = PACKAGES;
   const temporary = await mkdtemp(join(tmpdir(), "snack-release-evidence-"));
   /** @type {string[]} */
   const rows = [];
