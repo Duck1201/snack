@@ -535,6 +535,18 @@ test("both packages ship a byte-identical spool event schema", async () => {
   assert.equal(cli.equals(plugin), true, "the two spool schemas have drifted apart");
 });
 
+test("both packages test against a byte-identical set of privacy canaries", async () => {
+  // Duplicated for the same reason the spool schema is: neither package may reach into the other's
+  // tests. Duplicated on purpose still has to mean identical, or the two come to disagree about
+  // what a leak is -- and a canary the plugin stopped planting is a leak nobody is looking for.
+  const cli = await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url));
+  const plugin = await readFile(
+    new URL("../../opencode/test/privacy-canaries.json", import.meta.url),
+  );
+
+  assert.equal(cli.equals(plugin), true, "the two canary sets have drifted apart");
+});
+
 test("the packaged files carry every published schema", async () => {
   // A schema that does not ship is a contract nobody downstream can check against.
   const packageJson = JSON.parse(

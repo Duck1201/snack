@@ -1,0 +1,10 @@
+{
+  "credential": "sk-private-credential-canary",
+  "path": "/home/private/project/path-canary",
+  "prompt": "PROMPT_CANARY_DO_NOT_STORE",
+  "response": "RESPONSE_CANARY_DO_NOT_STORE",
+  "branch": "BRANCH_CANARY_DO_NOT_STORE",
+  "title": "TITLE_CANARY_DO_NOT_STORE",
+  "agent": "AGENT_CANARY_DO_NOT_STORE",
+  "toolResult": "TOOL_RESULT_CANARY_DO_NOT_STORE"
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -58,6 +58,17 @@ test("no command writes or prints prompt text, credentials, or local paths", asy
     `UPDATE part SET data = json_set(data, '$.text', ${quote(
       `${privacyCanaries.prompt} ${privacyCanaries.response} ${privacyCanaries.credential} ${privacyCanaries.path}`,
     )});`,
+  );
+  // OpenCode carries content outside the message parts too, and those fields held innocent fixture
+  // values -- so if SNACK ever started storing a session title or a working directory, nothing
+  // here would have noticed. The Claude fixture already plants its equivalents; this is the other
+  // client catching up.
+  executeOpenCodeSql(
+    openCodeDatabase,
+    `UPDATE session SET title = ${quote(String(privacyCanaries.title))},
+                        directory = ${quote(String(privacyCanaries.path))},
+                        slug = ${quote(String(privacyCanaries.title))};
+     UPDATE project SET worktree = ${quote(String(privacyCanaries.path))};`,
   );
   fixture.options.env.OPENCODE_DB = openCodeDatabase;
   const promptFile = join(fixture.root, "unsent-prompt.txt");
@@ -297,5 +308,99 @@ test("no command writes or prints what a Claude history says about the user", as
     for (const file of snackFiles) {
       assert.doesNotMatch(file.content, pattern, `${name} reached ${file.path}`);
     }
+  }
+});
+
+test("a session identifier from the spool is hashed before it is stored", async () => {
+  // The privacy suite drove backfill only; live capture writes through a spool segment instead, and
+  // that path had no canary anywhere.
+  //
+  // Most of a spool event is identifiers SNACK stores on purpose -- the prompt id, the provider,
+  // the model, a provider error code -- so planting canaries in those would assert the opposite of
+  // the policy. The session identifier is the one field that must not survive as it arrived: it
+  // names a conversation, and SNACK reduces it to a fingerprint on the way in. That is the claim
+  // worth holding, and it was held for backfill and not for the spool.
+  const fixture = await makeRunFixture("snack-privacy-spool-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.stdout.value = "";
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "work",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+      "--json",
+    ],
+    fixture.options,
+  );
+  const installationId = JSON.parse(fixture.stdout.value).data.source.installation_id;
+
+  const segmentDirectory = join(fixture.paths.spoolDir, "work");
+  await mkdir(segmentDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(segmentDirectory, "segment-1.ndjson"),
+    `${JSON.stringify({
+      schema_version: 1,
+      event_id: "event-1",
+      installation_id: installationId,
+      event_type: "session_idle",
+      source_prompt_id: "prompt-1",
+      source_session_id: String(privacyCanaries.title),
+      revision: "revision-1",
+      revision_domain: "opencode-plugin-v1",
+      parser_version: "opencode-plugin-v1",
+      occurred_at: "2026-01-02T03:04:20.000Z",
+      provider: "anthropic",
+      model: "claude-sonnet",
+      completion: "completed",
+      outcome: "success",
+      usage_slices: [],
+      restrictions: [],
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  /** @type {string[]} */
+  const transcript = [];
+  for (const argv of [
+    ["sync", "--full"],
+    ["status", "--no-sync"],
+    ["stats", "--verbose"],
+    ["doctor"],
+    ["export", "--format", "json", "--output", "-"],
+  ]) {
+    for (const json of [false, true]) {
+      fixture.stdout.value = "";
+      fixture.stderr.value = "";
+      await run(["node", "snack", ...argv, ...(json ? ["--json"] : [])], fixture.options);
+      transcript.push(fixture.stdout.value, fixture.stderr.value);
+    }
+  }
+
+  // Guard against a vacuous pass: the segment has to have been read for the hashing to mean
+  // anything, and the spool is the one place the canary is allowed to remain.
+  assert.match(transcript.join(""), /"read": 1/u, "the spool segment was never read");
+  const files = await readEveryByte(fixture.dataHome);
+  assert.ok(
+    files.some((file) => file.path.endsWith("snack.sqlite3")),
+    "the storage database was never created",
+  );
+
+  const pattern = new RegExp(String(privacyCanaries.title), "u");
+  for (const [index, output] of transcript.entries()) {
+    assert.doesNotMatch(output, pattern, `the session identifier reached output ${index}`);
+  }
+  for (const file of files) {
+    if (file.path.startsWith(fixture.paths.spoolDir)) continue;
+    assert.doesNotMatch(file.content, pattern, `the session identifier reached ${file.path}`);
   }
 });
