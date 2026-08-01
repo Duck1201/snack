@@ -2,10 +2,10 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:7f638bc0-1f1b-4e46-b1bd-d9fbaa1dba71",
+  "serialNumber": "urn:uuid:f550c52a-8147-4302-8f15-44985ea6549c",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-01T19:36:40.916Z",
+    "timestamp": "2026-08-01T23:19:27.121Z",
     "lifecycles": [
       {
         "phase": "pre-build"
@@ -1328,13 +1328,13 @@
       ]
     },
     {
-      "bom-ref": "@snack-ai/cli@1.0.2",
+      "bom-ref": "@snack-ai/cli@1.1.0",
       "type": "library",
       "name": "cli",
-      "version": "1.0.2",
+      "version": "1.1.0",
       "scope": "required",
       "description": "Local-first AI usage metadata and next-prompt assessment CLI",
-      "purl": "pkg:npm/%40snack-ai/cli@1.0.2",
+      "purl": "pkg:npm/%40snack-ai/cli@1.1.0",
       "properties": [],
       "externalReferences": [
         {
@@ -1690,7 +1690,7 @@
       "dependsOn": []
     },
     {
-      "ref": "@snack-ai/cli@1.0.2",
+      "ref": "@snack-ai/cli@1.1.0",
       "dependsOn": [
         "ajv@8.20.0",
         "better-sqlite3@12.6.2",

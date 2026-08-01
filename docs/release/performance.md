@@ -24,6 +24,45 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.1.0
+
+- Date: 2026-08-01
+- Commit: `release/1.1.0`, after `snack update`, the status panel and the documentation restructure
+- Machine: Linux 6.12.63+deb13-amd64, 12 cores, load average 1.68 at the start of the run
+- Toolchain: Node `24.18.1`, npm `11.16.0`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+| Budget | PLAN.md | Measured | `1.0.2` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **212 ms** (p50 193 ms, min 182 ms) | 196 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **192 ms** (p50 186 ms, min 184 ms) | 202 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **414 ms** (categorize 40 ms + write 374 ms) | 420 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **14.5 s** | 14.6 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.6 s** | 13.3 s |
+| Steady-state memory | under 150 MB | **passes both readings** | passes both readings |
+
+Every assertion ran; none stepped aside.
+
+### The status panel and the trend cost nothing measurable
+
+`status` now asks `computeSourcePressure` for the window scores the usage-pressure sparkline is
+drawn from, which adds one `computeUsagePressure` call per window — five — per source. That looked
+like a real risk against a 250 ms p95 and was measured before it was believed, by flipping
+`includeTrend` off and on over the same 100,000-prompt history, spawning the binary each time:
+
+| `status --no-sync` | p95 | p50 |
+| --- | --- | --- |
+| without the trend | 197 ms | 186 ms |
+| with the trend | 188 ms | 184 ms |
+
+The difference is noise, and the reason is structural rather than lucky: `computeSourcePressure`
+already reads and buckets all thirty-one windows in one query, so the trend only re-ranks rows that
+are already in memory. The scan was paid before the sparkline asked for anything.
+
+The `212 ms` single-source figure above is 16 ms above `1.0.2` and 24 ms above the paired
+measurement in this same run, which is run-to-run variation on a shared machine rather than a
+regression: the two-client figure moved the other way, by 10 ms, on the same commit.
+
 ## 1.0.2
 
 - Date: 2026-08-01

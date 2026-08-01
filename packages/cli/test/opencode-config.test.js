@@ -120,3 +120,19 @@ test("re-running setup upgrades an outdated pin in place instead of duplicating 
   // Consent is re-read from the current setup run, never inherited from the old entry.
   assert.equal(snackEntry[1].prospective_analysis, false);
 });
+
+test("the support matrix names the plugin version this CLI actually pins", async () => {
+  // The same defect Phase 1 found as a P1, one level out: a version written by hand in a second
+  // place, with nothing tying it to the first. `1.0.0` shipped a pin three minors behind because
+  // the only thing keeping the two in step was somebody remembering. The published matrix is a
+  // claim about what SNACK registers, so it gets the same gate the constant does.
+  const matrix = await readFile(
+    new URL("../../../docs/opencode-support.md", import.meta.url),
+    "utf8",
+  );
+
+  assert.ok(
+    matrix.includes(pluginPackageSpec),
+    `docs/opencode-support.md does not name ${pluginPackageSpec}`,
+  );
+});

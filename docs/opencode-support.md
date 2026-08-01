@@ -36,7 +36,7 @@ forecasts. After resolving the configuration, run `snack sync --full` to re-eval
 OpenCode `OPENCODE_DB` is honored when it is an absolute path. Otherwise SNACK checks
 `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db`.
 
-`snack setup opencode --install-plugin --yes` can register `@snack-ai/opencode@1.0.1` in the global
+`snack setup opencode --install-plugin --yes` can register `@snack-ai/opencode@1.0.2` in the global
 OpenCode configuration — the version this CLI publishes alongside itself, asserted by a test so the
 two cannot drift apart again. SNACK writes that exact specifier but does not require it when
 reading: because every published plugin emits the same `spool-event-v1`, a registration pinned at
