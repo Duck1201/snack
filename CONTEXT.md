@@ -65,8 +65,12 @@ Local, ephemeral processing of an unsent prompt's text to derive an allowlisted 
 _Avoid_: Prompt collection, content storage
 
 **Real provider capacity**:
-The amount of usage a provider actually permits over a period. SNACK treats it as unknown.
+The amount of usage a provider actually permits over a period. SNACK treats it as unknown unless a client states it, and never infers it from observation.
 _Avoid_: Estimated capacity, balance
+
+**Reported capacity usage**:
+A usage figure a client states on the provider's behalf — a fraction of a stated window, the length of that window, and when it resets. It is quoted, never inferred, and never merged into an estimate or into usage pressure. One source reporting it does not make any other source's capacity knowable.
+_Avoid_: Usage pressure, remaining quota, estimated capacity, observed usage
 
 **Client**:
 The tool through which the user submits prompts, such as OpenCode, Claude Code, or Codex CLI.
