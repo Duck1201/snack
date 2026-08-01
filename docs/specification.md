@@ -148,6 +148,15 @@ Changing provider, plan, or account/profile begins a new capacity period at an e
 - never rewrites old records as if they used the new plan;
 - starts with lower evidence until current-period observations accumulate.
 
+The period scopes what **trains** the forecast, not what SNACK will admit to holding. `observed`,
+`freshness.as_of`, `stats` and `doctor`'s freshness check describe the whole source across every
+period; only the outcome history behind the estimate is scoped to the open one. Until `1.0.1` the
+distinction did not exist, and a rotation made a synchronized source describe itself as empty —
+`observed 0`, `as_of unknown`, `doctor` reporting no synchronized usage — while `stats` printed the
+same rows. `setup` now warns, naming how many observed prompts stop informing the estimate, because
+a forecast that drops to the plan-profile prior with no explanation reads as a defect rather than as
+the honest uncertainty it is.
+
 ### 5.3 Plan Profiles
 
 A plan profile provides weak initial assumptions, pressure weights, and provenance. Bundled profiles:
