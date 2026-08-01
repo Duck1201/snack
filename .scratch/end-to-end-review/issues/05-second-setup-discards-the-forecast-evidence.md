@@ -1,8 +1,6 @@
 # 05 — Re-running `setup` on an existing source discards every forecast's evidence, permanently
 
-Status: `ready-for-agent`
-Severity: **P1** — blocks release; ships as `1.0.1`
-Owner: unassigned
+Status: `ready-for-agent` Severity: **P1** — blocks release; ships as `1.0.1` Owner: unassigned
 Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
 
 ## What happens
@@ -42,7 +40,8 @@ is a new capacity regime and old evidence may not describe it.
 
 The defect is downstream of that decision. Two queries hard-filter on the open period:
 
-- `readSourceSummary` (`storage.js:1209-1211`) — `JOIN capacity_period … AND capacity_period.ended_at IS NULL`
+- `readSourceSummary` (`storage.js:1209-1211`) —
+  `JOIN capacity_period … AND capacity_period.ended_at IS NULL`
 - the status query (`storage.js:1356-1358`) — the same join
 
 so prior evidence does not get down-weighted, or reported as belonging to a previous plan. It

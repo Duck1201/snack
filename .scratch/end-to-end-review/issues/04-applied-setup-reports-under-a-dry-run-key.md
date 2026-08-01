@@ -1,10 +1,7 @@
 # 04 — An applied `setup` reports its observation count under a `dry_run` key
 
-Status: `ready-for-agent`
-Severity: **P3**
-Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
-Target: `1.1.0`
+Status: `ready-for-agent` Severity: **P3** Owner: unassigned Found in: Phase 1 end-to-end review,
+Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
 
 ## What happens
 

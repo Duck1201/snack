@@ -1,10 +1,7 @@
 # 02 — A provider mapping added after the first sync recovers nothing, and nothing says so
 
-Status: `ready-for-agent`
-Severity: **P2**
-Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
-Target: `1.1.0`
+Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
+Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
 
 ## What happens
 
@@ -46,7 +43,7 @@ configuration and re-synced has every reason to believe the fix took effect, and
 that it did not is a number they have no baseline for.
 
 The cursor invariant itself is intact — `CLAUDE.md` requires the cursor to advance inside the
-committing transaction, and it did. What is missing is that a *pending* observation is not a
+committing transaction, and it did. What is missing is that a _pending_ observation is not a
 committed one, and advancing past it makes the pending row unrecoverable by the incremental path.
 
 P2 rather than P1 because `sync --full` is a complete workaround. It is undocumented, which is the
@@ -66,8 +63,8 @@ The lazy version, in preference order:
 
 1. when a sync sees a newly-mapped provider that has pending rows for this installation, replay the
    pending rows rather than requiring `--full`. The rows are already retained in `pending_mapping`;
-2. failing that, have `sync` and `doctor` say `run snack sync --full to attribute N pending
-   observation(s)` — a message, not a mechanism.
+2. failing that, have `sync` and `doctor` say
+   `run snack sync --full to attribute N pending observation(s)` — a message, not a mechanism.
 
 ## Test seam
 

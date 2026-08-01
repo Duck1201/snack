@@ -1,10 +1,7 @@
 # 06 — The Claude fingerprint check re-reads and re-parses the entire history on every command
 
-Status: `ready-for-agent`
-Severity: **P2**
-Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 4, `@snack-ai/cli@1.0.0` from npm
-Target: `1.1.0`
+Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
+Wave 4, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
 
 ## What happens
 
@@ -37,7 +34,7 @@ function hasSupportedStructure(projectsDirectory) {
 
 `readRecords` (`claude-adapter.js:596`) is eager: `readFileSync(file, "utf8")`, `split("\n")`, then
 `JSON.parse` on every line, returning a fully materialized array. The `fingerprintSampleSize = 200`
-break limits how many records are *examined* after the file has already been read and parsed in
+break limits how many records are _examined_ after the file has already been read and parsed in
 full.
 
 `readSince` calls `hasSupportedStructure` before `read`, deliberately and for a good reason recorded
@@ -57,7 +54,7 @@ of the product's primary command.
 
 It also collides with `1.2.0`'s `status --watch`, which repeats that command every 30 seconds.
 
-## What it is *not*
+## What it is _not_
 
 Not a breach of the recorded 1.0 gate. `docs/release/performance.md` enforces steady-state memory as
 `node --max-old-space-size=150`, and re-run against this real history every command still passes:

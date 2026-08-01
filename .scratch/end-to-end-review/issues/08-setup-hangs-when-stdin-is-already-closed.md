@@ -1,10 +1,8 @@
 # 08 — Interactive `setup` hangs forever when stdin is already at EOF
 
-Status: `ready-for-agent`
-Severity: **P2**
-Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
-Target: `1.0.1` alongside [05](./05-second-setup-discards-the-forecast-evidence.md), or `1.1.0`
+Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
+Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.0.1` alongside
+[05](./05-second-setup-discards-the-forecast-evidence.md), or `1.1.0`
 
 ## What happens
 

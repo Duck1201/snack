@@ -1,15 +1,13 @@
 # 10 — Live capture emits `provider: null` on OpenCode `1.18.10`, so no live event can ever be attributed
 
-Status: `ready-for-agent`
-Severity: **P1** — blocks release; ships as `1.0.1`
-Owner: unassigned
+Status: `ready-for-agent` Severity: **P1** — blocks release; ships as `1.0.1` Owner: unassigned
 Found in: Phase 1 end-to-end review, Wave 2, real OpenCode `1.18.10`
 
 ## What happens
 
-Real OpenCode `1.18.10`, the capture plugin registered through `snack setup opencode
---install-plugin`, a real prompt sent with `opencode run`. The plugin loads, the host exits 0, and
-the spool receives its events at mode `0600`:
+Real OpenCode `1.18.10`, the capture plugin registered through
+`snack setup opencode --install-plugin`, a real prompt sent with `opencode run`. The plugin loads,
+the host exits 0, and the spool receives its events at mode `0600`:
 
 ```json
 {"event_type":"prompt_started", …,"provider":null,"model":null,"completion":"provisional","outcome":"excluded", …}
@@ -50,17 +48,17 @@ fixing that one does not fix this one.
 
 `docs/opencode-support.md` publishes the claim this contradicts:
 
-| OpenCode version | Schema family | Backfill | Live capture |
-| --- | --- | --- | --- |
-| `1.18.10` | `oc-sqlite-msgpart-v1` | Supported | **Supported by `spool-event-v1`** |
+| OpenCode version | Schema family          | Backfill  | Live capture                      |
+| ---------------- | ---------------------- | --------- | --------------------------------- |
+| `1.18.10`        | `oc-sqlite-msgpart-v1` | Supported | **Supported by `spool-event-v1`** |
 
 `1.18.10` is the version measured here. Live capture is the whole subject of the `0.3.0` release and
 one of the two capture paths the product documents. It produces observations that cannot be stored,
 on the exact version the matrix names as supported, and there is no user-side workaround — the
 `_pending` routing is inside the plugin.
 
-Backfill from OpenCode's SQLite still works and still attributes, which is why nothing looked broken:
-`sync` shows sensible numbers on the `backfill` path in the same run.
+Backfill from OpenCode's SQLite still works and still attributes, which is why nothing looked
+broken: `sync` shows sensible numbers on the `backfill` path in the same run.
 
 ## What is intact
 

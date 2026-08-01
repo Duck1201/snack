@@ -1,16 +1,13 @@
 # 01 — The OpenCode adapter drops a prompt with no assistant reply, and counts it nowhere
 
-Status: `ready-for-agent`
-Severity: **P2**
-Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
-Target: `1.1.0` unless a later wave raises the severity
+Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
+Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0` unless a later wave raises the severity
 
 ## What happens
 
 Against the real OpenCode database (392 MB, 66 sessions, 2618 messages), the adapter emits **183**
-observations. The source holds **200** user messages, **194** of them eligible once the adapter's own
-compaction and continuation filters are applied.
+observations. The source holds **200** user messages, **194** of them eligible once the adapter's
+own compaction and continuation filters are applied.
 
 The 11 that disappear all share one property: **no assistant message names them as a parent**.
 
@@ -38,7 +35,8 @@ against 183.
 A user prompt with no assistant reply is the textbook `unknown`/`excluded` observation. The adapter
 never produces that shape; it produces nothing at all. Two consequences:
 
-1. the descriptive usage dimensions the spec says an excluded observation still contributes are lost;
+1. the descriptive usage dimensions the spec says an excluded observation still contributes are
+   lost;
 2. a source can never be reconciled against its own history, which is the check that finds an
    under-counting adapter in the first place — see
    `.claude/skills/verify-snack-against-real-cli/SKILL.md`, "Reconcile an adapter against its real
