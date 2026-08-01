@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 
 import {
   checkSourceIdentifier,
@@ -40,7 +40,9 @@ import { createSourceAdapter } from "./source-adapter.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
   inspectPluginRegistration,
+  pluginPackageSpec,
   preparePluginRegistration,
+  readRegisteredInstallationId,
   resolveOpenCodeConfig,
   writePluginRegistration,
 } from "./opencode-config.js";
@@ -48,6 +50,7 @@ import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibratio
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { resolvePlanProfile } from "./plan-profile.js";
+import { executeCommand, readLockfiles, resolveUpdatePlan, updateModulePath } from "./update.js";
 import {
   readSpoolEvents,
   removeAcknowledgedSegments,
@@ -100,6 +103,18 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @property {string | undefined} [nodeVersion]
  * @property {typeof writePrivateAtomic | undefined} [writeConfig]
  * @property {SetupPrompt | undefined} [prompt]
+ * @property {string | undefined} [modulePath]
+ * @property {ExecuteCommand | undefined} [execute]
+ */
+
+/**
+ * Runs an executable to completion, and rejects when it does not succeed.
+ *
+ * `update` is the only command that uses it, for the two processes it has to start: the package
+ * manager, and the newly installed binary it re-execs. Injected the way `writeConfig` and `prompt`
+ * already are, so no test runs a package manager or spawns anything.
+ *
+ * @typedef {(command: string, args: string[]) => Promise<void>} ExecuteCommand
  */
 
 /**
@@ -1030,6 +1045,126 @@ export async function run(argv, options = {}) {
         );
       }
     });
+
+  program
+    .command("update")
+    .description("bring the CLI and the capture plugin to versions that belong together")
+    .option("--yes", "skip the confirmation")
+    .option("--dry-run", "print what would run and exit")
+    .option("--json", "emit one versioned JSON document")
+    // Internal, and hidden on purpose: it exists because a process cannot become a different
+    // version of itself, not because anyone has a reason to type it. Naming it in the help would
+    // invite a re-registration with no install behind it.
+    .addOption(new Option("--finish").hideHelp())
+    .action(async function update(commandOptions) {
+      if (commandOptions.finish === true) {
+        const change = await finishUpdate();
+        if (wantsJson(this, configuredJson)) {
+          stdout.write(formatJson(createEnvelope("update", { applied: true, ...change }, { now })));
+        } else {
+          stdout.write(
+            change.registered_plugin === null
+              ? "No OpenCode plugin is registered; nothing to re-register.\n"
+              : `Re-registered ${change.registered_plugin}.\n`,
+          );
+        }
+        return;
+      }
+
+      const modulePath = options.modulePath ?? updateModulePath;
+      const cwd = process.cwd();
+      const plan = resolveUpdatePlan({
+        modulePath,
+        cwd,
+        env: options.env ?? process.env,
+        lockfiles: await readLockfiles(cwd),
+      });
+
+      if (commandOptions.dryRun === true) {
+        if (wantsJson(this, configuredJson)) {
+          stdout.write(formatJson(createEnvelope("update", { applied: false, plan }, { now })));
+        } else {
+          stdout.write(`Would run: ${plan.command}\n`);
+        }
+        return;
+      }
+
+      if (commandOptions.yes !== true) {
+        // Installing into a place the user did not expect is the failure this whole detection
+        // exists to avoid, so the resolved command is named in the question itself.
+        if (wantsJson(this, configuredJson) || options.prompt === undefined) {
+          throw new SnackError(
+            `Update installs packages; re-run with --yes to confirm, or --dry-run to see what would run.\nCommand: ${plan.command}`,
+            { code: ExitCode.usage, reason: "confirmation_required" },
+          );
+        }
+        const answer = await options.prompt({
+          id: "update_confirmation",
+          message: `Run ${plan.command} to update SNACK?`,
+          choices: [
+            { value: "y", label: "yes" },
+            { value: "n", label: "no" },
+          ],
+          default: "y",
+        });
+        if (answer.trim().toLowerCase() !== "y") {
+          stdout.write("Update cancelled; nothing was changed.\n");
+          return;
+        }
+      }
+
+      const execute = options.execute ?? executeCommand;
+      try {
+        await execute(plan.manager, plan.args);
+      } catch (error) {
+        // Offline, a proxy, a registry outage, a private mirror. ADR-0010 requires this to read as
+        // what it is and not as a SNACK defect, and nothing has been rewritten yet -- the
+        // registration is only touched by the process that comes after a successful install, so a
+        // failure here leaves a working, older, matched pair.
+        throw new SnackError(
+          `The update did not install, and nothing was changed.\n` +
+            `Command: ${plan.command}\n` +
+            `${error instanceof Error ? error.message : String(error)}`,
+          { code: ExitCode.unavailable, reason: "update_install_failed", cause: error },
+        );
+      }
+
+      // The install replaced this package in place, so the path this process was launched from now
+      // resolves to the new code. Only that build knows the plugin pin it was validated against.
+      await execute(argv[1] ?? "snack", ["update", "--finish"]);
+    });
+
+  /**
+   * Rewrite the OpenCode plugin registration at the pin this build carries.
+   *
+   * Deliberately does not go through `setup`. `setup` calls `ensureCapacityPeriod`, which rotates
+   * the period whenever provider, profile, plan or plan profile differs from the open one -- right
+   * for `setup` and catastrophic here, because an upgrade is not a change of capacity regime. The
+   * roadmap's "never rotates a capacity period it was not asked to" is met structurally, by not
+   * calling the code that could.
+   */
+  async function finishUpdate() {
+    const configFile = resolveOpenCodeConfig({
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.home ? { home: options.home } : {}),
+    });
+    const installationId = await readRegisteredInstallationId(configFile);
+    // Nothing registered means the user never asked for live capture. Creating a registration here
+    // would enable a capture path they did not choose, on a command they ran to upgrade.
+    if (installationId === null) return { registered_plugin: null };
+
+    const config = await readConfig(paths.configFile);
+    const sources = Array.isArray(config.sources) ? config.sources : [];
+    const registration = await preparePluginRegistration(configFile, {
+      installation_id: installationId,
+      spool_directory: paths.spoolDir,
+      prospective_analysis: getConfigValue(config, "prospective_analysis.enabled") === true,
+      source_bindings: pluginBindings(sources, installationId, paths),
+    });
+    await prepareSpoolDirectories(paths, registration);
+    await writePluginRegistration(configFile, registration.content, registration.previous_content);
+    return { registered_plugin: pluginPackageSpec };
+  }
 
   try {
     if (argv.length <= 2) {

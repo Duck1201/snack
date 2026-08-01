@@ -95,3 +95,31 @@ network in it and leaves the CLI upgrade — the half that motivated the request
 **A `--check` flag on `doctor`.** Puts a network call inside a diagnostic command that people run
 when something is already wrong, which is the worst place for a new failure mode, and it spreads the
 exception across two commands instead of confining it to one.
+
+## Addendum, planning `1.1.0`: only the CLI is installed
+
+This decision says `snack update` installs `@snack-ai/cli` **and** `@snack-ai/opencode`. Planning the
+implementation found that the second install does nothing, and the decision is narrowed rather than
+carried into code that would be inert.
+
+SNACK never installs the plugin, in this command or in `setup`. It writes a package specifier into
+OpenCode's own configuration and OpenCode resolves it — which is exactly what the paragraph above
+about `setup` already says, and it is equally true here. A `@snack-ai/opencode` installed into an npm
+prefix lands in a `node_modules` that nothing reads: not OpenCode, which resolves the specifier
+itself, and not SNACK, whose tarball does not contain the plugin at all.
+
+So the scope narrows to:
+
+- resolve and install **`@snack-ai/cli`** from the configured package registry, by invoking the
+  user's own package manager rather than implementing a client;
+- re-register the plugin from values already in the local configuration, at the pin the newly
+  installed CLI carries.
+
+The matched pair this decision insists on is still what ships. It arrives through the pin rather
+than through a second install, which is why `--finish` re-execs the new binary: `pluginPackageSpec`
+is a constant compiled into each CLI release, so the registration written by the new build names the
+plugin version that release was validated against. The old process could not have written it.
+
+Nothing else in this ADR moves. The exception is still one command, the request still carries a
+package name and a version and nothing else, and narrowing what may be fetched makes the boundary
+smaller rather than wider.

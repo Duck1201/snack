@@ -98,6 +98,10 @@ const invocations = [
     command: "data purge",
     argv: ["data", "purge", "--source", "work", "--dry-run"],
   },
+  // `--dry-run`, so the payload is produced without a package manager anywhere near it. The layout
+  // it resolves comes from the injected `modulePath` below: a workspace checkout is not an
+  // installation and correctly refuses, which would make this invocation exit 4.
+  { name: "update-dry-run", command: "update", argv: ["update", "--dry-run"] },
 ];
 
 /** The published payload schema for a command, named by the command the envelope reports. */
@@ -124,6 +128,7 @@ async function makeConfiguredFixture() {
   const fixture = await makeRunFixture("snack-contracts-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  fixture.options.modulePath = "/usr/local/lib/node_modules/@snack-ai/cli/src/update.js";
   return fixture;
 }
 
@@ -501,7 +506,22 @@ test("the published command and flag surface has not changed", async () => {
     stats: ["--source", "--horizon", "--verbose", "--by-client", "--json", "--help"],
     status: ["--source", "--no-sync", "--prompt-file", "--json", "--help"],
     sync: ["--source", "--full", "--json", "--help"],
+    // `--finish` is deliberately absent: it is internal, hidden from help, and therefore invisible
+    // to this test, which reads the help text rather than Commander's object graph. The test below
+    // is what holds it to that.
+    update: ["--yes", "--dry-run", "--json", "--help"],
   });
+});
+
+test("update --finish stays out of the help, because it is not a flag anyone should type", async () => {
+  // It exists because a process cannot become a different version of itself, not because a user has
+  // a reason to run it. Documenting it in the help would invite exactly the half-applied upgrade
+  // -- a re-registration without an install -- that the two-process design exists to prevent.
+  const fixture = await makeRunFixture("snack-contracts-finish-");
+
+  await run(["node", "snack", "update", "--help"], fixture.options);
+
+  assert.doesNotMatch(fixture.stdout.value, /--finish/u);
 });
 
 /**

@@ -57,8 +57,10 @@ It does not know your provider's capacity, so it reports neither a share of it n
 it. A tool showing you "63% of quota used" made that number up, and a made-up number is worse than
 no number, because you will plan around it.
 
-It makes no network calls, sends no telemetry, and reads no credentials. There is no service behind
-it to send anything to.
+No command that touches your data touches the network. It sends no telemetry and reads no
+credentials, and there is no service behind it to send anything to. The one exception is
+`snack update`, which installs packages: it carries a package name and a version, and nothing about
+your usage in either direction.
 
 ### Quickstart
 
@@ -88,6 +90,7 @@ treat their usage as the single pool it really is.
 | `snack config`                                | Inspect or update local configuration                                            |
 | `snack export`                                | Write your observations and predictions to JSON or CSV                           |
 | `snack data purge`                            | Delete stored observations, optionally blocking their re-import                  |
+| `snack update`                                | Bring the CLI and the capture plugin to versions that belong together            |
 
 Every command takes `--json` and emits one versioned document.
 
@@ -194,8 +197,10 @@ Não sabe a capacidade do seu provedor, então não reporta nem uma fração del
 regressiva. Uma ferramenta que te mostra "63% da quota usada" inventou esse número, e número
 inventado é pior que número nenhum, porque você vai se planejar em cima dele.
 
-Não faz chamadas de rede, não envia telemetria e não lê credenciais. Não existe serviço por trás
-para onde mandar qualquer coisa.
+Nenhum comando que toca seus dados toca a rede. Não envia telemetria, não lê credenciais, e não
+existe serviço por trás para onde mandar qualquer coisa. A única exceção é o `snack update`, que
+instala pacotes: ele carrega um nome de pacote e uma versão, e nada sobre o seu uso, em nenhuma das
+direções.
 
 ### Começando
 
@@ -225,6 +230,7 @@ fonte de capacidade, e o SNACK trata o uso deles como o pote único que de fato 
 | `snack config`                                | Consulta ou atualiza a configuração local                                          |
 | `snack export`                                | Escreve suas observações e previsões em JSON ou CSV                                |
 | `snack data purge`                            | Apaga observações armazenadas, opcionalmente bloqueando a reimportação             |
+| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam entre si                |
 
 Todo comando aceita `--json` e emite um documento versionado.
 
