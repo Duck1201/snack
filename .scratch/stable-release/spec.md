@@ -191,6 +191,36 @@ snack-ai-opencode-1.0.0.tgz  sha256:fd9790874869f15a132e1c140933e1641e80fb8dd0f4
 cross-check both exist for. Publish these exact tarballs; a different digest is a different
 artifact.
 
+### The candidate tag earned its keep immediately
+
+`1.0.0` published to `candidate`, and the first thing done with it was comparing the registry's
+tarball against `docs/release/artifacts.md`. The plugin matched. **The CLI did not.**
+
+```
+recorded:  sha256:ef37befdaa246d436d5e2082b9b6f0d800b7a7326ed0c4a4830c83b34eef702a
+served:    sha256:cc8c52392302d5c9ba044eab2914202a00fe7bed5caaeda22e87c17f3337fd6e
+```
+
+The published artifact was correct. Packing `origin/main` reproduces the served digest exactly, and
+the published tarball contains the `stable`-channel paragraph that commit `fad2ad7` added. **The
+evidence was stale.** `release:evidence` ran at `0d534f0`; `fad2ad7` then edited
+`packages/cli/README.md`, which is named in the CLI's `files` array, and nothing regenerated the
+digest. The plugin matched only because its README did not change in that commit.
+
+This is the Stage 9 lesson recurring in a new place, and it is worth naming precisely: the question
+"did anything named in `files` change?" applies to the **evidence** as much as to whether a package
+republishes. `release:check` was asking the weaker question — it compared the version string, which
+had not changed — so it passed.
+
+The gate now compares content. `currentTarballDigests()` packs the tree and `release:check` requires
+every digest it produces to appear in `artifacts.md`. Verified by running it against the stale file
+first, where it blocks with the message naming the digest and the cause, and then after
+regeneration, where it passes. Had it existed an hour earlier, the mismatch would have blocked the
+publish instead of being caught after it.
+
+Nothing about the published artifacts changed, and nothing needed to: `candidate` exists so a
+mismatch is discovered while `latest` still points somewhere else.
+
 ### The steps an agent cannot take
 
 1. Merge the pull request.

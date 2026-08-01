@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 
+import { currentTarballDigests } from "./release-evidence.mjs";
+
 const identity = await readFile(new URL("../docs/release/identity.md", import.meta.url), "utf8");
 const platforms = await readFile(
   new URL("../docs/release/platform-smoke.md", import.meta.url),
@@ -62,6 +64,26 @@ if (!artifacts.includes(`CLI \`${releasedVersion}\``)) {
     `Release blocked: docs/release/artifacts.md records a different version than ${releasedVersion}; ` +
       "rerun `npm run release:evidence`.",
   );
+}
+
+// Matching the version string was not enough, and `1.0.0` proved it. The evidence was generated,
+// then a later commit edited `packages/cli/README.md` -- named in the CLI's `files` array, so it
+// ships inside the tarball -- and the recorded digest silently became one for a tarball nobody
+// would ever receive. The version had not changed, so the check above passed, and the mismatch was
+// only caught after publishing, by comparing against what the registry served.
+//
+// So the gate compares content, not a label: what this tree packs now against what the evidence
+// claims. A packaged file changed after the evidence was written now blocks the release instead of
+// reaching the registry.
+const recorded = await currentTarballDigests();
+for (const [name, digest] of Object.entries(recorded)) {
+  if (!artifacts.includes(digest)) {
+    throw new Error(
+      `Release blocked: docs/release/artifacts.md does not record ${digest} for ${name}, which is ` +
+        "what this tree packs. A file named in the package's `files` array changed after the " +
+        "evidence was written; rerun `npm run release:evidence`.",
+    );
+  }
 }
 
 process.stdout.write("Release identity gates passed.\n");
