@@ -104,8 +104,56 @@ corrected.
 - new: `stats --by-client`, storage reason `storage_newer_than_application`, ingestion issue
   `cross_client_prompt_id_collision`, `inspectDatabase` state `ahead`.
 
+## What the independent passes found
+
+A reviewer and a tester, both starting cold, reviewed the branch and drove the built binary.
+
+**One P1, fixed.** The collision guard only fired on an attribution that was _recorded_. Migration
+012 leaves it NULL exactly where it cannot know — a source two clients already shared — and an
+unknown attribution was treated as a free one: the healing update handed the row to whichever client
+next presented that prompt id, and the update path overwrote it. Two prompts in, one out, no issue
+recorded. Reproduced, then closed by refusing an unattributed prompt on a shared source when the
+revision domain differs. Single-binding sources keep merging, which is what the spool and backfill
+of one installation need.
+
+**One P2 from the reviewer, fixed:** a refused collision still deleted the other client's pending
+mapping, because that delete ran before the guard and matches on prompt id rather than installation.
+
+**One P2 from the tester, fixed:** `doctor --json` emitted duplicate check ids on a shared source.
+Pre-existing on `main`; this stage added `source_ingestion` to the duplicated set.
+
+**One P2 from the tester, fixed:** the two latency budgets failed about one run in seven on an idle
+machine and every run on a busy one. The estimator is the second-slowest of twenty spawns. The
+budget is now not asserted when the machine is not the idle one PLAN.md states it for.
+
+**Three P3s, documented and not fixed.** All pre-existing on `main`, all with a safe workaround,
+none touched by this stage. Assigned to Stage 9, which is where the CLI surface is frozen and
+audited:
+
+1. `data purge --include-config` always warns that the OpenCode plugin is still registered, even
+   when `doctor` reports it is not (`packages/cli/src/main.js`, the unconditional return in the
+   purge path). The warning is harmless but false.
+2. `doctor --source <unknown-alias>` exits 0 and reports twelve passing checks rather than saying
+   the alias does not exist. Every other command rejects an unknown alias with exit 4. A typo gets a
+   clean bill of health.
+3. `Configuration schema rejected /sources/0.` is the same message for an unknown adapter, a missing
+   required field and a malformed identifier, and the JSON error object carries no more detail than
+   the human line.
+
+**Corrected claim.** An earlier note in this file described the flaky latency budget as one
+pre-existing test with comfortable headroom. Both halves were wrong: the tester measured a 227 ms
+sample against a 250 ms budget — nine per cent of headroom, not twenty — and the second flaking test
+is the two-client one this stage added.
+
 ## Remaining before release
 
-- independent architecture/privacy review and an independent tester pass, per the stage protocol;
 - CI evidence on Linux, macOS and WSL2/Debian 13, recorded under `docs/release/`;
 - a changeset and the publication itself, through the `snack-release-a-version` skill.
+
+The independent architecture/privacy review and the independent tester pass are done, and both
+reported zero P0/P1 after the fixes above. The tester drove all eight commands against the built
+binary in throwaway roots, fed every privacy canary through the OpenCode backfill, the Claude
+backfill and the live spool, and found none of them in the database, the spool, the backups, the
+config, three JSON exports, three CSV exports, or stdout. Every failure path fails closed: a corrupt
+database, an invalid configuration, an unsupported fingerprint on either client, a database written
+by a newer release, and an interrupted setup that leaves nothing behind.
