@@ -261,3 +261,58 @@ test("two clients behind one capacity source do not produce two of the same chec
     "source_fingerprint:work:opencode",
   ]);
 });
+
+test("every check doctor can report is documented in the troubleshooting guide", async () => {
+  // `doctor` is the command someone runs when something is wrong, and an id with no entry anywhere
+  // is a diagnosis that names a problem and offers nothing. The guide is checked against the ids a
+  // real installation produces rather than against a list kept by hand, so a check added later
+  // fails here instead of shipping undocumented -- the same trick that makes the export schema
+  // trustworthy without generating it.
+  const guide = await readFile(
+    new URL("../../../docs/troubleshooting.md", import.meta.url),
+    "utf8",
+  );
+  const fixture = await makeRunFixture("snack-doctor-docs-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  for (const client of ["opencode", "claude"]) {
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        client === "opencode" ? "work" : "personal",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+        ...(client === "opencode" ? ["--install-plugin", "--yes"] : []),
+      ],
+      fixture.options,
+    );
+  }
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const checks = JSON.parse(fixture.stdout.value).data.checks;
+
+  assert.ok(checks.length > 10, `only ${checks.length} checks were produced`);
+  for (const check of checks) {
+    // A per-source check is documented once, under the id without the alias: the alias is which
+    // source, not which kind of problem.
+    const documented = String(check.id).split(":")[0];
+    // Anchored on the closing backtick or the `:` that starts an alias, so a short id cannot pass
+    // by being the prefix of a longer one that happens to be documented.
+    assert.match(
+      guide,
+      new RegExp(`\`${documented}(?:\`|:)`, "u"),
+      `doctor reports ${check.id}, which docs/troubleshooting.md never explains`,
+    );
+  }
+});
