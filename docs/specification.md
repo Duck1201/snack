@@ -489,10 +489,26 @@ With multiple sources and no selection, output is a summary table. Prospective t
 
 ```text
 snack stats [--source <alias>] [--horizon <duration|all>]
-            [--verbose] [--json]
+            [--verbose] [--by-client] [--json]
 ```
 
 Defaults to configured standard horizons and all sources when concise output remains readable. A source selection produces detail.
+
+`--by-client` compares the clients feeding each capacity source. It answers the one question a
+shared source invites: whether one client is refused more often than the others against the same
+real capacity. Each client's refusal share among eligible prompts is reported with a credible
+interval, and a difference is named only when that interval and the interval over the other clients
+do not overlap. Overlapping intervals are reported as no difference detected, which is not the same
+statement as no difference; too few eligible prompts is reported as not comparable, which is not the
+same statement as either. Prompts that cannot be attributed to a client are counted and reported
+rather than assigned.
+
+The comparison reads the widest configured horizon, because separating two refusal rates needs every
+observation available. It is reported as counts against their denominators and never as a
+percentage: a share printed as a percentage reads as a claim about the provider's real capacity.
+
+The block is present only when the flag is given. A capacity source fed by one client has nothing to
+compare, and the report says so rather than implying a finding.
 
 ### 12.5 `snack sync`
 

@@ -112,3 +112,27 @@ database, so the name never survives the trip.
 Claude Code JSONL carries no cost field. Cost and currency are stored as null for Claude
 observations rather than derived from a price table, and the field-completeness evidence gate lowers
 the evidence level accordingly.
+
+## Client-family Support Policy
+
+The support promise from `0.8.0` — newest validated family plus one previous, per client — is
+published as a single matrix for both clients in
+[docs/opencode-support.md](./opencode-support.md#client-family-support-policy). Claude Code's newest
+validated family is `cc-jsonl-turntree-v1`, and there is no previous one yet.
+
+## Client Attribution
+
+From `0.8.0` each stored prompt records which client installation produced it, so a capacity source
+fed by both clients can be asked whether they fare differently against it — `snack stats
+--by-client`. The attribution never splits the shared source: it stays one lineage, one capacity
+period, and one usage profile.
+
+Prompts stored before `0.8.0` are attributed by the upgrade only where their capacity source has
+exactly one binding. Where both clients already shared a source, the answer is genuinely unknown and
+is reported as unattributed rather than guessed; the next synchronization that observes such a
+prompt fills it in.
+
+Because prompt identifiers are unique per client rather than per capacity source, two clients can in
+principle present the same one. That is two prompts, not one, and ingestion refuses the later
+observation, keeps what is already stored, and records the collision for `doctor` rather than
+overwriting an observation silently.

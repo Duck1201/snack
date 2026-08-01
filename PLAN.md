@@ -657,7 +657,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 
 ### Stage 7 - Claude Code Parity
 
-- **Release:** `0.7.0` on npm `next`
+- **Release:** `0.7.0` on npm `latest`
 - **Status:** Complete pending publication. Claude Code is read
   through its JSONL histories by a second adapter behind the existing source-adapter contract, and
   the live-hook path is deferred by
@@ -765,7 +765,7 @@ no owner:
 
 ### Stage 8 - Multi-client Convergence
 
-- **Release:** `0.8.0` on npm `next`
+- **Release:** `0.8.0` on npm `latest`
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Remove client leakage, stabilize candidate contracts, and prove upgrades/calibration across OpenCode and Claude Code.
 
@@ -798,7 +798,7 @@ no owner:
 - compare pressure/evidence/calibration by client and shared source;
 - detect systematic client-source bias without adding opaque ML;
 - meet 100k+ budgets with mixed-client histories;
-- publish `0.8.0` on `next` after independent review.
+- publish `0.8.0` on `latest` after independent review.
 
 **Deliverables**
 

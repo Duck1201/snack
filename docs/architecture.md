@@ -386,7 +386,24 @@ Ambiguous matches are rejected at configuration time. Schema-valid observations 
 - first/last observed timestamps;
 - source paths seen (`backfill`, `spool`) as provenance flags.
 
-Unique key: client installation + stable source prompt ID. Hashes are keyed locally or namespaced so they cannot be correlated across installations without local access.
+Unique key: capacity source + stable source prompt ID. Hashes are keyed locally or namespaced so they cannot be correlated across installations without local access.
+
+The client installation on a prompt is an explanatory attribution, not part of that key, and it is
+nullable: a prompt stored before the attribution existed can be resolved only when its capacity
+source has exactly one binding, and where two clients already shared a source the honest answer is
+that nobody knows which produced it. Such prompts are reported as unattributed rather than assigned
+to a guess, and are attributed the next time the client that produced them observes them. Nothing
+that computes capacity groups by the attribution: two clients competing for one real capacity are
+one lineage, and splitting them would describe two capacities that do not exist.
+
+Because the key is the capacity source rather than the installation, two clients feeding one source
+can in principle present the same prompt ID from their own namespaces. That is two prompts, not one
+observed twice, and they cannot both be stored. Ingestion refuses the later one, keeps the prompt
+already stored, and records a `cross_client_prompt_id_collision` ingestion issue that `doctor`
+surfaces; merging would attribute one client's work to another and overwriting would destroy an
+observation silently. The refusal is gated on the installation differing, never on the revision
+domain, because one installation legitimately reports the same prompt through both the spool and the
+backfill and those must keep merging.
 
 Backfill categorization processes prompt executions in `(started_at, stable source order)` order. It derives each category before adding that prompt to the baseline, guaranteeing that later history cannot leak into earlier categories.
 
@@ -787,9 +804,10 @@ Release channels:
 
 - CLI `0.1-0.5` publishes to npm `next`;
 - CLI `0.6.0` is the SNACK MVP and becomes `latest`;
-- CLI `0.7-0.9` and `1.0.0-rc.N` publish to `next` while MVP remains `latest`;
+- CLI `0.7-0.9` each take `latest` on release, so a plain install gets the newest supported product rather than a version development has moved past; `1.0.0-rc.N` publishes to `next`, because a release candidate is not the newest supported product;
+- `stable` points at the newest release whose surface the project is willing to hold still, and moves only by deliberate decision, never by a release;
 - the plugin first publishes its own `0.1.0` to `next` in Stage 3, and its MVP-compatible version becomes plugin `latest` in Stage 6;
-- post-MVP plugin versions/RCs use plugin `next` while its MVP-compatible version remains `latest`;
+- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries no `next` while there is no release candidate for it;
 - final CLI/plugin `1.0.0` tarballs pass direct MVP upgrade and exact-artifact gates in an isolated staging registry before official npm publication under temporary `candidate`; checksum verification precedes moving both packages' `latest`/`next` to stable and removing temporary tags.
 
 Compatibility policy:
@@ -803,6 +821,30 @@ Compatibility policy:
 - SQLite layout, migrations, internal adapters/modules, and human formatting remain internal while preserving supported data/behavior.
 
 Stable public contracts may add fields/options in minor releases and fix compatible defects in patches. Deprecations warn for at least one minor; removal, rename, or semantic break requires a new major.
+
+From `0.8.0` those contracts are candidates rather than prose: `schemas/envelope.schema.json`
+describes the document every `--json` invocation writes, and `schemas/export.schema.json` declares
+each exported table's columns. Both ship in the package so a downstream consumer can check against
+them, and both are validated in `packages/cli/test/contracts.test.js` against every command, against
+documents captured from the released `0.7.0`, and against the exporter's own column lists so the
+hand-written schema cannot drift from what is exported. Exit codes and the documented flag surface
+are asserted as literals in the same file; the flag surface is read from the help text, because the
+help is what a user is promised.
+
+`data` in the envelope is deliberately unconstrained. Per-command payloads freeze at the Stage 9
+feature freeze, and pinning them earlier would freeze shapes still in motion.
+
+The envelope and the export version independently, and `0.8.0` shows why: the envelope stayed at
+version 1 and still accepts every `0.7.0` document, while the export moved to version 2 because it
+gained required columns. An old export announces itself as version 1 and does not pass as version 2,
+which is the compatibility statement the tests enforce -- adding a required table or column without
+bumping the version is the failure being guarded against.
+
+A database written by a newer release is reported as such rather than as a corrupted migration
+history: `inspectDatabase` returns `migrations: "ahead"`, `doctor` names the situation, and opening
+it for write fails with `storage_newer_than_application` naming both migration numbers and the
+pre-migration backup. No downgrade is offered; the diagnostic exists so the two situations stop
+being reported identically.
 
 Public contracts freeze in Stage 9. Only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation are permitted afterward. A public schema or semantic change resets Stage 9 and all of its gates; Stage 10 confirms rather than redefines the frozen contracts.
 
