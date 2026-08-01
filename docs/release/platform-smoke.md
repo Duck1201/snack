@@ -105,3 +105,37 @@ describes the scheduler rather than the product — an independent test pass mea
 unconditional assertion failing roughly one run in seven on an idle machine and every run on a
 loaded one. On an idle developer machine (12 cores, load below 1) the same measurement is `190` to
 `227 ms` across five isolated runs.
+
+## 0.8.1
+
+WSL gate: passed
+
+- Run: [CI 30685196877](https://github.com/Duck1201/snack/actions/runs/30685196877)
+- Date: 2026-08-01
+- Commit: `9933ace16e9e0f3fbffbd4428e9f0c99626dc3f3`
+- Toolchain on every environment: Node.js `24.18.1`, npm `11.16.0`
+
+| Environment | Runner image | Tests | Package smoke |
+| --- | --- | --- | --- |
+| Ubuntu 24.04, AMD64 | `ubuntu-24.04` | 389 passed, 0 skipped | passed |
+| macOS 26, ARM64 | `macos-26-arm64` | 389 passed, 0 skipped | passed |
+| Debian 13 on WSL2, AMD64 | `windows-2025-vs2026` host | 387 passed, 2 skipped | passed |
+
+Each environment packed and installed `snack-ai-cli-0.8.1.tgz` (47 files) alongside
+`@snack-ai/opencode`, which is unchanged at `0.1.2` in this release. The plugin workspace
+contributed 4 passing tests and 1 skip — the packed-plugin dispatch test, which needs a real
+OpenCode installation — on every environment.
+
+The two skips unique to WSL2 remain the permission-denial tests in `resilience.test.js`, for the
+same reason as every previous release: that job runs as root, and a mode bit denies nothing to
+uid 0.
+
+The suite grew by seven tests over Stage 8. Five are the new `terminal-prompt.test.js`, which covers
+the guided-setup rendering that no test could reach while it lived in the executable; two cover
+setup refusing an identifier where it is given, one for the guided path and one for the flags.
+
+`status --no-sync` over 100,000 prompts measured p95 `283 ms` on Ubuntu, `303 ms` on macOS, and
+`345 ms` on WSL2. Over a two-client history of the same size it measured `274 ms`, `352 ms`, and
+`340 ms`. As in Stage 8, the second client does not move the figure. The budget caveat is unchanged:
+[PLAN.md](../../PLAN.md) states 250 ms for a typical supported developer machine and not as a
+cross-device guarantee, so CI reports the measurement rather than asserting it.
