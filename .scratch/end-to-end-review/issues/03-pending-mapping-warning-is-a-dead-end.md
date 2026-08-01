@@ -1,7 +1,7 @@
 # 03 — `doctor`'s pending-mapping warning names a count and nothing else
 
-Status: `ready-for-agent` Severity: **P3** Owner: unassigned Found in: Phase 1 end-to-end review,
-Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
+Status: `fixed` in `1.0.2`, commit faaee15 Severity: **P3** Owner: unassigned Found in: Phase 1
+end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
 
 ## What happens
 

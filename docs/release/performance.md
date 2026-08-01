@@ -24,6 +24,50 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.0.2
+
+- Date: 2026-08-01
+- Commit: the `chore/verify-pendencies` branch, after the Phase 1 follow-up fixes
+- Machine: Linux 6.12.63+deb13-amd64, 12 cores, load average 1.43 at the start of the run
+- Toolchain: Node `24.18.1`, npm `11.16.0`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+| Budget | PLAN.md | Measured | `1.0.1` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **196 ms** (p50 187 ms, min 180 ms) | 187 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **202 ms** (p50 193 ms, min 183 ms) | 189 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **420 ms** (categorize 40 ms + write 380 ms) | 408 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **14.6 s** | 14.3 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.3 s** | 13.4 s |
+| Steady-state memory | under 150 MB | **passes both readings** — see below | passes as heap |
+
+Every assertion ran; none stepped aside. An earlier attempt at these figures was taken while the
+machine sat at load 5-7 and produced `status --no-sync` p95 245 ms with one assertion skipping
+itself. Those numbers were discarded rather than recorded, because a budget measured under
+contention is a measurement of the contention.
+
+### The memory budget stops depending on which memory you mean
+
+`1.0.1` passed the gate as written — a `--max-old-space-size=150` heap cap — while peak process RSS
+over a real 222 MB Claude history was 238 MB. The two readings disagreed about whether the product
+met its own stated budget, which is what
+[finding 07](../../.scratch/end-to-end-review/issues/07-steady-state-memory-budget-does-not-name-its-unit.md)
+was about.
+
+They no longer disagree. Measured over the same real history, with nothing to synchronise:
+
+| Command | heap cap 150 MB | peak process RSS |
+| --- | --- | --- |
+| `sync` (no-op) | PASS | **142 MB** (was 238 MB) |
+| `doctor` | PASS | **141 MB** (was 241 MB) |
+| `stats` | PASS | **117 MB** |
+| `status --no-sync` | PASS | **93 MB** |
+
+The change is the fingerprint sampling fix: commands stopped reading the whole history to check its
+shape. `PLAN.md` now names the unit, so the budget is a claim someone can check rather than one that
+depends on which tool they reach for — but for the first time both tools agree, which is the
+stronger result.
+
 ## 1.0.1
 
 - Date: 2026-08-01

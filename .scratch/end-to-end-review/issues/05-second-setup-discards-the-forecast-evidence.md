@@ -1,7 +1,7 @@
 # 05 — Re-running `setup` on an existing source discards every forecast's evidence, permanently
 
-Status: `ready-for-agent` Severity: **P1** — blocks release; ships as `1.0.1` Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
+Status: `fixed` in `1.0.1`, commit ad9f6b0 Severity: **P1** — blocks release; ships as `1.0.1`
+Owner: unassigned Found in: Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm
 
 ## What happens
 

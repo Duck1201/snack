@@ -1,7 +1,8 @@
 # 07 — The steady-state memory budget does not say which memory it means
 
-Status: `ready-for-agent` Severity: **P3** Owner: unassigned Found in: Phase 1 end-to-end review,
-Wave 4 Target: `1.1.0` — documentation, no product change
+Status: `fixed` in `1.0.2` — documentation, plus the measurement that made it easy Severity: **P3**
+Owner: unassigned Found in: Phase 1 end-to-end review, Wave 4 Target: `1.1.0` — documentation, no
+product change
 
 ## What happens
 
@@ -34,3 +35,17 @@ breach of it rather than an inefficiency.
 
 Delivery principle 9 is the reason this is worth a file rather than a shrug: a gate that reports
 pass/fail against an unnamed unit is an assertion, not a measurement.
+
+## Fixed
+
+`PLAN.md` now states both readings and how each is enforced, and `docs/release/performance.md`
+records both per release.
+
+What made it easy is that they stopped disagreeing. The version of this finding above had to choose
+which number the product was accountable to, because `1.0.1` passed the heap cap at 238 MB of RSS.
+After the fingerprint sampling fix
+([06](./06-fingerprint-check-reads-the-whole-history-every-command.md)) every steady-state command
+is under 150 MB by both measurements — `sync` 142 MB, `doctor` 141 MB, `stats` 117 MB,
+`status --no-sync` 93 MB, heap cap passing throughout. Naming the unit is now documentation rather
+than a verdict, which is the outcome worth having: the honest version of this fix would otherwise
+have been to widen the budget or admit the product missed it.
