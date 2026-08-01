@@ -1,9 +1,9 @@
 # Reconcile an adapter against its real source
 
 Fixtures only contain the shapes you already knew about. A source adapter can be green across every
-fixture and still drop whole classes of real records, silently — no error, no warning, just a smaller
-number. For SNACK that is worse than a crash: an under-counted **observed restriction** biases the
-forecast optimistic, and restrictions are the scarcest evidence it has.
+fixture and still drop whole classes of real records, silently — no error, no warning, just a
+smaller number. For SNACK that is worse than a crash: an under-counted **observed restriction**
+biases the forecast optimistic, and restrictions are the scarcest evidence it has.
 
 So after writing an adapter, count what the raw source contains and compare it with what the adapter
 emitted, per class of evidence. Read-only, and it takes a few lines:
@@ -24,9 +24,9 @@ for (const o of adapter.readAll().observations)
 console.log(`${captured.size}/${raw}`);
 ```
 
-Then **chase every gap to a named cause** — do not accept "close enough". Each gap is a shape of real
-history the fixtures never had. Trace one missed record by hand: walk its parent chain, check whether
-the file it lives in is reachable at all, check whether the record that links it exists.
+Then **chase every gap to a named cause** — do not accept "close enough". Each gap is a shape of
+real history the fixtures never had. Trace one missed record by hand: walk its parent chain, check
+whether the file it lives in is reachable at all, check whether the record that links it exists.
 
 On the Claude adapter this found three defects a green `npm run check` could not:
 
@@ -42,8 +42,8 @@ Run the same reconciliation once more at the end: the number is the check.
 
 ## Gotchas
 
-- **Do not assume the parent record already accounts for a child's usage.** Verify it. On Claude Code
-  the parent's `toolUseResult` for a subagent carries
+- **Do not assume the parent record already accounts for a child's usage.** Verify it. On Claude
+  Code the parent's `toolUseResult` for a subagent carries
   `{isAsync, status, agentId, description, outputFile}` and no token counts at all, so reading the
   subagent file adds usage rather than double-counting it. Assuming either way without looking gives
   a silently wrong total.

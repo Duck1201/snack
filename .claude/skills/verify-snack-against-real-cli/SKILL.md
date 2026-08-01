@@ -24,14 +24,15 @@ never closes a pipe, the fake prompt resolves instantly and never closes stdin, 
 pays module-load cost once instead of every run, and a frozen `now` puts seeded data inside windows
 that the real clock puts outside.
 
-**Verified by:** `npm run check` green at 295 tests while four defects it did not catch were found by
-driving the real binary — plugin registration landing under `$XDG_CONFIG_HOME`, `export --output - |
-head` exiting 0 with no stack trace, `Ctrl+D` during setup exiting 0 having written nothing, and
-`stats` reporting `above_baseline` instead of `steady` on a fivefold climb. Verified again, harder,
-by the Phase 1 review of the published `1.0.0`: twelve findings, three release-blocking, against a
-suite green at 413 tests — a `setup` re-run erasing a source's evidence from every forecast, the CLI
-installing a plugin three minors old, and live capture emitting a null provider so no live
-observation could ever be attributed. Each was reproduced on the artifact installed from npm.
+**Verified by:** `npm run check` green at 295 tests while four defects it did not catch were found
+by driving the real binary — plugin registration landing under `$XDG_CONFIG_HOME`,
+`export --output - | head` exiting 0 with no stack trace, `Ctrl+D` during setup exiting 0 having
+written nothing, and `stats` reporting `above_baseline` instead of `steady` on a fivefold climb.
+Verified again, harder, by the Phase 1 review of the published `1.0.0`: twelve findings, three
+release-blocking, against a suite green at 413 tests — a `setup` re-run erasing a source's evidence
+from every forecast, the CLI installing a plugin three minors old, and live capture emitting a null
+provider so no live observation could ever be attributed. Each was reproduced on the artifact
+installed from npm.
 
 **And one finding was wrong**, which is why this skill carries "Prove the harness before believing
 it".
@@ -49,8 +50,8 @@ it".
   `references/adapter-reconciliation.md`.
 - **Before recording a defect** you observed from a shell loop rather than from a test — see "Prove
   the harness before believing it".
-- **Before and after a release**, against the published artifact rather than the tree — see "Verify a
-  released defect against the published artifact".
+- **Before and after a release**, against the published artifact rather than the tree — see "Verify
+  a released defect against the published artifact".
 - After changing the capture plugin, against the real OpenCode host — read
   `references/opencode-host.md`. The packed-plugin host test is the harness; keep it runnable.
 
@@ -58,10 +59,11 @@ it".
 
 - [ ] 1. Run the gate first: `npm run check` from the repo root. Green here is necessary, not
       sufficient.
-- [ ] 2. Build a throwaway environment. Every SNACK path is env-driven, so a temp root fully isolates
-      the run — never point it at your real config.
-- [ ] 3. Seed data **anchored to `new Date()`**, not to a fixed historical date. `references/seeding.md`
-      has the working script; the schema constraints there are the part that bites.
+- [ ] 2. Build a throwaway environment. Every SNACK path is env-driven, so a temp root fully
+      isolates the run — never point it at your real config.
+- [ ] 3. Seed data **anchored to `new Date()`**, not to a fixed historical date.
+      `references/seeding.md` has the working script; the schema constraints there are the part that
+      bites.
 - [ ] 4. Drive the actual binary: `node packages/cli/src/cli.js <command>`. Not `run()` in-process.
 - [ ] 5. Exercise the paths the fakes cannot reach — the checklist below.
 - [ ] 6. Re-run `npm run check` to confirm nothing regressed, then delete the temp root.
@@ -93,8 +95,8 @@ is unset, and a leaked real `HOME` would write into your own OpenCode configurat
 | Permissions        | `find $ROOT -type f -exec stat -c '%a %n' {} +`                                                               | files created outside `0600`/`0700`                            |
 
 `script -qec` gives a pty, which is what makes `process.stdin.isTTY` true and the prompt wire up at
-all. Feed answers with a `sleep` between them: a pty delivers a whole buffer at once and readline may
-consume it as one line.
+all. Feed answers with a `sleep` between them: a pty delivers a whole buffer at once and readline
+may consume it as one line.
 
 **Keep the feeder open after the last answer, or you will invent a hang that is not there.**
 
@@ -115,8 +117,8 @@ This skill exists because a green test suite is not evidence about what a user e
 symmetric claim is the one that is easy to skip: **a red result from a shell harness is not evidence
 either, until the harness is shown able to tell the two answers apart.**
 
-Before recording a defect observed from a shell loop rather than from a test file, run the **control**
-that distinguishes the outcome you are claiming from the one you are not:
+Before recording a defect observed from a shell loop rather than from a test file, run the
+**control** that distinguishes the outcome you are claiming from the one you are not:
 
 | Claiming              | The control that proves the harness                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -128,8 +130,8 @@ The finding-08 control was `script -qec 'read -r x; echo' /dev/null < /dev/null`
 microseconds. It proved the harness could observe an **exit**. It never proved the harness could
 observe a **wait**, which was the thing being measured — so it licensed a defect that did not exist:
 a two-minute "hang" recorded as P2, scoped into a release, and fixed, before the same command was
-driven with the feeder held open and answered `Setup cancelled; nothing was changed.`, exit 0, on the
-unmodified published build. The fix was reverted. Cost: a fix, a revert and a retraction.
+driven with the feeder held open and answered `Setup cancelled; nothing was changed.`, exit 0, on
+the unmodified published build. The fix was reverted. Cost: a fix, a revert and a retraction.
 
 This is the same rule the project already applies to tests — confirm the check disagrees with the
 unfixed code before trusting that it agrees with the fixed one. It applies to a shell loop too.
@@ -165,15 +167,15 @@ Re-verify the fix the same way after publishing. Comparing the published tarball
   takes `started_at` from `time.created` inside `message.data`, not from the `time_created` /
   `time_updated` columns. Updating only the columns produces the most misleading state there is:
   `sync` reports `1 read, 1 inserted` and every horizon then reports `0 prompts`, so the ingestion
-  path looks healthy while nothing is in range. Rewrite the timestamps inside the `data` blob too, or
-  pass a wide `--horizon` (for example `P365D`) when the point is to exercise a command rather than
-  the windows themselves.
+  path looks healthy while nothing is in range. Rewrite the timestamps inside the `data` blob too,
+  or pass a wide `--horizon` (for example `P365D`) when the point is to exercise a command rather
+  than the windows themselves.
 - **`prompt_execution.completion` is CHECK-constrained** to `provisional` or `completed`, and
-  `Observation` requires `source_session_id` (not `source_session_fingerprint`, which is a column but
-  not a field of the type). Both produce confusing failures when seeding.
-- **SNACK normalizes permissions on directories it owns.** `ensurePrivateDirectory` chmods to `0700`,
-  so making a directory read-only to simulate a failure gets corrected rather than obeyed. To
-  simulate unwritable storage, put a plain _file_ where the data directory belongs.
+  `Observation` requires `source_session_id` (not `source_session_fingerprint`, which is a column
+  but not a field of the type). Both produce confusing failures when seeding.
+- **SNACK normalizes permissions on directories it owns.** `ensurePrivateDirectory` chmods to
+  `0700`, so making a directory read-only to simulate a failure gets corrected rather than obeyed.
+  To simulate unwritable storage, put a plain _file_ where the data directory belongs.
 - **Percentiles saturate at 1.** Once a window clears the entire baseline, further growth is
   invisible. Seed a _varied_ baseline the recent windows can rank inside, or you will only ever
   exercise the saturated branch.
@@ -186,10 +188,10 @@ Re-verify the fix the same way after publishing. Comparing the published tarball
 - **Measuring `status --no-sync` p95 with 20 in-process `run()` calls.** One process loads modules
   once, hiding ~100 ms the installed command pays every time. It measured 144 ms against a 250 ms
   budget and passed, while the real spawn was **279 ms and over budget**. Spawn the binary.
-- **Measuring peak RSS inside the shared test process.** Absolute RSS belongs to the whole process and
-  carried ~200 MB from earlier tests in the same file, so the assertion failed at 324 MB with nothing
-  wrong. Assert on _growth_ relative to the work done instead — an export must cost less memory than
-  the document it produces.
+- **Measuring peak RSS inside the shared test process.** Absolute RSS belongs to the whole process
+  and carried ~200 MB from earlier tests in the same file, so the assertion failed at 324 MB with
+  nothing wrong. Assert on _growth_ relative to the work done instead — an export must cost less
+  memory than the document it produces.
 - **Measuring a quality budget while the machine is busy.** At load 5–7 on 12 cores,
   `status --no-sync` p95 read 245 ms against a 250 ms budget and one assertion stepped aside; idle,
   the same tree read 196 ms. A budget measured under contention measures the contention — wait for
@@ -200,8 +202,8 @@ Re-verify the fix the same way after publishing. Comparing the published tarball
 - **Driving the pty with `pty.fork()` and a single `os.write` of all answers.** It hung and produced
   no output; `script -qec` with paced input worked.
 - **Trusting a green fixture suite for a new source adapter.** Seventeen fixture assertions passed
-  while the adapter dropped 4 of 17 real restrictions and 47 whole prompts. Fixtures encode the shapes
-  you already thought of; only the real source has the ones you did not.
+  while the adapter dropped 4 of 17 real restrictions and 47 whole prompts. Fixtures encode the
+  shapes you already thought of; only the real source has the ones you did not.
 
 ## Reference
 

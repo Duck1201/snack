@@ -17,8 +17,8 @@ metadata:
 # Release a SNACK version
 
 Publishing here is a sequence of gates, and each one fails as **success-shaped silence** rather than
-as an error: nothing refuses, nothing reports, the step simply did not happen. This is the order that
-works, and the specific places where a step looks done and is not.
+as an error: nothing refuses, nothing reports, the step simply did not happen. This is the order
+that works, and the specific places where a step looks done and is not.
 
 ## Who does what
 
@@ -229,9 +229,10 @@ being what the tag resolves to.
 - **Editing `docs/release/identity.md` before the tag actually moved.** The table there is a record
   of fact; writing the intended state makes the document lie, which is the failure this repo spends
   the most effort avoiding.
-- **A `Status:` gate matched with `/^Status:.*pending/m`** while the word "pending" sat on the second
-  line of a wrapped sentence. The gate passed and checked nothing — success-shaped silence in a gate
-  is the same failure as in a dispatch. Prove a new gate _fails_ before trusting that it passes.
+- **A `Status:` gate matched with `/^Status:.*pending/m`** while the word "pending" sat on the
+  second line of a wrapped sentence. The gate passed and checked nothing — success-shaped silence in
+  a gate is the same failure as in a dispatch. Prove a new gate _fails_ before trusting that it
+  passes.
 - **`git add -A` while the user is editing in parallel.** It swept an unrelated in-progress edit
   into a release commit. Name the files: `git add scripts/ docs/release/`.
 - **`git checkout -- <file>` as a fallback in a `||` chain.** It restored the committed version over

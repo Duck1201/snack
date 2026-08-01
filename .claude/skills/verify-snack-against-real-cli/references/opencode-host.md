@@ -3,10 +3,10 @@
 Live capture cannot be verified any other way: the plugin only routes when a real host dispatches
 real hooks. `opencode run "…"` is the non-interactive entry point.
 
-**The plugin must be registered by npm specifier.** A local path or a `plugin/` directory entry makes
-OpenCode hang at `init` with no output and no log line — several variants were tried and every one
-hung. Either point at a published version, or install a packed tarball into the config directory and
-reference the **installed directory**, which is what
+**The plugin must be registered by npm specifier.** A local path or a `plugin/` directory entry
+makes OpenCode hang at `init` with no output and no log line — several variants were tried and every
+one hung. Either point at a published version, or install a packed tarball into the config directory
+and reference the **installed directory**, which is what
 `packages/opencode/test/host.integration.test.js` does.
 
 ```bash
