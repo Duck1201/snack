@@ -196,3 +196,25 @@ test("the domain and prediction modules do not know which client wrote a source"
     assert.doesNotMatch(code, /\bclaude\b/iu, `${module} names Claude Code`);
   }
 });
+
+test("storage names no type after the client that happened to be first", async () => {
+  // Storage sits below the adapters and stores whatever any client observed, so a type of its own
+  // named after one client describes the order the clients were built in rather than anything
+  // about the data. The test that guards the domain modules cannot catch this one: it strips
+  // comments, and a JSDoc type lives entirely in a comment.
+  const source = await readFile(new URL("../src/storage.js", import.meta.url), "utf8");
+  // String literals are stripped instead of comments here, and deliberately so. `opencode-session`
+  // is the salt every stored session fingerprint was hashed with and `opencode-outcome-v1` is a
+  // policy version written onto every outcome row; both are frozen wire values whose pre-images
+  // are gone, so renaming their bytes would silently invalidate the history this test exists to
+  // protect. Prose may say "OpenCode"; only an identifier that glues a client name to another word
+  // is a type, a function, or a constant named after a client.
+  const withoutLiterals = source
+    .replaceAll(/"(?:[^"\\\n]|\\.)*"/gu, '""')
+    .replaceAll(/'(?:[^'\\\n]|\\.)*'/gu, "''")
+    .replaceAll(/`(?:[^`\\]|\\.)*`/gu, "``");
+  const named = [...withoutLiterals.matchAll(/\b\w*(?:OpenCode|Claude)\w+\b/gu)].map(
+    (match) => match[0],
+  );
+  assert.deepEqual([...new Set(named)], [], "storage.js names identifiers after a client");
+});

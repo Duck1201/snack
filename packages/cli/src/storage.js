@@ -47,7 +47,23 @@ export async function withStorageOperationLock(paths, callback) {
 }
 
 /**
- * @typedef {object} ConfiguredOpenCodeSource
+ * Frozen wire values. Both name the client that happened to be first, and neither may be renamed
+ * to say so less loudly.
+ *
+ * `SESSION_FINGERPRINT_SALT` was mixed into every session fingerprint this database has ever
+ * stored, and the pre-images are gone by design: changing the bytes would not migrate the old
+ * fingerprints, it would silently stop matching them, and every session would look new. The salt is
+ * a constant of the stored data, not a description of which client produced it.
+ *
+ * `OUTCOME_POLICY_VERSION` is written onto every outcome row so a later reader can tell which rules
+ * decided that outcome. Renaming it would make one set of rules claim two identities; the only
+ * legitimate change is a bump, and only when the rules themselves change.
+ */
+const SESSION_FINGERPRINT_SALT = "opencode-session";
+const OUTCOME_POLICY_VERSION = "opencode-outcome-v1";
+
+/**
+ * @typedef {object} ConfiguredSource
  * @property {string} alias
  * @property {string} installation_id
  * @property {string} adapter
@@ -371,7 +387,7 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
 
 /**
  * @param {string} databaseFile
- * @param {ConfiguredOpenCodeSource} source
+ * @param {ConfiguredSource} source
  * @param {{observations: Observation[], cursor: unknown}} batch An adapter's cursor is opaque
  *   here: storage records where a reader stopped and hands it back, and only the adapter that
  *   wrote it knows what it means.
@@ -850,9 +866,13 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           .prepare(
             `INSERT INTO prompt_source_outcome
                 (prompt_execution_id, outcome, policy_version)
-              VALUES (?, ?, 'opencode-outcome-v1')`,
+              VALUES (?, ?, ?)`,
           )
-          .run(promptId, restrictions.length > 0 ? "restricted" : observation.outcome);
+          .run(
+            promptId,
+            restrictions.length > 0 ? "restricted" : observation.outcome,
+            OUTCOME_POLICY_VERSION,
+          );
         const insertRestriction = database.prepare(
           `INSERT INTO restriction_observation
              (prompt_execution_id, class, source_code, observed_at, classifier_version, provenance)
@@ -950,7 +970,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
  * Start a capacity period immediately after a setup change commits.
  *
  * @param {string} databaseFile
- * @param {ConfiguredOpenCodeSource} source
+ * @param {ConfiguredSource} source
  * @param {Date} now
  * @param {{id: string, version: string} | null} [planProfile]
  */
@@ -971,7 +991,7 @@ export function ensureCapacityPeriod(databaseFile, source, now, planProfile = nu
 
 /**
  * @param {Database.Database} database
- * @param {ConfiguredOpenCodeSource} source
+ * @param {ConfiguredSource} source
  * @param {string} timestamp
  * @param {{id: string, version: string} | null} planProfile
  */
@@ -1430,7 +1450,7 @@ export function readRestrictionWindowRows(databaseFile, sourceAlias, window) {
   }
 }
 
-/** @param {string} databaseFile @param {ConfiguredOpenCodeSource} source */
+/** @param {string} databaseFile @param {ConfiguredSource} source */
 export function readPendingMappingCount(databaseFile, source) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
@@ -1448,7 +1468,7 @@ export function readPendingMappingCount(databaseFile, source) {
   }
 }
 
-/** @param {string} databaseFile @param {ConfiguredOpenCodeSource} source */
+/** @param {string} databaseFile @param {ConfiguredSource} source */
 export function readPendingSpoolObservations(databaseFile, source) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
@@ -1497,7 +1517,7 @@ function legacyCursorField(cursor, field, expected) {
 
 /** @param {string} value */
 function hashOpaque(value) {
-  return createHash("sha256").update(`opencode-session\0${value}`).digest("hex");
+  return createHash("sha256").update(`${SESSION_FINGERPRINT_SALT}\0${value}`).digest("hex");
 }
 
 /** @param {Observation} observation */
