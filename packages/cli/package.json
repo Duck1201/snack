@@ -1,6 +1,6 @@
 {
   "name": "@snack-ai/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local-first AI usage metadata and next-prompt assessment CLI",
   "license": "Apache-2.0",
   "repository": {

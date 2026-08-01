@@ -24,6 +24,40 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.0.1
+
+- Date: 2026-08-01
+- Commit: the `release-1.0.1` branch, after the Phase 1 P1 fixes
+- Machine: Linux 6.12.63+deb13-amd64, 12 cores, load average 0.49 at the start of the run
+- Toolchain: Node `24.18.1`, npm `11.16.0`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+Measured because `1.0.1` widens a query on the `status` path: `readSourceSummary` no longer filters
+on the open capacity period, so it aggregates every period a source has. A budget that is a release
+gate is not assumed to have survived a change to the query behind it.
+
+| Budget | PLAN.md | Measured | Against `1.0.0` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **187 ms** (p50 184 ms, min 178 ms) | 193 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **189 ms** (p50 184 ms, min 179 ms) | 197 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **408 ms** (categorize 39 ms + write 369 ms) | 410 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **14.3 s** | 16.5 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.4 s** | 13.7 s |
+| Steady-state memory | under 150 MB | passes under `--max-old-space-size=150` | passes |
+
+Nothing regressed, and the OpenCode backfill came back down from `1.0.0`'s 16.5 s to 14.3 s —
+`0.9.0` read 14.1 s on a quieter machine, so this is the load average moving, not the product.
+Stage 10 recorded the same effect in the other direction.
+
+Also measured against the real history Phase 1 used, driving the installed binary rather than the
+fixture: `status --no-sync` p95 190 ms over 603 real prompts across two capacity periods, which is
+the shape the widened query was the reason to check.
+
+Phase 1's own measurements against the **published `1.0.0`** and a real 222 MB Claude history are
+recorded separately in `.scratch/end-to-end-review/spec.md`, along with two findings this file
+should eventually answer: the steady-state budget does not name its unit, and a no-op `sync` costs
+238 MB of process RSS because the Claude fingerprint check re-reads the whole history.
+
 ## 1.0 stable gate audit
 
 - Date: 2026-08-01
