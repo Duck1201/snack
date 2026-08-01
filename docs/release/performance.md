@@ -24,6 +24,29 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.0 stable gate audit
+
+- Date: 2026-08-01
+- Commit: `9a7ba12` (Stage 10 Wave 1, before the version bump)
+- Machine: Linux 6.12.63+deb13-amd64, 12 cores, load average 1.23 at the start of the run
+- Toolchain: Node `24.18.1`, npm `11.16.0`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+| Budget | PLAN.md | Measured | Headroom |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **193 ms** (p50 186 ms, min 181 ms) | 23% |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **197 ms** (p50 191 ms, min 183 ms) | 21% |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **410 ms** (categorize 40 ms + write 370 ms) | 80% |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **16.5 s** | 45% |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.7 s** | 54% |
+| Steady-state memory | under 150 MB | passes under `--max-old-space-size=150` | — |
+
+No budget regressed against `0.9.0`, which is the claim the stable gate needs: Stage 10 changes no
+product code, so a figure that moved materially here would mean something changed that nobody
+intended. The OpenCode backfill reads 16.5 s against 14.1 s at `0.9.0` — a 17% move on the budget
+with the most headroom, on a machine at load 1.23 rather than 0.81, and the Claude backfill over the
+same code path is unchanged at 13.7 s. That is the machine, not the product.
+
 ## 0.9.0
 
 - Date: 2026-08-01

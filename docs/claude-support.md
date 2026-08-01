@@ -12,7 +12,7 @@ Budgets measured locally at 100,000 prompts: Claude backfill 12.5 s against a 30
 surviving a 150 MB heap cap. Full per-environment figures are in
 [platform-smoke.md](./release/platform-smoke.md#stage-8).
 
-SNACK `0.8.x` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
+SNACK `1.0` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
 read-only backfill. There is no live-capture path for Claude Code and no SNACK hook is registered in
 Claude Code settings; see [ADR-0006](./adr/0006-claude-jsonl-backfill-without-hooks.md).
 

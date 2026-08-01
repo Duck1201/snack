@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "command": "config set",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "key": "analysis.horizons",
+    "value": [
+      "PT2H"
+    ],
+    "storage": {
+      "applied": [],
+      "backup_created": false,
+      "backup_file": null,
+      "migration_count": 12
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

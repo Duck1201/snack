@@ -109,6 +109,32 @@ A consumer written against `0.9.0` needs no change for any of these. A consumer 
 `command` echoing arbitrary argv, or on a read-only command crashing rather than refusing, was
 relying on a defect.
 
+## 1.0: the freeze confirmed, not redefined
+
+Stage 10 audits the six surfaces above and publishes `1.0.0`. It changes none of them. What the
+audit adds is evidence that the confirmation is real rather than asserted:
+
+| Claim                                                   | Where it is executable                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| A document from `0.9` still validates, unchanged         | `packages/cli/test/fixtures/contracts/0.9/`, captured at `v0.9.0`, checked in `contracts.test.js` against today's schemas with no relabelling and no intended break to name |
+| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2` and `0.9.0` from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
+| The published matrix names families the product reads    | `contracts.test.js` compares the family identifiers in these documents against the adapters |
+| The artifacts are what passed the gates                  | `npm run release:evidence` — per-tarball checksums, a CycloneDX SBOM per package, and two packs of the same source compared entry by entry |
+
+From `1.0.0`, strict SemVer applies to all six surfaces: additive fields and options may enter a
+minor, compatible fixes enter a patch, and a removal, a rename, or a changed meaning requires a
+major. Until then the Stage 9 reset rule below is what governs, and it governed Stage 10 too — a
+change to any public schema or semantic during the audit would have reset the freeze and required a
+new `0.9.x` rather than being folded into `1.0.0`.
+
+**No soak.** PLAN.md originally gated promotion on a seven-day release-candidate soak with no
+P0/P1. That gate was dropped by decision: `1.0.0-rc.1` and the promotion happen the same day. Every
+artifact-level gate is unchanged — the isolated staging registry, the checksums, the provenance, and
+the migration chains all still run against the published artifacts — and what is given up is calendar
+time under real use, which is the one class of defect the remaining gates cannot reach. Recorded here
+because the beta published the original promise, and a criterion quietly dropped is worse than one
+openly changed.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

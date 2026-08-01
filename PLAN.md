@@ -101,6 +101,13 @@ The top-level CLI command is `snack`.
 8. Treat privacy and uncertainty as observable product behavior.
 9. Advance releases through reproducible technical evidence, not assertions from an agent.
 10. Keep release stages sequential while parallelizing independent work inside a wave.
+11. **Ship the documentation with the change, in both languages and both places.** A change to
+    behavior, a flag, an output document, a supported client, or an upgrade path is not finished
+    until the package `README.md` that npm serves and the repository documentation GitHub serves
+    both say so, in English and in Portuguese. This is permanent and outlives 1.0: the tarball is
+    the only documentation an npm installer ever sees, and a package whose README describes a
+    version nobody is running teaches its users something false. A stale README is a defect against
+    the release that left it stale, not a chore for the next one.
 
 ## Release Semantics
 
@@ -939,7 +946,14 @@ no owner:
 ### Stage 10 - First Stable Release
 
 - **Release:** `1.0.0-rc.N` on npm `rc`, then `1.0.0` on npm `latest`
-- **Effort:** 3 AI-assisted waves plus a 7-day RC soak
+- **Status:** Wave 1 in progress. The `0.9` contract corpus is captured and validates unchanged
+  against today's schemas; every published release from the `0.6.0` floor forward upgrades under the
+  candidate with integrity intact; the artifact evidence is measured rather than asserted.
+- **Effort:** 3 AI-assisted waves
+- **Soak:** the seven-day RC soak is **dropped by decision**, recorded in
+  [docs/compatibility.md](./docs/compatibility.md#10-the-freeze-confirmed-not-redefined). `rc.1` and
+  the promotion happen the same day. Every artifact-level gate stands; what is given up is calendar
+  time under real use, which is the one class of defect the remaining gates cannot reach.
 **Purpose:** Freeze supported public behavior and publish the first stable OpenCode + Claude Code release.
 
 **Dependencies**
@@ -961,15 +975,15 @@ no owner:
 
 - publish `@snack-ai/cli@1.0.0-rc.1` and compatible plugin RC to `rc`;
 - run installation/upgrade/live smoke suites against the published artifacts rather than workspace builds;
-- allow only blocker fixes followed by a new `rc.N` and restarted seven-day soak;
-- require seven days with no P0/P1 before promotion.
+- allow only blocker fixes followed by a new `rc.N`;
+- the seven-day soak this wave originally required is dropped; see **Soak** above.
 
 **Wave 3: Version-only final promotion**
 
 - create a final commit containing only version/changelog/release metadata changes from the accepted RC source;
 - build final CLI/plugin tarballs once, record checksums/SBOM, and prove reproducible equivalence except required version metadata;
 - publish those exact `1.0.0` tarballs to an isolated staging registry and run direct `0.6.0 -> 1.0.0`, install, smoke, and integrity tests;
-- if staging fails, discard the unpublished final tarballs, fix through a new `rc.N`, and restart the seven-day soak;
+- if staging fails, discard the unpublished final tarballs and fix through a new `rc.N`;
 - only after staging passes, publish the same checksum-verified tarballs to official npm under temporary `candidate`, verify registry integrity, move both packages' `latest` tag to final `1.0.0`, remove the `rc` and temporary tags, tag releases, and archive milestone evidence;
 - keep `0.6.0` installable by exact version but no longer the default.
 
@@ -994,7 +1008,6 @@ no owner:
 - Node 24 Linux/macOS/WSL matrix passes;
 - direct `0.6.0 -> 1.0.0` and representative adjacent/intermediate migration chains preserve all supported data/config;
 - public v1 schemas and compatibility tests are published;
-- seven-day RC soak passes;
 - final source differs from accepted RC only by version/changelog/release metadata;
 - final artifacts have provenance, SBOM, licenses, checksums, docs, and reproducible-build evidence.
 
@@ -1005,7 +1018,7 @@ no owner:
 
 **Primary risks**
 
-- a blocker resets the RC soak;
+- a blocker forces a new `rc.N`, and with no soak left to absorb it, forces it late;
 - client releases invalidate fingerprints during stabilization;
 - accidental breaking changes hide in generated schemas or package metadata.
 
