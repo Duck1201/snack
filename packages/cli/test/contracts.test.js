@@ -275,7 +275,7 @@ test("the published command and flag surface has not changed", async () => {
       "--help",
     ],
     doctor: ["--source", "--json", "--help"],
-    export: ["--format", "--output", "--source", "--since", "--until", "--help"],
+    export: ["--format", "--output", "--source", "--since", "--until", "--json", "--help"],
     "setup claude": [
       "--non-interactive",
       "--source",

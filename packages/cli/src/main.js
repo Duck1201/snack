@@ -778,7 +778,18 @@ export async function run(argv, options = {}) {
             now,
           });
           await writePrivateAtomic(paths.configFile, prepared.content, { backup: true });
-          return { key, value: getConfigValue(prepared.config, key), storage };
+          return {
+            key,
+            value: getConfigValue(prepared.config, key),
+            // Renamed at the boundary rather than inside storage: the JavaScript names are the
+            // storage layer's own business, and every published payload is snake_case.
+            storage: {
+              applied: storage.applied,
+              backup_created: storage.backupCreated,
+              backup_file: storage.backupFile,
+              migration_count: storage.migrationCount,
+            },
+          };
         });
       });
       if (wantsJson(this, configuredJson)) {
@@ -951,6 +962,10 @@ export async function run(argv, options = {}) {
     .option("--source <alias>", "capacity-source alias")
     .option("--since <time>", "include records at or after this time")
     .option("--until <time>", "include records before this time")
+    // Accepted here all along as a global option, but absent from `export --help` -- so the one
+    // command whose whole purpose is a machine-readable document was also the one that never told
+    // anyone how to ask for a machine-readable summary of it.
+    .option("--json", "emit one versioned JSON document")
     .action(async function exportData(commandOptions) {
       if (commandOptions.format !== "json" && commandOptions.format !== "csv") {
         throw new SnackError("Export format must be json or csv.", {
