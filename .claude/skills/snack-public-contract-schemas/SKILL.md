@@ -46,6 +46,16 @@ tests pass, and the 0.7 fixtures actively failed when `source_bindings` and
       worktree: `git worktree add /tmp/snack-0.7.0 v0.7.0 && cd /tmp/snack-0.7.0 && npm ci`. Slow,
       and the whole reason step 1 comes first.
 
+- [ ] 1b. **Capturing an OLDER release deliberately is a worktree job, and a normal one.** Filling a
+      gap in the corpus — `0.6` was captured this way long after the fact — is not a recovery, it is
+      the procedure: add a worktree at that tag, `npm ci` inside it, then write the capture script
+      inside that worktree pointing its output at the **main** checkout's
+      `test/fixtures/contracts/<version>/`, run it, and remove the worktree with
+      `git worktree remove --force` once the capture is committed. Two things bite: an older release
+      has **fewer commands** (0.6 predates the Claude client, so its corpus is ten documents rather
+      than eleven — capture what exists and assert on that, never invent a document), and its
+      `run-fixture.js` exports less (no `createClaudeHistory` before 0.7).
+
 - [ ] 2. **Write the capture script and run it from `packages/cli`.** It drives `run(argv, options)`
       through `makeRunFixture()` so the clock and XDG paths are the injected ones and the captured
       documents are byte-stable. See `references/capturing-fixtures.md` for the working script,
@@ -91,6 +101,19 @@ while an old export **must announce itself as version 1 and must not pass as ver
 the change was breaking.
 
 ## Gotchas
+
+- **Ajv strict wants `"type"` restated inside every `if` and `then`**, and inside each `oneOf`
+  branch, or it throws `strictTypes: missing type "object" for keyword "required"` — even when the
+  root schema already declares it. This bit the envelope's per-command routing and, separately, the
+  spool event schema, which had shipped in both packages for releases without anyone compiling it.
+  Adding the types changes no document's validity; it only makes the file usable.
+- **Ajv strict rejects a union of two real types** (`["integer", "boolean"]`) without
+  `allowUnionTypes`. A nullable union (`["number", "null"]`) is fine, so declare the field as the
+  one type it really carries.
+- **A schema referenced by `$id` from another file must be `addSchema`'d before the referring schema
+  compiles.** Register the whole `schemas/commands/` directory once, then compile the envelope.
+- **Compile every schema the repo ships, in a test.** A published schema nobody compiles is a
+  contract nobody can use; that is exactly how the spool schema shipped broken.
 
 - **Ajv strict rejects `"format": "date-time"`** with `unknown format "date-time" ignored`.
   `ajv-formats` is not a dependency and adding one for a timestamp is not worth it. Use a pattern:
