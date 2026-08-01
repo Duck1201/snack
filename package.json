@@ -21,11 +21,12 @@
     "pack:smoke": "node scripts/package-smoke.mjs",
     "release:check": "node scripts/check-release-readiness.mjs",
     "release:evidence": "node scripts/release-evidence.mjs",
-    "upgrade:smoke": "node scripts/upgrade-smoke.mjs",
     "release:publish": "changeset publish --tag next",
+    "release:staging": "node scripts/staging-registry.mjs",
     "release:version": "changeset version",
     "test": "npm test --workspaces --if-present && node --test \"scripts/*.test.mjs\"",
-    "typecheck": "tsc --project jsconfig.json"
+    "typecheck": "tsc --project jsconfig.json",
+    "upgrade:smoke": "node scripts/upgrade-smoke.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
