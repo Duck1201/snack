@@ -168,6 +168,8 @@ export async function run(argv, options = {}) {
     .option("--json", "emit one versioned JSON document")
     .action(async function setupOpenCode(commandOptions) {
       let recoveredSetupJournal = false;
+      /** @type {{rotated: boolean, retired_prompts: number} | null} */
+      let capacityPeriod = null;
       const databaseFile = resolveOpenCodeDatabase({
         ...(options.env ? { env: options.env } : {}),
         ...(options.home ? { home: options.home } : {}),
@@ -254,6 +256,7 @@ export async function run(argv, options = {}) {
           committed.pluginRegistration
         );
         recoveredSetupJournal = committed.recoveredSetupJournal;
+        capacityPeriod = committed.capacityPeriod;
       } else if (resolved.installPlugin === true) {
         const configFile = resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
@@ -293,13 +296,21 @@ export async function run(argv, options = {}) {
         ...(recoveredSetupJournal ? { recovered_setup_journal: true } : {}),
       };
       if (wantsJson(this, configuredJson)) {
-        stdout.write(formatJson(createEnvelope("setup opencode", data, { now })));
+        stdout.write(
+          formatJson(
+            createEnvelope("setup opencode", data, {
+              now,
+              warnings: capacityPeriodWarnings(capacityPeriod),
+            }),
+          ),
+        );
       } else {
         stdout.write(
           resolved.dryRun === true
             ? `Validated OpenCode source ${configuredSource.alias}; no changes applied.\n`
             : `Configured OpenCode source ${configuredSource.alias}.\n`,
         );
+        reportWarnings(stderr, capacityPeriodWarnings(capacityPeriod));
       }
     });
 
@@ -356,20 +367,22 @@ export async function run(argv, options = {}) {
         plan_profile: resolved.planProfile ?? "generic",
         fingerprint: fingerprint.family,
       };
-      const committed =
-        resolved.dryRun === true
-          ? configuredSource
-          : (
-              await commitConfiguredSource({
-                paths,
-                now,
-                source: configuredSource,
-                locationKey: "projects",
-                enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
-                writeConfig: options.writeConfig,
-                registerPlugin: undefined,
-              })
-            ).source;
+      /** @type {{rotated: boolean, retired_prompts: number} | null} */
+      let capacityPeriod = null;
+      let committed = configuredSource;
+      if (resolved.dryRun !== true) {
+        const result = await commitConfiguredSource({
+          paths,
+          now,
+          source: configuredSource,
+          locationKey: "projects",
+          enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
+          writeConfig: options.writeConfig,
+          registerPlugin: undefined,
+        });
+        committed = /** @type {typeof configuredSource} */ (result.source);
+        capacityPeriod = result.capacityPeriod;
+      }
       const data = {
         source: {
           alias: committed.alias,
@@ -387,13 +400,21 @@ export async function run(argv, options = {}) {
         },
       };
       if (wantsJson(this, configuredJson)) {
-        stdout.write(formatJson(createEnvelope("setup claude", data, { now })));
+        stdout.write(
+          formatJson(
+            createEnvelope("setup claude", data, {
+              now,
+              warnings: capacityPeriodWarnings(capacityPeriod),
+            }),
+          ),
+        );
       } else {
         stdout.write(
           resolved.dryRun === true
             ? `Validated Claude Code source ${committed.alias}; no changes applied.\n`
             : `Configured Claude Code source ${committed.alias}.\n`,
         );
+        reportWarnings(stderr, capacityPeriodWarnings(capacityPeriod));
       }
     });
 
@@ -1350,12 +1371,14 @@ async function readConfiguredSources(configFile) {
  *     registration: Awaited<ReturnType<typeof preparePluginRegistration>>,
  *   } | null>) | undefined,
  * }} input
- * @returns {Promise<{source: Record<string, string>, pluginRegistration: unknown, recoveredSetupJournal: boolean}>}
+ * @returns {Promise<{source: Record<string, string>, pluginRegistration: unknown, recoveredSetupJournal: boolean, capacityPeriod: {rotated: boolean, retired_prompts: number} | null}>}
  */
 async function commitConfiguredSource(input) {
   let configuredSource = input.source;
   let pluginRegistration = null;
   let recoveredSetupJournal = false;
+  /** @type {{rotated: boolean, retired_prompts: number} | null} */
+  let capacityPeriod = null;
   await withStorageOperationLock(input.paths, async () => {
     recoveredSetupJournal = await recoverSetupJournal(input.paths);
     await withConfigLock(input.paths.configFile, async () => {
@@ -1422,7 +1445,7 @@ async function commitConfiguredSource(input) {
         await (input.writeConfig ?? writePrivateAtomic)(input.paths.configFile, prepared.content, {
           backup: true,
         });
-        ensureCapacityPeriod(
+        capacityPeriod = ensureCapacityPeriod(
           input.paths.databaseFile,
           configuredSource,
           input.now,
@@ -1454,7 +1477,32 @@ async function commitConfiguredSource(input) {
       }
     });
   });
-  return { source: configuredSource, pluginRegistration, recoveredSetupJournal };
+  return { source: configuredSource, pluginRegistration, recoveredSetupJournal, capacityPeriod };
+}
+
+/**
+ * Say what a capacity-period rotation costs, when one happened.
+ *
+ * `setup` starts a new period whenever provider, profile, plan or plan profile changes, because
+ * those describe a different capacity regime. The prompts already stored stay readable and stay
+ * counted in `observed`, but they no longer train the forecast -- so the estimate drops to the
+ * bundled prior with `evidence very_low`. `1.0.0` did that silently, and a user who only corrected
+ * a plan label watched the number collapse with nothing connecting the two events.
+ *
+ * @param {{rotated: boolean, retired_prompts: number} | null} capacityPeriod
+ * @returns {import("./output.js").Diagnostic[]}
+ */
+function capacityPeriodWarnings(capacityPeriod) {
+  if (capacityPeriod === null || !capacityPeriod.rotated) return [];
+  return [
+    {
+      code: "capacity_period_rotated",
+      message:
+        `This is a different capacity regime, so ${capacityPeriod.retired_prompts} observed ` +
+        "prompt(s) stop informing the estimate. They are still stored and still reported; the " +
+        "next forecasts lean on the plan profile until this regime has its own history.",
+    },
+  ];
 }
 
 /**

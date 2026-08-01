@@ -19,7 +19,7 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
   const spoolDirectory = stringOrNull(options.spool_directory);
   const captureFeatures = options.prospective_analysis === true;
   const sourceBindings = bindingMap(options.source_bindings);
-  /** @type {Map<string, {promptId: string, provider: string | null, model: string | null, spoolDirectory: string}>} */
+  /** @type {Map<string, {promptId: string, provider: string | null, model: string | null, spoolDirectory: string, buffered: Record<string, unknown>[]}>} */
   const prompts = new Map();
   let writes = Promise.resolve();
   let pendingWrites = 0;
@@ -56,9 +56,43 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
       });
   };
 
+  /**
+   * Route a session's spool directory once its provider is known.
+   *
+   * OpenCode declares `model` optional on `chat.message` and does not send it on `1.18.10`, so the
+   * routing decision cannot be taken there. An event written to `_pending` is never attributed and
+   * never revisited, so a prompt whose provider is still unknown is held rather than misfiled, and
+   * released as soon as `chat.params` names one. A prompt whose provider never arrives is released
+   * to `_pending` at the terminal event, which is where it would have gone anyway.
+   *
+   * @param {{provider: string | null, model: string | null, spoolDirectory: string, buffered: Record<string, unknown>[]}} prompt
+   */
+  const release = (prompt) => {
+    for (const event of prompt.buffered.splice(0)) {
+      append(prompt.spoolDirectory, { ...event, provider: prompt.provider, model: prompt.model });
+    }
+  };
+
   return {
     async dispose() {
+      for (const prompt of prompts.values()) release(prompt);
       await writes;
+    },
+    async "chat.params"(/** @type {Record<string, unknown>} */ input) {
+      try {
+        const sessionId = stringOrNull(input.sessionID);
+        const prompt = sessionId ? prompts.get(sessionId) : undefined;
+        if (!prompt || prompt.provider || !spoolDirectory) return;
+        const model = recordOrNull(input.model);
+        const provider = stringOrNull(model?.providerID);
+        if (!provider) return;
+        prompt.provider = provider;
+        prompt.model = stringOrNull(model?.modelID);
+        prompt.spoolDirectory = sourceBindings.get(provider) ?? join(spoolDirectory, "_pending");
+        release(prompt);
+      } catch {
+        // Capture must never change OpenCode prompt behavior.
+      }
     },
     async "chat.message"(
       /** @type {Record<string, unknown>} */ input,
@@ -76,14 +110,16 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
           ? (sourceBindings.get(provider) ?? join(spoolDirectory, "_pending"))
           : join(spoolDirectory, "_pending");
         if (!targetDirectory) return;
-        prompts.set(sessionId, {
+        const prompt = {
           promptId,
           provider,
           model: modelId,
           spoolDirectory: targetDirectory,
-        });
+          /** @type {Record<string, unknown>[]} */ buffered: [],
+        };
+        prompts.set(sessionId, prompt);
         const occurredAt = new Date().toISOString();
-        append(targetDirectory, {
+        const started = {
           schema_version: 1,
           event_id: `chat.message:${sessionId}:${promptId}:${occurredAt}`,
           installation_id: installationId,
@@ -101,7 +137,9 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
           usage_slices: [],
           restrictions: [],
           ...(captureFeatures ? { input_features: analyzePrompt(output) } : {}),
-        });
+        };
+        if (provider) append(targetDirectory, started);
+        else prompt.buffered.push(started);
       } catch {
         // Capture must never change OpenCode prompt behavior.
       }
@@ -118,6 +156,7 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
         const occurredAt = timestampOrNow(properties.time);
         const error = recordOrNull(properties.error);
         const restricted = type === "session.error" && isExplicitRateLimit(error);
+        release(prompt);
         append(prompt.spoolDirectory, {
           schema_version: 1,
           event_id: `${type}:${sessionId}:${prompt.promptId}:${occurredAt}`,

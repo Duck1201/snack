@@ -1415,6 +1415,10 @@ test("plan changes keep historical prompts in their original capacity period", a
     fixture.options,
   );
   const setupStatus = JSON.parse(fixture.stdout.value).data;
+  // The rotation opens a new period and the prompt stays attributed to the closed one -- that is
+  // the claim this test is named for, and it is unchanged. What `observed` reports is a different
+  // question: until `1.0.1` it read the open period only, so a synchronised source described
+  // itself as empty. It now describes what it holds; only training is scoped to the regime.
   assert.deepEqual(
     {
       activePeriod: setupStatus.source.active_period.started_at,
@@ -1423,7 +1427,7 @@ test("plan changes keep historical prompts in their original capacity period", a
     },
     {
       activePeriod: "2026-01-02T04:00:00.000Z",
-      observed: { prompts: 0, successes: 0, restrictions: 0, excluded: 0 },
+      observed: { prompts: 1, successes: 1, restrictions: 0, excluded: 0 },
       plan: "pro",
     },
   );
@@ -1451,13 +1455,17 @@ test("plan changes keep historical prompts in their original capacity period", a
   );
   const status = JSON.parse(fixture.stdout.value).data;
 
+  // The late prompt carries a timestamp inside the closed period, so it is stored there rather
+  // than backdated into the open one. It is counted as history and still does not train the new
+  // regime.
   assert.deepEqual(
     { plan: status.source.plan, observed: status.observed },
     {
       plan: "pro",
-      observed: { prompts: 0, successes: 0, restrictions: 0, excluded: 0 },
+      observed: { prompts: 2, successes: 2, restrictions: 0, excluded: 0 },
     },
   );
+  assert.equal(periodIsClosedFor(fixture.paths.databaseFile, "user-late"), true);
 });
 
 test("status summarizes every configured source when none is selected", async () => {
@@ -2238,6 +2246,34 @@ test("sync assigns a size category to every ingested prompt", async () => {
     database.close();
   }
 });
+
+/**
+ * Whether the period a source prompt was attributed to is closed.
+ *
+ * The claim this test is named for used to be checked only through `observed` reporting zero,
+ * which made "attributed to the closed period" and "invisible" the same assertion. They are not.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourcePromptId
+ */
+function periodIsClosedFor(databaseFile, sourcePromptId) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const row = /** @type {{ended_at: string | null} | undefined} */ (
+      database
+        .prepare(
+          `SELECT capacity_period.ended_at AS ended_at
+             FROM prompt_execution
+             JOIN capacity_period ON capacity_period.id = prompt_execution.capacity_period_id
+            WHERE prompt_execution.source_prompt_id = ?`,
+        )
+        .get(sourcePromptId)
+    );
+    return row !== undefined && row.ended_at !== null;
+  } finally {
+    database.close();
+  }
+}
 
 /**
  * @param {string} databaseFile
@@ -3155,4 +3191,129 @@ test("status synchronizes every client behind a shared capacity source", async (
   const tables = JSON.parse(fixture.stdout.value).data.tables;
   assert.equal(tables.prompts.length, 2);
   assert.equal(tables.usage_slices.length, 3);
+});
+
+test("changing the plan label keeps the evidence the source already carries", async () => {
+  // `setup` rotates the capacity period when provider, profile, plan or plan profile changes --
+  // deliberately, because a new plan is a new capacity regime. But the summary and status queries
+  // filter on the open period, so the rotation did not reweigh the old evidence, it hid it: a
+  // source with hundreds of synchronised prompts reported `as_of unknown`, fell back to the generic
+  // prior, and `doctor` said no synchronised usage was available. `sync --full` did not bring it
+  // back, because every observation keeps the period it belongs to by timestamp.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const before = JSON.parse(fixture.stdout.value).data;
+  assert.ok(before.observed.prompts > 0);
+  assert.notEqual(before.freshness.as_of, null);
+
+  // A frozen clock cannot rotate at all: `capacity_period` is `UNIQUE (source_alias, started_at)`,
+  // so a second period opening in the same millisecond raises `internal_error`. Advance the clock
+  // to reach the path a real user takes.
+  fixture.options.now = new Date("2026-01-02T04:00:00.000Z");
+  fixture.stdout.value = "";
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic-max",
+      "--json",
+    ],
+    fixture.options,
+  );
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const after = JSON.parse(fixture.stdout.value).data;
+
+  // What the source has been observed doing survives the rotation, because it is a fact about the
+  // database and no forecast depends on it.
+  assert.equal(after.observed.prompts, before.observed.prompts);
+  assert.equal(after.freshness.as_of, before.freshness.as_of);
+
+  // What may *train* the forecast does not: a closed period is a different plan, and evidence from
+  // it would be evidence about a regime the user has left. So the estimate falls back to the
+  // bundled prior and says so, which is honest uncertainty rather than the claim `1.0.0` made --
+  // that the source had never been synchronized at all.
+  assert.equal(after.method.id, "initial-generic");
+  assert.equal(after.evidence.level, "very_low");
+  assert.notEqual(after.source.active_period.started_at, before.source.active_period.started_at);
+});
+
+test("setup says how much evidence a plan change retires", async () => {
+  // Nothing warned that re-running setup starts a new capacity regime, so a user changing a plan
+  // label watched the estimate collapse with no explanation and no way to connect the two.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.options.now = new Date("2026-01-02T04:00:00.000Z");
+  fixture.stdout.value = "";
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic-max",
+      "--json",
+    ],
+    fixture.options,
+  );
+
+  const document = JSON.parse(fixture.stdout.value);
+  assert.deepEqual(
+    document.warnings.map((/** @type {{code: string}} */ warning) => warning.code),
+    ["capacity_period_rotated"],
+  );
+  assert.match(document.warnings[0].message, /1 observed prompt\(s\)/u);
+});
+
+test("a first setup retires nothing and says nothing", async () => {
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+
+  // Opening the first period is not a rotation. Warning here would train every user to ignore the
+  // one warning that matters.
+  assert.deepEqual(JSON.parse(fixture.stdout.value).warnings, []);
 });

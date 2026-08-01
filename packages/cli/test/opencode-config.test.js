@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -62,6 +62,18 @@ test("the pinned plugin version is compatible", async () => {
   const configFile = await writeOpenCodeConfig([[pluginPackageSpec, options]]);
 
   assert.equal(await inspectPluginRegistration(configFile), "compatible");
+});
+
+test("the pinned plugin version is the one this workspace publishes", async () => {
+  // The pin names another package's version, so nothing about bumping that package forces this
+  // constant to move. `1.0.0` shipped a CLI that installed `0.1.2` and then told anyone already on
+  // `1.0.0` to re-run setup -- advice that downgraded them. The gate is this test: the release
+  // cannot go green while the two disagree.
+  const manifest = JSON.parse(
+    await readFile(new URL("../../opencode/package.json", import.meta.url), "utf8"),
+  );
+
+  assert.equal(pluginPackageSpec, `${manifest.name}@${manifest.version}`);
 });
 
 test("a plugin registered without options cannot route the spool and is incompatible", async () => {

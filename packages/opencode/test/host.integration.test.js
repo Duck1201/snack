@@ -24,10 +24,15 @@ test(
     const spoolDirectory = join(root, "spool");
     try {
       await mkdir(configDirectory, { recursive: true });
-      await execute("npm", ["pack", packageDirectory, "--pack-destination", root, "--json"], {
-        timeout: 60_000,
-      });
-      const tarball = join(root, "snack-ai-opencode-0.1.0.tgz");
+      // The tarball's name carries the version, so writing it out by hand made this test
+      // unrunnable the moment the plugin left `0.1.0` -- and it is skipped by default, so nothing
+      // said so. `npm pack --json` reports the filename it wrote; take it from there.
+      const packed = await execute(
+        "npm",
+        ["pack", packageDirectory, "--pack-destination", root, "--json"],
+        { timeout: 60_000 },
+      );
+      const tarball = join(root, JSON.parse(packed.stdout)[0].filename);
       await execute(
         "npm",
         [
@@ -51,6 +56,18 @@ test(
                 installation_id: "host-installation",
                 spool_directory: spoolDirectory,
                 prospective_analysis: true,
+                // Without a binding every event lands in `_pending`, which is where an
+                // unattributable event goes -- so a test that asserts only "an event was written"
+                // passes while live capture produces nothing a `sync` can use. That is what
+                // shipped in `1.0.0`. Bind the provider the request below names, and assert the
+                // segment lands under it.
+                source_bindings: [
+                  {
+                    provider: "openai",
+                    source_alias: "oc-host",
+                    spool_directory: join(spoolDirectory, "oc-host"),
+                  },
+                ],
               },
             ],
           ],
@@ -96,10 +113,11 @@ test(
           parts: [{ type: "text", text: "PRIVATE_HOST_CANARY" }],
         });
         const content = await readEventually(
-          join(spoolDirectory, "_pending", "current.open"),
+          join(spoolDirectory, "oc-host", "current.open"),
           stderr,
         );
         assert.match(content, /"event_type":"prompt_started"/u);
+        assert.match(content, /"provider":"openai"/u);
         assert.match(content, /"analyzer_version":"opencode-input-v1"/u);
         assert.doesNotMatch(content, /PRIVATE_HOST_CANARY/u);
         assert.doesNotMatch(stderr, /PRIVATE_HOST_CANARY/u);

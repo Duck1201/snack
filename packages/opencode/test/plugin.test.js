@@ -193,3 +193,49 @@ test("derives only allowlisted features from the official parts payload", async 
   }
   assert.doesNotMatch(content, /private\/path/u);
 });
+
+test("a host that omits the model on chat.message still routes to the bound source", async () => {
+  // OpenCode declares `model` optional on `chat.message` and does not send it on 1.18.10, so the
+  // provider was null, every live event went to `_pending`, and `sync` could never attribute one.
+  // `chat.params` carries the provider on the same turn and is not optional; the routing decision
+  // waits for it rather than being taken without it.
+  const root = await mkdtemp(join(tmpdir(), "snack-opencode-plugin-"));
+  temporaryRoots.push(root);
+  const spoolDirectory = join(root, "spool");
+  const bound = join(spoolDirectory, "oc-main");
+  const hooks = await SnackOpenCodePlugin(
+    {},
+    {
+      installation_id: "installation-1",
+      spool_directory: spoolDirectory,
+      source_bindings: [{ provider: "anthropic", source_alias: "oc-main", spool_directory: bound }],
+    },
+  );
+
+  await hooks["chat.message"]({ sessionID: "session-1", messageID: "prompt-1" }, { parts: [] });
+  await hooks["chat.params"]({
+    sessionID: "session-1",
+    model: { providerID: "anthropic", modelID: "claude-sonnet" },
+  });
+  await hooks.event({
+    event: {
+      type: "session.idle",
+      properties: { sessionID: "session-1", time: "2026-01-02T03:04:10.000Z" },
+    },
+  });
+
+  await hooks.dispose();
+
+  const events = (await readFile(join(bound, "current.open"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0].event_type, "prompt_started");
+  assert.equal(events[1].event_type, "session_idle");
+  for (const event of events) {
+    assert.equal(event.provider, "anthropic");
+    assert.equal(event.model, "claude-sonnet");
+  }
+});

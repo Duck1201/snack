@@ -1130,6 +1130,8 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
        WHERE source_alias = ? AND ended_at IS NULL`,
     )
     .get(source.alias);
+  /** @type {number | null} */
+  let retiredPrompts = null;
   // ponytail: a profile version bump alone keeps the period, so shipping an updated
   // bundled profile never resets local evidence. Doctor reports the drift instead.
   if (
@@ -1144,6 +1146,19 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
     !("plan_profile_id" in period) ||
     period.plan_profile_id !== (planProfile?.id ?? null)
   ) {
+    // What the rotation costs, counted before it happens: these prompts stay readable and stay
+    // counted, but they stop training the forecast, because they describe a regime the user is
+    // leaving. The caller says so out loud -- silently collapsing an estimate is what `1.0.0` did.
+    // Opening the very first period is not a rotation and retires nothing, so it stays null.
+    if (typeof period === "object" && period !== null && "id" in period) {
+      retiredPrompts = Number(
+        /** @type {{count: number}} */ (
+          database
+            .prepare("SELECT COUNT(*) AS count FROM prompt_execution WHERE capacity_period_id = ?")
+            .get(period.id)
+        ).count,
+      );
+    }
     database
       .prepare(
         `UPDATE capacity_period
@@ -1172,7 +1187,7 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
   if (typeof period !== "object" || period === null || !("id" in period)) {
     throw new Error("Active capacity period is invalid.");
   }
-  return period;
+  return { ...period, rotated: retiredPrompts !== null, retired_prompts: retiredPrompts ?? 0 };
 }
 
 /**
@@ -1186,6 +1201,22 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
  * ponytail: full aggregate per run. Maintain incremental counters on the capacity period, or
  * narrow the summary to a bounded window, once `status` p95 stops meeting its budget — and not
  * before, because either change trades a simple truth for a cache that can drift.
+ *
+ * The join deliberately does **not** filter on the open period. It did until `1.0.1`, and that
+ * conflated two questions: what has this source been observed doing, and what may train the
+ * forecast. `setup` rotates the period whenever provider, profile, plan or plan profile changes —
+ * correctly, a new plan is a new regime — and this summary then reported a source with 601
+ * synchronized prompts as `as_of unknown`, `observed 0`, with `doctor` saying no synchronized
+ * usage was available while `stats` printed the same rows and their timestamps. `sync --full`
+ * could not bring them back: an observation keeps the period it belongs to by timestamp.
+ *
+ * Those were false statements about the database, and no forecast depends on them. Training is a
+ * separate question and keeps the filter — see `readOutcomeRows`. So after a rotation `status`
+ * still reports the history it has and says plainly that the evidence for *this* regime is very
+ * low, instead of claiming there is no history at all.
+ *
+ * The regime is still available here: `active_period_id` and `active_period_started_at` are read
+ * on their own above.
  *
  * @param {string} databaseFile
  * @param {string} sourceAlias
@@ -1208,7 +1239,6 @@ export function readSourceSummary(databaseFile, sourceAlias) {
          FROM prompt_execution
          JOIN capacity_period
            ON capacity_period.id = prompt_execution.capacity_period_id
-          AND capacity_period.ended_at IS NULL
          JOIN prompt_source_outcome
            ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
          WHERE prompt_execution.source_alias = ?`,
@@ -1335,6 +1365,11 @@ export function writeSizeCategories(databaseFile, rows) {
  * gates belong to the prediction module, not to SQL. `limit` keeps the most recent
  * prompts and still returns them oldest first, so a caller whose weighting makes the tail
  * irrelevant does not pay to read it.
+ *
+ * The open period only, unlike `readSourceSummary`. These rows *train* the forecast, and a closed
+ * period is a different provider, profile or plan — evidence about a capacity regime the user is
+ * no longer in. Describing history and training on it are different questions, and `1.0.0`
+ * answered both with this filter: see `readSourceSummary` for the half that was wrong.
  *
  * @param {string} databaseFile
  * @param {string} sourceAlias
