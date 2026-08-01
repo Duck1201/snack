@@ -1551,18 +1551,28 @@ export function readRestrictionWindowRows(databaseFile, sourceAlias, window) {
   }
 }
 
-/** @param {string} databaseFile @param {ConfiguredSource} source */
-export function readPendingMappingCount(databaseFile, source) {
+/**
+ * @param {string} databaseFile
+ * @param {ConfiguredSource} source
+ * @param {string[]} [installationIds] Every client feeding this capacity source. Defaults to the
+ *   one installation the source describes.
+ */
+export function readPendingMappingCount(databaseFile, source, installationIds) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  // Pending mappings belong to the capacity source; ambiguous ones belong to a client installation.
+  // A caller describing one shared source therefore has to name every client feeding it, or the
+  // count answers for whichever client it happened to pass.
+  const installations = installationIds ?? [source.installation_id];
+  const placeholders = installations.map(() => "?").join(", ");
   try {
     const row = database
       .prepare(
         `SELECT
            (SELECT COUNT(*) FROM pending_mapping WHERE source_alias = ?) +
            (SELECT COUNT(*) FROM ambiguous_profile_mapping
-            WHERE installation_id = ? AND provider = ?) AS count`,
+            WHERE installation_id IN (${placeholders}) AND provider = ?) AS count`,
       )
-      .get(source.alias, source.installation_id, source.provider);
+      .get(source.alias, ...installations, source.provider);
     return typeof row === "object" && row !== null && "count" in row ? Number(row.count) : 0;
   } finally {
     database.close();

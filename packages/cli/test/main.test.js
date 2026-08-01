@@ -851,7 +851,7 @@ test("doctor reports configured OpenCode fingerprint mapping and freshness", asy
       exitCode: 0,
       status: "degraded",
       sourceChecks: [
-        { id: "source_fingerprint:personal-anthropic", status: "pass" },
+        { id: "source_fingerprint:personal-anthropic:opencode", status: "pass" },
         { id: "source_mapping:personal-anthropic", status: "pass" },
         { id: "source_freshness:personal-anthropic", status: "pass" },
         // Answered for every configured source, including one with no live capture path: whether

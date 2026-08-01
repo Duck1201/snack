@@ -7,7 +7,12 @@ import { runDoctor } from "../src/doctor.js";
 import { run } from "../src/main.js";
 import { pluginPackageSpec } from "../src/opencode-config.js";
 import { initializeDatabase, migrationDirectory } from "../src/storage.js";
-import { cleanupRunFixtures, createClaudeHistory, makeRunFixture } from "./fixtures/run-fixture.js";
+import {
+  cleanupRunFixtures,
+  createClaudeHistory,
+  createOpenCodeDatabase,
+  makeRunFixture,
+} from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
 
@@ -123,7 +128,7 @@ test("a Claude-only installation is not told about the OpenCode plugin", async (
   // question they did not ask, and degrades a healthy installation for it.
   const ids = document.data.checks.map((/** @type {{id: string}} */ check) => check.id);
   assert.ok(!ids.includes("opencode_plugin"), ids.join(", "));
-  assert.ok(ids.includes("source_fingerprint:claude"));
+  assert.ok(ids.includes("source_fingerprint:claude:claude"), ids.join(", "));
   assert.equal(document.status, "ok");
 });
 
@@ -164,3 +169,54 @@ async function migrationsThrough(root, through) {
   }
   return directory;
 }
+
+test("two clients behind one capacity source do not produce two of the same check", async () => {
+  // A capacity source is one lineage however many clients feed it, and most of what `doctor` asks
+  // about it -- its plan profile, its mapping, how fresh it is, what ingestion refused -- is a
+  // question about the source, not about each client. Asked once per configured client, every one
+  // of those answers appeared twice under an identical id, so a machine consumer could not key on
+  // the id and one refusal read as two.
+  const fixture = await makeRunFixture("snack-doctor-shared-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  for (const client of ["opencode", "claude"]) {
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        "work",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+      ],
+      fixture.options,
+    );
+  }
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const checks = /** @type {{id: string}[]} */ (JSON.parse(fixture.stdout.value).data.checks);
+
+  const duplicated = [...new Set(checks.map((check) => check.id))].filter(
+    (id) => checks.filter((check) => check.id === id).length > 1,
+  );
+  assert.deepEqual(duplicated, [], `duplicate check ids: ${duplicated.join(", ")}`);
+
+  // The one question that really is per client keeps an answer per client, and says which is which
+  // in the id rather than only in the prose.
+  const fingerprints = checks
+    .filter((check) => check.id.startsWith("source_fingerprint:"))
+    .map((check) => check.id);
+  assert.deepEqual(fingerprints.sort(), [
+    "source_fingerprint:work:claude",
+    "source_fingerprint:work:opencode",
+  ]);
+});

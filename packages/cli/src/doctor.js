@@ -133,29 +133,50 @@ export async function runDoctor(paths, options = {}) {
             : fail("opencode_plugin", "OpenCode live-capture plugin registration is incompatible."),
     );
   }
-  for (const source of sources) {
-    if (!isConfiguredSource(source)) continue;
+  // Configuration holds one entry per client, and a capacity source can have several. Whether a
+  // client's own history is readable is a question per client; everything else here -- the plan
+  // profile, the mapping, the freshness, what ingestion refused -- is a question about the source
+  // one lineage at a time. Asked once per client, those answers came back duplicated under an
+  // identical id, so a consumer could not key on the id and one refusal read as two.
+  const configured = sources.filter((source) => isConfiguredSource(source));
+  const selected = configured.filter(
     // Narrowing touches the per-source checks only: runtime, permissions, storage and plugin
     // registration are properties of the installation, and hiding them would answer a narrower
     // question than the one `doctor` exists to answer.
-    if (options.source !== undefined && source.alias !== options.source) continue;
-    checks.push(planProfileCheck(source, now));
+    (source) => options.source === undefined || source.alias === options.source,
+  );
+  for (const source of selected) {
     const client = source.adapter === "claude" ? "Claude Code" : "OpenCode";
+    // The adapter is what distinguishes the answer, so it belongs in the id and not only in the
+    // prose. Two clients on one alias otherwise report the same id twice, and a reader cannot tell
+    // which history is the unreadable one.
+    const id = `source_fingerprint:${source.alias}:${source.adapter}`;
     try {
       const fingerprint = createSourceAdapter(source).fingerprint();
       checks.push(
         fingerprint.supported && fingerprint.family === source.fingerprint
-          ? pass(`source_fingerprint:${source.alias}`, `${client} schema fingerprint is supported.`)
-          : fail(
-              `source_fingerprint:${source.alias}`,
-              `${client} schema fingerprint is unsupported.`,
-            ),
+          ? pass(id, `${client} schema fingerprint is supported.`)
+          : fail(id, `${client} schema fingerprint is unsupported.`),
       );
     } catch {
-      checks.push(fail(`source_fingerprint:${source.alias}`, `${client} source is inaccessible.`));
+      checks.push(fail(id, `${client} source is inaccessible.`));
     }
+  }
+  // One pass per capacity source, in the order the sources were configured.
+  const aliases = [...new Set(selected.map((source) => source.alias))];
+  for (const alias of aliases) {
+    const source = /** @type {typeof selected[number]} */ (
+      selected.find((candidate) => candidate.alias === alias)
+    );
+    checks.push(planProfileCheck(source, now));
     try {
-      const pending = readPendingMappingCount(paths.databaseFile, source);
+      const pending = readPendingMappingCount(
+        paths.databaseFile,
+        source,
+        selected
+          .filter((candidate) => candidate.alias === alias)
+          .map((candidate) => candidate.installation_id),
+      );
       checks.push(
         pending === 0
           ? pass(
