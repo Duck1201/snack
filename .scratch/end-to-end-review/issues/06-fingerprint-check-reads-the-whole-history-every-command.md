@@ -1,7 +1,7 @@
 # 06 — The Claude fingerprint check re-reads and re-parses the entire history on every command
 
-Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
-Wave 4, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
+Status: `fixed` in `1.0.2`, commit 09dcefc Severity: **P2** Owner: unassigned Found in: Phase 1
+end-to-end review, Wave 4, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
 
 ## What happens
 

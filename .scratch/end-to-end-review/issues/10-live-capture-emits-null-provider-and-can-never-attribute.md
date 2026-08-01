@@ -1,7 +1,7 @@
 # 10 — Live capture emits `provider: null` on OpenCode `1.18.10`, so no live event can ever be attributed
 
-Status: `ready-for-agent` Severity: **P1** — blocks release; ships as `1.0.1` Owner: unassigned
-Found in: Phase 1 end-to-end review, Wave 2, real OpenCode `1.18.10`
+Status: `fixed` in `1.0.1`, commit 813b78e Severity: **P1** — blocks release; ships as `1.0.1`
+Owner: unassigned Found in: Phase 1 end-to-end review, Wave 2, real OpenCode `1.18.10`
 
 ## What happens
 

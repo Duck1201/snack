@@ -199,6 +199,8 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 - **a provider mapped after the first sync attributes its backlog without `--full`, and `doctor` names the providers it is waiting on** ([02](./.scratch/end-to-end-review/issues/02-late-provider-mapping-recovers-nothing.md), [03](./.scratch/end-to-end-review/issues/03-pending-mapping-warning-is-a-dead-end.md)). The pending rows are already retained; nothing replays them, and nothing says which providers they belong to or what to do;
 - **the Claude fingerprint check stops re-reading the whole history on every command** ([06](./.scratch/end-to-end-review/issues/06-fingerprint-check-reads-the-whole-history-every-command.md)). A no-op `sync` reads and parses 222 MB to sample 200 records per file: 238 MB of process RSS, O(total history) where the cursor was designed to make it O(new data).
 
+- **the steady-state memory budget names its unit** ([07](./.scratch/end-to-end-review/issues/07-steady-state-memory-budget-does-not-name-its-unit.md)). `1.0.0` passed a heap cap while peak process RSS over a real history was 238 MB, so the product's own budget had two answers. Both are now stated, and after the fingerprint fix both pass.
+
 [Finding 08](./.scratch/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md) was scoped into this release and then **retracted**: `setup` cancels cleanly on `Ctrl+D` and refuses without a terminal, and the reported hang was the review's own harness tearing down a pty while the command was still working. The fix was written and reverted rather than shipped, because a refactor justified by a defect that does not exist is not what a patch is for. The finding is kept, marked invalid, with the analysis — a red result from a harness is not evidence until the harness is shown able to tell a wait from an exit, which is the same rule this project already applies to a failing test.
 
 **Exit:** each remaining fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
@@ -308,7 +310,7 @@ On a typical supported developer machine:
 - `snack status --no-sync` p95: under 250 ms;
 - incremental synchronization for 100,000 prompts p95: under 2 seconds;
 - initial backfill of 100,000 prompts: under 30 seconds;
-- steady-state CLI memory: under 150 MB.
+- steady-state CLI memory: under 150 MB of **V8 old-space heap**, enforced as `--max-old-space-size=150`, and under 150 MB of **peak process RSS**, which is the number a person watching `top` sees. The two are different measurements and `1.0.0` met only the first; both are stated because a budget that does not name its unit is not one anybody can check.
 
 Steady state means the commands run repeatedly against an already-stored history — `status`, an incremental `sync`, `stats`. The initial backfill is deliberately excluded: it carries only the time budget above, because reading a whole source materializes every observation before storage sees it and needs roughly 300 MB of heap at 100,000 prompts. Bounding that would mean committing the backfill in batches, which is a change to when the ingestion cursor advances and belongs to a release that can measure the trade.
 

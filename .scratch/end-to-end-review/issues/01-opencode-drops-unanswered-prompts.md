@@ -1,7 +1,8 @@
 # 01 — The OpenCode adapter drops a prompt with no assistant reply, and counts it nowhere
 
-Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
-Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0` unless a later wave raises the severity
+Status: `fixed` in `1.0.2`, commit 5a57425 Severity: **P2** Owner: unassigned Found in: Phase 1
+end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0` unless a later wave raises
+the severity
 
 ## What happens
 

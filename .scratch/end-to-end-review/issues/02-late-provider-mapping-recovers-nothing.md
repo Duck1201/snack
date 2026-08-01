@@ -1,7 +1,7 @@
 # 02 — A provider mapping added after the first sync recovers nothing, and nothing says so
 
-Status: `ready-for-agent` Severity: **P2** Owner: unassigned Found in: Phase 1 end-to-end review,
-Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
+Status: `fixed` in `1.0.2`, commit faaee15 — see below Severity: **P2** Owner: unassigned Found in:
+Phase 1 end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.0`
 
 ## What happens
 
@@ -70,3 +70,25 @@ The lazy version, in preference order:
 
 `run(argv, options)` with `makeRunFixture()`: setup with provider A, sync, setup with provider B,
 sync, assert the previously pending observations are attributed without `--full`.
+
+## What actually shipped, and what did not
+
+**Partly fixed in `1.0.2`.** The suggested fix listed two options in preference order; the first one
+is not available.
+
+Option 1, replaying the pending rows, **cannot be done from storage.** `pending_mapping` is
+`(source_alias, source_prompt_id, provider, model, first_seen_at)` — identifiers, no payload. The
+full observation is retained only for the spool path, in `pending_spool_observation`. So for a
+backfill there is nothing to replay from: the source has to be read again, which is exactly what
+`sync --full` does. Holding the payload for every pending backfill observation is a schema change
+and belongs to a release that can carry a migration.
+
+Option 2 shipped: `doctor` now names the providers, their counts, and the command
+([03](./03-pending-mapping-warning-is-a-dead-end.md)). A user who lands in this state is told how to
+leave it, which was the half of the defect that could be closed without moving the schema.
+
+**Separate aliases avoid the trap entirely**, which is worth recording because it is what a real
+multi-provider history wants anyway: a new capacity source has no ingestion cursor, so its first
+sync reads the whole source and attributes immediately. Confirmed on a real installation — adding
+`opencode-zen` and `ollama-local` alongside an existing `openai` source attributed 34 and 19
+observations on a plain `sync`, with no `--full` and no capacity period rotated.
