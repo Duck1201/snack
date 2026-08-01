@@ -59,6 +59,22 @@ The difference is noise, and the reason is structural rather than lucky: `comput
 already reads and buckets all thirty-one windows in one query, so the trend only re-ranks rows that
 are already in memory. The scan was paid before the sparkline asked for anything.
 
+### The backfill budget stops being asserted on a hosted runner
+
+Merging `1.1.0` turned `main` red on macOS: `backfill took 30.2s` against a 30 s budget, from a
+commit whose diff touches no ingestion file at all — no adapter, no `storage.js`, no `spool.js` —
+and which had passed macOS minutes earlier on its own pull request. The same history backfills in
+**14.5 s** on the machine whose measurement is the gate.
+
+So the assertion was measuring the runner. `status --no-sync` p95 already carried an exemption for
+exactly this, with the reasoning written beside it; the two backfill assertions did not, which was
+an inconsistency rather than a decision. They now carry the same one, and it was proven in both
+directions before being trusted: with the budget tampered down to 1 ms the assertion still fails
+locally, and with `CI` set the same tampered budget is skipped.
+
+The memory assertions stay unconditional. A heap ceiling is a property the process either survives
+or dies on, which is portable in a way that a wall clock on borrowed hardware is not.
+
 The `212 ms` single-source figure above is 16 ms above `1.0.2` and 24 ms above the paired
 measurement in this same run, which is run-to-run variation on a shared machine rather than a
 regression: the two-client figure moved the other way, by 10 ms, on the same commit.
