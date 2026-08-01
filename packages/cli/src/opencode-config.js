@@ -20,7 +20,7 @@ const packageName = "@snack-ai/opencode";
  * `1.0.0` to re-run setup, which would have downgraded them. The constant cannot be read from the
  * plugin's manifest at runtime — the CLI tarball does not contain it — so the gate is the test.
  */
-export const pluginPackageSpec = `${packageName}@1.0.1`;
+export const pluginPackageSpec = `${packageName}@1.0.2`;
 const packageSpec = pluginPackageSpec;
 
 /**

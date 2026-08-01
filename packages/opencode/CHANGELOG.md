@@ -1,5 +1,38 @@
 # @snack-ai/opencode
 
+## 1.0.2
+
+### Patch Changes
+
+- `snack update`, a readable `status`, and the documentation restructure.
+
+  **`snack update`** brings the CLI and the capture plugin to versions that belong together. It
+  works out how the CLI was installed — npm, pnpm, bun or yarn, global or local — shows the exact
+  command before running it, installs, and then re-registers the capture plugin at the pin the newly
+  installed build carries. Doing that by hand meant reading your own configuration back and retyping
+  five values into `setup` exactly, and any one of them typed differently starts a new capacity
+  period and retires everything SNACK has learned about that source. `snack update` never rotates a
+  capacity period.
+
+  It is the only command in the product that reaches the network, scoped by ADR-0010, and it carries
+  a package name and a version and nothing else. An installation layout SNACK cannot recognize
+  refuses and prints the command to run by hand rather than installing somewhere unexpected. Every
+  other command now runs in the test suite with network access denied.
+
+  **`status` prints one panel per capacity source** instead of one unwrapped line: an aligned label
+  column, no box drawing, and a usage-pressure sparkline. Colour is drawn with the standard library
+  and never carries meaning alone — a risk label is a printed word that happens to be coloured, so a
+  colourblind reader, a `NO_COLOR` terminal and a captured log read the same sentence. `--json` is
+  never coloured, and gains one field: `pressure.trend`, the window scores the sparkline is drawn
+  from, filling a slot the status schema has declared since the 0.9 freeze.
+
+  **The documentation is restructured.** Each language gets its own README and both ship in the
+  tarball; the specification and the architecture are split by topic behind an index that preserves
+  their section numbers; the 1.x roadmap moves out of `PLAN.md`.
+
+  The plugin's behaviour is unchanged. It republishes because its README was split by language and
+  both files now ship.
+
 ## 1.0.1
 
 ### Patch Changes
