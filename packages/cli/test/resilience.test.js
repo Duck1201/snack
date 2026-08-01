@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -468,26 +467,12 @@ test("a Claude history whose shape drifted is refused rather than half-read", as
   assert.equal(countPrompts(fixture.paths.databaseFile), before);
 });
 
-test(
-  "an export to a destination that cannot hold it fails as I/O rather than as a crash",
-  { skip: !existsSync("/dev/full") },
-  async () => {
-    // A full disk is the failure a long-running installation actually meets, and it arrives in the
-    // middle of a write rather than before it. `/dev/full` accepts an open and then answers ENOSPC
-    // on every write, which is exactly that shape without needing a loopback filesystem.
-    const install = await makeWorkingInstall("snack-enospc-");
-
-    install.stdout.value = "";
-    install.stderr.value = "";
-    const exitCode = await run(
-      ["node", "snack", "export", "--format", "json", "--output", "/dev/full", "--json"],
-      install.options,
-    );
-
-    assert.equal(exitCode, ExitCode.io, install.stderr.value);
-    assert.equal(JSON.parse(install.stdout.value).status, "error");
-  },
-);
+// Not covered: a destination that answers ENOSPC mid-write. An earlier version of this file used
+// `/dev/full`, and it was wrong in both directions -- as root the export creates `/dev/full.partial`
+// and renames it over the device, exiting 0; as anyone else it fails because `/dev` is not writable,
+// which is a permission error dressed up as a full disk. The honest statement is that a real full
+// filesystem needs a loopback mount, and that "a destination that cannot be written" is already
+// covered by the CSV test above.
 
 test("two commands writing at once serialize instead of corrupting each other", async () => {
   // The storage lock is tested in-process, where both callers share one runtime and one file

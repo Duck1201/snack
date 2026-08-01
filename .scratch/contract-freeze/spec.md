@@ -114,6 +114,13 @@ Both are recorded because the corrected tests look obvious and the wrong ones di
 A truncated pre-migration backup during a rollback: simulating it means corrupting a file the runner
 writes mid-transaction, and the rollback path is already covered by the failing-migration test.
 
+A destination that answers `ENOSPC` mid-write. This one was written and then removed, which is worth
+recording: it used `/dev/full`, and it was wrong in both directions. As root the export creates
+`/dev/full.partial` and renames it over the device, exiting 0 -- which is how WSL2 caught it, after
+Ubuntu and macOS had both passed. As anyone else it fails because `/dev` is not writable, so it was
+green locally for a reason that had nothing to do with a full disk. A real full filesystem needs a
+loopback mount, and "a destination that cannot be written" was already covered.
+
 The `upgrade:smoke` history is one prompt, which is what the floor release's fixture holds. It
 proves the shape of an upgrade, not its behaviour at volume.
 
