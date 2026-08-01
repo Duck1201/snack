@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { getConfigValue, readConfig } from "../src/config.js";
 import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
+import { ENVELOPE_SCHEMA_VERSION } from "../src/output.js";
 import { classifyRisk } from "../src/prediction.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
 import {
@@ -34,7 +35,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   const document = JSON.parse(fixture.stdout.value);
 
   assert.equal(exitCode, 0);
-  assert.equal(document.schema_version, "1");
+  assert.equal(document.schema_version, ENVELOPE_SCHEMA_VERSION);
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
@@ -2819,7 +2820,7 @@ test("every command group answers for a Claude-only capacity source", async () =
     );
     const document = JSON.parse(fixture.stdout.value);
     assert.notEqual(document.status, "error", `snack ${argv.join(" ")} reported an error`);
-    assert.equal(document.schema_version, "1", name);
+    assert.equal(document.schema_version, ENVELOPE_SCHEMA_VERSION, name);
   }
 
   // Export is the document that has to actually carry the observations, not merely succeed.

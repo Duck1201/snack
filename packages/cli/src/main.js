@@ -45,7 +45,7 @@ import {
   writePluginRegistration,
 } from "./opencode-config.js";
 import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
-import { createEnvelope, formatJson } from "./output.js";
+import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import {
@@ -1940,7 +1940,7 @@ async function buildExportProvenance(config, scope) {
   return {
     cli_version: packageJson.version,
     export_schema_version: EXPORT_SCHEMA_VERSION,
-    envelope_schema_version: "1",
+    envelope_schema_version: ENVELOPE_SCHEMA_VERSION,
     plan_profiles: sources.map((source) => {
       const { profile } = resolvePlanProfile(source);
       return {

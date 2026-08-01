@@ -8,6 +8,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { ExitCode } from "../src/errors.js";
 import { EXPORT_TABLES } from "../src/export.js";
 import { run } from "../src/main.js";
+import { ENVELOPE_SCHEMA_VERSION } from "../src/output.js";
 import {
   cleanupRunFixtures,
   createClaudeHistory,
@@ -157,23 +158,70 @@ test("an export validates against the published export schema", async () => {
   assert.equal(document.data.export.export_schema_version, "2");
 });
 
-test("the documents 0.7 produced still validate against the published schemas", async () => {
-  // Captured from the released v0.7.0 tag, not from this tree. A field added since then is
-  // additive and passes; a field removed, renamed, or newly required fails -- which is the moment
-  // to bump `schema_version` rather than to edit the fixture.
-  const envelope = await compileSchema("envelope.schema.json");
-  const directory = new URL("./fixtures/contracts/0.7/", import.meta.url);
-  const captured = await readdir(directory);
-  assert.ok(captured.length >= 10, `only ${captured.length} captured documents`);
+/**
+ * Read a captured corpus, which is the record of what a released version emitted.
+ *
+ * @param {string} version
+ */
+async function capturedDocuments(version) {
+  const directory = new URL(`./fixtures/contracts/${version}/`, import.meta.url);
+  const names = await readdir(directory);
+  assert.ok(names.length >= 10, `only ${names.length} captured documents for ${version}`);
+  return Promise.all(
+    names.map(async (name) => ({
+      name,
+      document: JSON.parse(await readFile(new URL(name, directory), "utf8")),
+    })),
+  );
+}
 
-  for (const name of captured) {
-    const document = JSON.parse(await readFile(new URL(name, directory), "utf8"));
-    assert.ok(
-      envelope(document),
-      `0.7 ${name} no longer validates; bump schema_version rather than editing the fixture: ` +
-        JSON.stringify(envelope.errors, null, 2),
+test("every command declares the frozen envelope version", async () => {
+  const fixture = await makeConfiguredFixture();
+
+  for (const invocation of invocations) {
+    fixture.stdout.value = "";
+    await run(["node", "snack", ...invocation.argv, "--json"], fixture.options);
+    assert.equal(
+      JSON.parse(fixture.stdout.value).schema_version,
+      ENVELOPE_SCHEMA_VERSION,
+      invocation.name,
     );
-    assert.equal(document.schema_version, "1", `${name} was captured at another envelope version`);
+  }
+  assert.equal(ENVELOPE_SCHEMA_VERSION, "2");
+});
+
+test("a document from before the freeze announces itself as version 1", async () => {
+  // The freeze renamed the `config set` storage keys, which is a breaking change to a published
+  // payload. The honest encoding is the one the export already uses: the old document does not
+  // quietly pass as the new version, it says which version it is and fails the new schema.
+  const envelope = await compileSchema("envelope.schema.json");
+
+  for (const version of ["0.7", "0.8"]) {
+    for (const { name, document } of await capturedDocuments(version)) {
+      assert.equal(document.schema_version, "1", `${version} ${name}`);
+      assert.equal(
+        envelope(document),
+        false,
+        `${version} ${name} passed as version ${ENVELOPE_SCHEMA_VERSION}`,
+      );
+    }
+  }
+});
+
+test("the envelope frame did not change beyond its version", async () => {
+  // The bump is not licence to reshape the document. Every field a 0.7 or 0.8 consumer read is
+  // still there, still named the same, still meaning the same -- so a captured document with only
+  // its version relabelled validates. A frame change would have to be argued for on its own.
+  const envelope = await compileSchema("envelope.schema.json");
+
+  for (const version of ["0.7", "0.8"]) {
+    for (const { name, document } of await capturedDocuments(version)) {
+      const relabelled = { ...document, schema_version: ENVELOPE_SCHEMA_VERSION };
+      assert.ok(
+        envelope(relabelled),
+        `${version} ${name}: ${JSON.stringify(envelope.errors, null, 2)}`,
+      );
+    }
   }
 });
 

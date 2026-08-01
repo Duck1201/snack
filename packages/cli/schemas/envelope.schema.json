@@ -2,15 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://snack-ai.dev/schemas/envelope.schema.json",
   "title": "SNACK JSON output envelope",
-  "description": "The document every `--json` invocation writes to stdout. A candidate public contract: from 1.0 the named fields do not change meaning or disappear without a major release. `data` is deliberately unconstrained here -- per-command payloads freeze at the 0.9 feature freeze, not before, and constraining them now would freeze shapes that are still moving.",
+  "description": "The document every `--json` invocation writes to stdout. Frozen at 0.9: the named fields do not change meaning or disappear without a major release. Version 2 renamed the `config set` storage keys to snake_case; a version 1 document declares itself as such and does not pass here, which is what makes the break visible instead of silent.",
   "type": "object",
   "required": ["schema_version", "command", "generated_at", "status", "data", "warnings", "errors"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "description": "Version of this envelope contract. Additive fields do not bump it; a removal or a changed meaning does.",
-      "type": "string",
-      "pattern": "^[0-9]+$"
+      "description": "Version of this envelope contract. Additive fields do not bump it; a removal or a changed meaning does. Pinned rather than merely well-formed, so a document from an earlier version fails loudly here instead of validating as something it is not.",
+      "const": "2"
     },
     "command": {
       "description": "The command that produced the document, as the user would type it after `snack`.",
