@@ -172,3 +172,46 @@ not — instead of asserting the rule was on the question.
 `350 ms`. The budget caveat is unchanged: [PLAN.md](../../PLAN.md) states 250 ms for a typical
 supported developer machine and not as a cross-device guarantee, so CI reports the measurement
 rather than asserting it.
+
+## 0.9.0
+
+WSL gate: passed
+
+- Run: [CI 30692932702](https://github.com/Duck1201/snack/actions/runs/30692932702)
+- Date: 2026-08-01
+- Commit: `7dcf6c2`
+- Toolchain on every environment: Node `24.18.1`, npm `11.16.0`
+
+| Environment | Runner image | Tests | Package smoke |
+| --- | --- | --- | --- |
+| Ubuntu 24.04, AMD64 | `ubuntu-24.04` | 409 passed, 0 skipped | passed |
+| macOS 26, ARM64 | `macos-26-arm64` | 409 passed, 0 skipped | passed |
+| Debian 13 on WSL2, AMD64 | `windows-2025-vs2026` host | 407 passed, 2 skipped | passed |
+
+Each environment packed and installed `snack-ai-cli-0.8.2.tgz` (57 files) alongside
+`@snack-ai/opencode`, which is unchanged at `0.1.2`. The plugin workspace contributed 4 passing
+tests and 1 skip — the packed-plugin dispatch test, which needs a real OpenCode installation — on
+every environment. The tarball grew from 47 files to 57: the ten per-command payload schemas the
+Stage 9 freeze published.
+
+The two skips unique to WSL2 remain the permission-denial tests in `resilience.test.js`: that job
+runs as root, and a mode bit denies nothing to uid 0.
+
+The count moved from 389 to 409 across Wave 2: four property tests over the trust boundaries, two
+migration tests, three fault-injection tests, two privacy tests, the doctor documentation audit, and
+the contract tests generalized over three captured releases.
+
+**WSL2 earned its place in this matrix on this release.** An earlier run of the same branch passed
+on Ubuntu and macOS and failed only there, on a test that exported to `/dev/full` expecting a full
+disk: the WSL job runs as root, so the export created `/dev/full.partial` and renamed it over the
+device rather than failing. The test was wrong everywhere — as a non-root user it had been passing
+on a permission error — and only the environment that runs as root could show it. It was removed
+rather than skipped.
+
+`status --no-sync` over 100,000 prompts measured p95 `293 ms` on Ubuntu, `213 ms` on macOS, and
+`271 ms` on WSL2. Over a two-client history of the same size it measured `296 ms`, `165 ms`, and
+`283 ms`. Incremental synchronisation measured `1035 ms`, `480 ms` and `646 ms` against a 2 s
+budget. The budget caveat is unchanged and now has a document of its own:
+[PLAN.md](../../PLAN.md) states these figures for a typical supported developer machine and not as a
+cross-device guarantee, so CI reports them and [performance.md](./performance.md) holds the gate
+with a measurement taken on one.
