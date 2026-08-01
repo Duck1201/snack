@@ -39,6 +39,7 @@ import { createClaudeAdapter, resolveClaudeProjectsDirectory } from "./claude-ad
 import { createSourceAdapter } from "./source-adapter.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
+  inspectPluginRegistration,
   preparePluginRegistration,
   resolveOpenCodeConfig,
   writePluginRegistration,
@@ -902,7 +903,18 @@ export async function run(argv, options = {}) {
         });
       }
       if (commandOptions.includeConfig === true && commandOptions.dryRun !== true) {
-        warnings.push(...(await removePurgedSources(paths, config, scope, options.writeConfig)));
+        warnings.push(
+          ...(await removePurgedSources(
+            paths,
+            config,
+            scope,
+            options.writeConfig,
+            resolveOpenCodeConfig({
+              ...(options.env ? { env: options.env } : {}),
+              ...(options.home ? { home: options.home } : {}),
+            }),
+          )),
+        );
       }
 
       const document = {
@@ -1642,8 +1654,9 @@ function isYes(answer) {
  * @param {Record<string, unknown>} config
  * @param {import("./export.js").ExportScope} scope
  * @param {typeof writePrivateAtomic | undefined} writeConfig
+ * @param {string} opencodeConfigFile
  */
-async function removePurgedSources(paths, config, scope, writeConfig) {
+async function removePurgedSources(paths, config, scope, writeConfig, opencodeConfigFile) {
   const sources = Array.isArray(config.sources) ? config.sources : [];
   const remaining = sources.filter((source) =>
     scope.source !== undefined && isConfiguredSource(source) && source.alias !== scope.source
@@ -1669,6 +1682,11 @@ async function removePurgedSources(paths, config, scope, writeConfig) {
       },
     ];
   }
+  // Only true when there is a registration to be still registered. Reported unconditionally, it
+  // told a Claude-only installation -- and every OpenCode user who never installed the plugin --
+  // to undo something that was never done, while `doctor` said the opposite on the same machine.
+  const registration = await inspectPluginRegistration(opencodeConfigFile);
+  if (registration === "missing") return [];
   return [
     {
       code: "plugin_still_registered",
