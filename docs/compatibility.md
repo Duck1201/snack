@@ -158,9 +158,17 @@ and exists because a process cannot become a different version of itself. Since 
 reads help text, a hidden flag is invisible to it by construction — so a separate assertion holds it
 out of the help, rather than the absence being an accident nobody would notice.
 
-The `--json` envelope, every payload schema, the export document, the configuration schema, the
-spool contract and the exit-code categories are unchanged. `update` reports under the existing
-envelope with a new payload schema of its own; no existing document gains or loses a field.
+The `--json` envelope, the export document, the configuration schema, the spool contract and the
+exit-code categories are unchanged. `update` reports under the existing envelope with a new payload
+schema of its own.
+
+One existing document gains a field: `status --json` begins emitting `pressure.trend`, the window
+scores the usage-pressure sparkline is drawn from. `status.schema.json` has declared it as
+`object | null` since the `0.9` freeze and `status` simply never populated it, so this fills a
+reserved slot rather than widening the contract. It is additive, a consumer pinned to `1.0` is
+unaffected, and the roadmap criterion it amends — "`--json` bytes unchanged from `1.0.x`" — is
+amended in `PLAN.md` in the open rather than quietly missed. Colour, layout and the sparkline's own
+rendering remain human formatting and reach no JSON document.
 
 ## Upgrading from 0.6+
 

@@ -277,8 +277,28 @@ buckets `computeSourcePressure` already fetches in one query and then discards �
 declined: it costs a `computeUsagePressure` call per bucket against a 250 ms budget, to draw a wider
 picture of a number the product deliberately refuses to make look precise.
 
-**Open, and to settle before writing the renderer:** the roadmap's exit criterion says "`--json`
-bytes unchanged from `1.0.x` for the same input", and asking `status` for the trend puts a `trend`
-key inside the `pressure` payload. The plan's assumption is that the trend is computed for rendering
-and dropped before the envelope. Accepting it as an additive field instead is legitimate under
-SemVer and would need the criterion amended rather than quietly missed.
+**Settled before writing the renderer: `status --json` emits `pressure.trend`,** and the roadmap's
+"`--json` bytes unchanged" criterion is amended in `PLAN.md` to name it.
+
+Two facts decided it, and both were checked rather than assumed:
+
+- `status --json` omits `trend` entirely today. Driven against a seeded database, its `pressure`
+  keys are
+  `horizon, score, band, policy_version, baseline_kind, completeness, contributors, baseline_windows`
+  — no `trend`;
+- `status.schema.json` **already declares** `$defs/pressure/properties/trend` as `object | null`.
+  The slot was reserved at the `0.9` freeze, so emitting it fills a declared field rather than
+  changing a contract.
+
+The alternative — compute it for the renderer and delete it before the envelope — was declined. It
+would leave the human panel showing a sparkline `--json` cannot reproduce, which is the asymmetry
+`main.test.js` already has cross-mode tests to prevent, and it saves nothing on the human path,
+which is the default one.
+
+What the criterion was protecting still holds and is stated more precisely in `PLAN.md`: colour,
+layout, alignment and the sparkline's own rendering are human formatting and reach no JSON document.
+`pressure.trend` is the single named exception.
+
+**Still to measure, not to decide:** `includeTrend` costs one `computeUsagePressure` call per window
+— five — per source, on a command held to a 250 ms p95. That is a budget question for
+`packages/cli/test/performance.test.js` and for the real binary, not a contract one.

@@ -218,7 +218,24 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 - `--json` output is never coloured and never reflows;
 - the documentation restructure and the new roadmap ship in this release rather than as a docs-only patch, which would spend a version and a full npm publish without changing behavior.
 
-**Exit:** rendering is covered by tests with colour forced on and off; no new dependency for colour; `--json` bytes are unchanged from `1.0.x` for the same input; and `snack update` never rotates a capacity period it was not asked to.
+**Exit:** rendering is covered by tests with colour forced on and off; no new dependency for colour; no interface work reaches the `--json` document except the one field named below; and `snack update` never rotates a capacity period it was not asked to.
+
+**Amended while planning: `status --json` gains `pressure.trend`.** This entry originally required
+`--json` bytes to be unchanged from `1.0.x` for the same input. The sparkline is drawn from the
+window scores `computeUsageTrend` already produces, and asking `status` for them puts `trend` inside
+the `pressure` payload — so the criterion as written forbade emitting a value the human panel shows.
+
+The criterion is amended rather than satisfied by deleting the field before the envelope, for three
+reasons. `status.schema.json` **already declares** `pressure.trend` as `object | null`: the slot was
+reserved at the `0.9` freeze, so filling it is the additive change the schema was written permissive
+to allow, not a contract change. A sparkline the human sees and `--json` cannot reproduce is the
+asymmetry this product's own boundary — "expose human-readable and versioned JSON output" — exists
+to prevent, and the suite already asserts the two modes agree. And computing a value in order to
+throw it away saves nothing on the human path, which is the default one.
+
+What the criterion was protecting is kept and stated more precisely: colour, layout, alignment and
+the sparkline's rendering are human formatting and reach no JSON document. `pressure.trend` is the
+single exception, it is named here, and it is additive under the strict SemVer `1.0` confirmed.
 
 ### 1.2.0 - `status --watch` and `man snack`
 
