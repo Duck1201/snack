@@ -1,6 +1,6 @@
 # 01 — The OpenCode fingerprint rejects every real OpenCode database
 
-Status: ready-for-agent Severity: P1
+Status: done Severity: P1
 
 ## Report
 
@@ -56,3 +56,7 @@ The fingerprint family stays `oc-sqlite-msgpart-v1` and `fingerprint_version` st
 family's identity — its tables, columns, indexes and foreign keys — did not change, and every
 database accepted before is still accepted. Renaming it would invalidate configurations that already
 record it while nothing about OpenCode changed.
+
+## Comments
+
+Fixed and released in `@snack-ai/cli@0.8.1`.
