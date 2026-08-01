@@ -320,9 +320,11 @@ test("a guided answer the configuration would refuse is refused at the question"
   assert.equal(exitCode, 0);
   assert.equal((await soleSource(fixture.paths.configFile)).profile, "fortex");
   assert.equal(script.asked.filter((question) => question.id === "profile").length, 2);
-  assert.match(fixture.stdout.value, /profile "Claude Fortex" is not usable/u);
-  // The rule is on the question itself, so the shape is known before the answer is typed.
-  assert.match(
+  // The refusal carries the rule, because that is the moment someone needs it.
+  assert.match(fixture.stdout.value, /profile "Claude Fortex" is not usable; it must match/u);
+  // The question does not. A rule on every question spends a line of regex on everyone who was
+  // going to type something ordinary anyway.
+  assert.doesNotMatch(
     /** @type {string} */ (script.asked.find((question) => question.id === "profile")?.message),
     /must match/u,
   );
