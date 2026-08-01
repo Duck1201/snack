@@ -43,7 +43,11 @@ function statusFor(overrides = {}) {
       horizon: "PT1H",
       score: 0.9,
       band: "high",
-      contributors: [],
+      contributors: [
+        { dimension: "prompts", percentile: 1, contribution: 0.6 },
+        { dimension: "input_tokens", percentile: 0.9, contribution: 0.3 },
+        { dimension: "output_tokens", percentile: 0.2, contribution: 0.1 },
+      ],
       trend: { scores: [0, 0.4, 0.6, 0.9, 1], status: "observed", direction: "rising" },
     },
     expected_prompt_category: "typical",
@@ -67,6 +71,7 @@ test("a source is a panel with an aligned label column", () => {
       "work",
       "  viability  95-100%   risk low          evidence moderate",
       "  pressure   high      category typical  ▁▄▅▇█",
+      "  drivers    prompts 100th, input_tokens 90th",
       "  method     bayesian-pressure-band@1",
       "  as of      40s ago · sync ok · period since 2026-01-02",
       "  ! Real provider capacity is unknown.",
@@ -110,4 +115,15 @@ test("each risk label gets its own colour", () => {
 
   const seen = ["low", "elevated", "high"].map(colourOf);
   assert.equal(new Set(seen).size, 3, `risk colours were not distinct: ${seen.join(", ")}`);
+});
+
+test("a source with nothing ranked says so rather than showing an empty row", () => {
+  // Specification 12.3 puts the top pressure contributors in the default human detail, and a
+  // brand-new source has none: every dimension's contribution is null until there is a baseline to
+  // rank against. An empty row would read as "no pressure" rather than "nothing to compare yet".
+  const text = renderStatus([statusFor({ pressure: { band: "unknown", contributors: [] } })], {
+    color: false,
+  });
+
+  assert.match(text, / {2}drivers {4}none ranked/u);
 });

@@ -35,7 +35,7 @@ const COLUMN_B = 18;
  * @property {{label: string}} risk
  * @property {{level: string}} evidence
  * @property {{id: string, version: string}} method
- * @property {{band: string, trend?: {scores: number[]} | null}} pressure
+ * @property {{band: string, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[], trend?: {scores: number[]} | null}} pressure
  * @property {string} expected_prompt_category
  * @property {{age_seconds: number | null}} freshness
  * @property {{status: string}} synchronization
@@ -75,7 +75,13 @@ export function renderStatus(statuses, options) {
         // `styleText` consults `process.stdout` -- not the stream this text is going to -- and
         // returns plain text whenever that is not a TTY, which would silently disable colour in
         // every test and in every `snack status | less -R`.
-        style === undefined ? value : styleText(style, value, { validateStream: false })
+        // An empty value is painted as nothing at all. Wrapping "" in escapes produces a cell
+        // that is invisible on screen but not empty in the string, which strands the previous
+        // cell's padding behind it where `trimEnd` cannot reach -- a trailing-whitespace defect
+        // that only appears with colour on.
+        style === undefined || value === ""
+          ? value
+          : styleText(style, value, { validateStream: false })
     : (value) => value;
   return statuses.map((status) => renderSource(status, paint)).join("\n");
 }
@@ -102,6 +108,9 @@ function renderSource(status, paint) {
       // The sparkline is the pressure, so it carries the pressure's colour rather than one of
       // its own.
       [sparkline(scores), band, 0],
+    ]),
+    row(paint, "drivers", [
+      [describeContributors(status.pressure.contributors ?? []), undefined, 0],
     ]),
     row(paint, "method", [[`${status.method.id}@${status.method.version}`, undefined, 0]]),
     row(paint, "as of", [
@@ -142,6 +151,27 @@ function row(paint, label, cells) {
     )
     .join("");
   return `  ${paint(label.padEnd(LABEL), "dim")}${body}`.trimEnd();
+}
+
+/**
+ * The two dimensions that moved the pressure band furthest, with where each ranks against the
+ * user's own history. Specification 12.3 puts these in the default human detail, so a forecast
+ * whose drivers are only in `--json` would be two contracts.
+ *
+ * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
+ */
+function describeContributors(contributors) {
+  const ranked = contributors
+    .filter((contributor) => contributor.contribution !== null)
+    .sort((left, right) => Number(right.contribution) - Number(left.contribution))
+    .slice(0, 2);
+  if (ranked.length === 0) return "none ranked";
+  return ranked
+    .map(
+      (contributor) =>
+        `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`,
+    )
+    .join(", ");
 }
 
 /** @param {number} value */

@@ -614,6 +614,19 @@ test("status reports a broad initial estimate with very low evidence", async () 
           baseline_windows: 0,
           completeness: "partial",
           contributors: [],
+          // The field the 1.1.0 exit criterion was amended to allow. `status.schema.json` has
+          // declared this slot as `object | null` since the 0.9 freeze and `status` never filled
+          // it; the sparkline is drawn from these scores, so now it does. One prompt is one
+          // window against no baseline, which is why the series is empty rather than absent.
+          trend: {
+            windows_compared: 1,
+            baseline_windows: 0,
+            scores: [],
+            policy_version: "stage6-trend-v1",
+            status: "not_available",
+            reason: "insufficient_baseline",
+            direction: null,
+          },
         },
         expected_prompt_category: "typical",
         prospective: null,
@@ -1809,14 +1822,78 @@ test("human status includes every required uncertainty field", async () => {
 
   await run(["node", "snack", "status", "--source", "personal-anthropic"], fixture.options);
 
+  // Every field specification 12.3 requires of the default human detail, now read down a panel
+  // rather than along one line. The assertion stays field by field: pinning the whole block would
+  // make an alignment change look like a lost contract.
+  assert.match(fixture.stdout.value, /^personal-anthropic$/mu);
+  // The interval's arithmetic belongs to the prediction seam; what the panel owes is that the
+  // range and the risk word sit in their columns.
+  assert.match(fixture.stdout.value, / {2}viability {2}\d+-\d+% +risk high/u);
+  assert.match(fixture.stdout.value, /evidence very_low/u);
+  assert.match(fixture.stdout.value, / {2}pressure {3}unknown/u);
+  assert.match(fixture.stdout.value, /category typical/u);
+  assert.match(fixture.stdout.value, / {2}drivers {4}none ranked/u);
+  assert.match(fixture.stdout.value, / {2}method {5}bayesian-pressure-band@1/u);
+  assert.match(fixture.stdout.value, /sync ok · period since 2026-01-02/u);
   assert.match(
     fixture.stdout.value,
-    /risk high; evidence very_low; method bayesian-pressure-band@1; period 2026-01-02T03:05:00.000Z; pressure unknown; contributors none ranked; category typical; as_of 2026-01-02T03:04:10.000Z; sync ok/u,
+    /! Sparse history; the weak plan-profile prior still dominates/u,
   );
-  assert.match(
-    fixture.stdout.value,
-    /Caveat: Sparse history; the weak plan-profile prior still dominates/u,
-  );
+});
+
+test("colour follows what the output stream says it supports", async () => {
+  // The one thing neither the renderer nor an ordinary command test can answer: which streams get
+  // colour. `renderStatus` is handed a boolean, and every other test writes into a plain sink -- so
+  // without this, "colour reaches a real terminal" is a claim with nothing behind it.
+  //
+  // Driven through `run` with a stdout that reports colour support, because that is the seam: the
+  // stream is already injected, and `hasColors()` is where Node reconciles NO_COLOR, FORCE_COLOR,
+  // TERM and TTY detection -- which is why the product has no --color flag and parses no
+  // environment of its own.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  const plain = fixture.stdout.value;
+
+  fixture.stdout.value = "";
+  Object.assign(fixture.options.stdout ?? {}, { hasColors: () => true });
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  const coloured = fixture.stdout.value;
+
+  // FORCE_COLOR exists to colour a pipe, which is the one case the stream cannot answer: a piped
+  // stdout is not a tty.WriteStream and has no `hasColors` at all. Driving the real binary is what
+  // showed this, so the case is pinned here rather than left to be rediscovered.
+  fixture.stdout.value = "";
+  const pipe = sink();
+  await run(["node", "snack", "status", "--no-sync"], {
+    ...fixture.options,
+    stdout: pipe,
+    env: { ...fixture.options.env, FORCE_COLOR: "1" },
+  });
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.match(pipe.value, /\u001B\[/u);
+
+  // And NO_COLOR silences a stream that would otherwise paint.
+  const quiet = sink();
+  Object.assign(quiet, { hasColors: () => true });
+  await run(["node", "snack", "status", "--no-sync"], {
+    ...fixture.options,
+    stdout: quiet,
+    env: { ...fixture.options.env, NO_COLOR: "1" },
+  });
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.doesNotMatch(quiet.value, /\u001B\[/u);
+
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.doesNotMatch(plain, /\u001B\[/u);
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.match(coloured, /\u001B\[/u);
+  // Same document, one of them painted: the words a script or a log would read are unchanged.
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.equal(coloured.replace(/\u001B\[[0-9;]*m/gu, ""), plain);
 });
 
 test("human status names the period it describes and what moved the pressure band", async () => {
@@ -1834,14 +1911,19 @@ test("human status names the period it describes and what moved the pressure ban
 
   // Specification §12.3: the default human detail includes the active period and the top pressure
   // contributors. A forecast whose scope and drivers are only in `--json` is two contracts.
-  assert.match(human, new RegExp(`period ${status.source.active_period.started_at}`, "u"));
+  //
+  // The panel carries the period's date rather than its full timestamp -- what a reader needs is
+  // which regime this is, and the second it started in is noise on a line they scan. The two modes
+  // still have to agree, so the comparison is made at the precision the human output carries.
+  const periodDay = String(status.source.active_period.started_at).split("T")[0];
+  assert.match(human, new RegExp(`period since ${periodDay}`, "u"));
   const ranked = status.pressure.contributors.filter(
     (/** @type {{percentile: number | null}} */ contributor) => contributor.percentile !== null,
   );
   if (ranked.length > 0) {
-    assert.match(human, new RegExp(`contributors[^\\n]*${ranked[0].dimension}`, "u"));
+    assert.match(human, new RegExp(`drivers[^\\n]*${ranked[0].dimension}`, "u"));
   } else {
-    assert.match(human, /contributors none ranked/u);
+    assert.match(human, / {2}drivers {4}none ranked/u);
   }
 });
 
