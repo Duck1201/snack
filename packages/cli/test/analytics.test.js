@@ -13,6 +13,7 @@ import {
   TREND_POLICY,
   assignPressureBands,
   compareOutcomeGroups,
+  countOutcomes,
   computeUsagePressure,
   computeUsageTrend,
   effectiveSampleSize,
@@ -1270,8 +1271,11 @@ test("two clients refused at the same rate on one source show no detected differ
   // answer most of the time. A comparison that flagged a difference here would flag one on every
   // shared source, which is the same as reporting nothing at all.
   const comparison = compareOutcomeGroups([
-    { key: "installation-opencode", outcomes: outcomesWith({ restricted: 10, success: 90 }) },
-    { key: "installation-claude", outcomes: outcomesWith({ restricted: 10, success: 90 }) },
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 10, success: 90 })),
+    },
+    { key: "installation-claude", ...countOutcomes(outcomesWith({ restricted: 10, success: 90 })) },
   ]);
 
   assert.equal(comparison.policy_version, COMPARISON_POLICY.version);
@@ -1295,8 +1299,14 @@ test("a client refused far more often than the others is flagged beside its inte
   // never delivered bare -- the count, the denominator and the interval travel with it, so a reader
   // can see how much evidence produced it instead of taking the label on faith.
   const comparison = compareOutcomeGroups([
-    { key: "installation-opencode", outcomes: outcomesWith({ restricted: 5, success: 195 }) },
-    { key: "installation-claude", outcomes: outcomesWith({ restricted: 40, success: 160 }) },
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 5, success: 195 })),
+    },
+    {
+      key: "installation-claude",
+      ...countOutcomes(outcomesWith({ restricted: 40, success: 160 })),
+    },
   ]);
 
   assert.equal(comparison.status, "ok");
@@ -1317,8 +1327,11 @@ test("a client with too few eligible prompts is reported as not comparable, not 
   // and collapsing the two would let a client nobody has data about read as a client that behaves
   // like the rest. The prompts it did contribute are still reported, because they are real.
   const comparison = compareOutcomeGroups([
-    { key: "installation-opencode", outcomes: outcomesWith({ restricted: 20, success: 180 }) },
-    { key: "installation-claude", outcomes: outcomesWith({ restricted: 1, success: 3 }) },
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 20, success: 180 })),
+    },
+    { key: "installation-claude", ...countOutcomes(outcomesWith({ restricted: 1, success: 3 })) },
   ]);
 
   assert.equal(comparison.status, "not_comparable");
@@ -1340,8 +1353,8 @@ test("a client is compared against the others rather than against a pool contain
   // with 10.3% -- a figure it sets itself -- and its own interval would swallow it, reporting no
   // difference where there plainly is one. The numbers are chosen so the two rules disagree.
   const comparison = compareOutcomeGroups([
-    { key: "dominant", outcomes: outcomesWith({ restricted: 1000, success: 9000 }) },
-    { key: "rare", outcomes: outcomesWith({ restricted: 50, success: 150 }) },
+    { key: "dominant", ...countOutcomes(outcomesWith({ restricted: 1000, success: 9000 })) },
+    { key: "rare", ...countOutcomes(outcomesWith({ restricted: 50, success: 150 })) },
   ]);
 
   assert.equal(comparison.status, "ok");
@@ -1358,8 +1371,8 @@ test("a group with nothing eligible is not given a measured refusal share", () =
   // Every observation excluded means nothing was learned. The share has to say so rather than
   // report the prior that produced the interval.
   const comparison = compareOutcomeGroups([
-    { key: "silent", outcomes: outcomesWith({ restricted: 0, success: 0, excluded: 40 }) },
-    { key: "busy", outcomes: outcomesWith({ restricted: 20, success: 180 }) },
+    { key: "silent", ...countOutcomes(outcomesWith({ restricted: 0, success: 0, excluded: 40 })) },
+    { key: "busy", ...countOutcomes(outcomesWith({ restricted: 20, success: 180 })) },
   ]);
 
   const silent = comparison.groups.find((group) => group.key === "silent");
@@ -1384,9 +1397,9 @@ test("observations that were excluded count as seen but never as refused", () =>
   const comparison = compareOutcomeGroups([
     {
       key: "installation-opencode",
-      outcomes: outcomesWith({ restricted: 10, success: 90, excluded: 50 }),
+      ...countOutcomes(outcomesWith({ restricted: 10, success: 90, excluded: 50 })),
     },
-    { key: "installation-claude", outcomes: outcomesWith({ restricted: 10, success: 90 }) },
+    { key: "installation-claude", ...countOutcomes(outcomesWith({ restricted: 10, success: 90 })) },
   ]);
 
   const openCode = comparison.groups.find((group) => group.key === "installation-opencode");

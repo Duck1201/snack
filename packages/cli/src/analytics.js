@@ -641,12 +641,18 @@ export const COMPARISON_POLICY = Object.freeze({
  * and does so hardest exactly where one group dominates the data, which is where a real difference
  * matters most.
  *
- * @param {{key: string, outcomes: import("./prediction.js").OutcomeRow[]}[]} groups
+ * Groups arrive already counted rather than as observations. Counting is a single pass a caller can
+ * do while it is reading rows it already holds, and handing whole observation arrays over instead
+ * would make the caller keep every row of the widest analysis window alive until this returns --
+ * which on a real history is a hundred thousand objects retained for three numbers per client.
+ * `countOutcomes` does the counting for a caller that does have the rows.
+ *
+ * @param {{key: string, prompts: number, eligible: number, restricted: number}[]} groups
  * @param {{policy?: typeof COMPARISON_POLICY}} [options]
  */
 export function compareOutcomeGroups(groups, options = {}) {
   const policy = options.policy ?? COMPARISON_POLICY;
-  const counted = groups.map((group) => ({ key: group.key, ...countEligible(group.outcomes) }));
+  const counted = groups;
   const comparable = counted.filter((group) => group.eligible >= policy.minimum_eligible);
 
   if (counted.length < 2) {
@@ -735,12 +741,15 @@ function restrictionShare(restricted, eligible, policy) {
 }
 
 /**
+ * Count observations the way the comparison reads them.
+ *
  * Excluded observations are not evidence either way, so they count toward what was seen and not
- * toward what was refused.
+ * toward what was refused. Exported because the rule belongs here rather than in whichever caller
+ * happens to be holding the rows.
  *
  * @param {import("./prediction.js").OutcomeRow[]} outcomes
  */
-function countEligible(outcomes) {
+export function countOutcomes(outcomes) {
   let eligible = 0;
   let restricted = 0;
   for (const outcome of outcomes) {

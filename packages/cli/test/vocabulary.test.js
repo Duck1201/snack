@@ -210,22 +210,19 @@ test("the comparison treats a group key as a label it never reads", () => {
   // schema fail-closes on an adapter it does not know, which is the intended behavior. So the claim
   // is tested where the key can actually vary: rename every group and nothing but the names may
   // move. A comparison that recognized a client would answer differently here.
-  const outcomes = (/** @type {number} */ restricted, /** @type {number} */ success) =>
-    [
-      ...Array(restricted).fill(/** @type {const} */ ("restricted")),
-      ...Array(success).fill(/** @type {const} */ ("success")),
-    ].map((outcome, index) => ({
-      started_at: new Date(Date.parse("2026-01-02T00:00:00.000Z") + index * 60_000).toISOString(),
-      outcome,
-    }));
+  const counts = (/** @type {number} */ restricted, /** @type {number} */ eligible) => ({
+    prompts: eligible,
+    eligible,
+    restricted,
+  });
 
   const named = compareOutcomeGroups([
-    { key: "installation-opencode", outcomes: outcomes(5, 195) },
-    { key: "installation-claude", outcomes: outcomes(40, 160) },
+    { key: "installation-opencode", ...counts(5, 200) },
+    { key: "installation-claude", ...counts(40, 200) },
   ]);
   const anonymous = compareOutcomeGroups([
-    { key: "sardine-cli-installation", outcomes: outcomes(5, 195) },
-    { key: "☃", outcomes: outcomes(40, 160) },
+    { key: "sardine-cli-installation", ...counts(5, 200) },
+    { key: "☃", ...counts(40, 200) },
   ]);
 
   const withoutKeys = (/** @type {typeof named} */ comparison) => ({

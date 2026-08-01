@@ -2292,8 +2292,8 @@ function summarizeWindow(rows, now) {
  * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null}} input
  */
 function buildSourceStats(input) {
-  /** @type {import("./storage.js").UsageWindowRow[] | null} */
-  let comparisonRows = null;
+  /** @type {{groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number} | null} */
+  let attribution = null;
   // The comparison reads the widest configured horizon, because separating two refusal rates needs
   // every observation there is and the narrow horizons are the ones that will say "not comparable".
   // It reuses the rows that horizon was read for rather than fetching per client: a per-client
@@ -2309,7 +2309,10 @@ function buildSourceStats(input) {
   const horizons = input.horizons.map((horizon, index) => {
     const window = horizonWindow(input.now, parseHorizon(horizon));
     const rows = readUsageWindowRows(input.databaseFile, input.source.alias, window);
-    if (index === widest) comparisonRows = rows;
+    // Counted here and immediately, rather than by keeping the rows for later. Retaining the widest
+    // window's rows until the end of this function kept a hundred thousand objects alive across the
+    // pressure and calibration work, and under the heap cap that doubled what `stats` costs.
+    if (index === widest) attribution = countByClient(rows);
     return summarizeUsageProfile(
       rows,
       readRestrictionWindowRows(input.databaseFile, input.source.alias, window),
@@ -2344,13 +2347,49 @@ function buildSourceStats(input) {
     ...(input.clients
       ? {
           by_client: buildClientComparison({
-            rows: comparisonRows ?? [],
+            attribution: attribution ?? { groups: [], unattributed: 0 },
             pairs: readCalibrationPairs(input.databaseFile, input.source.alias),
             clients: input.clients,
           }),
         }
       : {}),
   };
+}
+
+/**
+ * Count one analysis window by the client each prompt was attributed to.
+ *
+ * One pass, three counters per client, nothing retained. The rows belong to the horizon that read
+ * them and are released with it; keeping them so the comparison could count them later is what made
+ * `stats --by-client` cost twice what `stats` costs on a hundred-thousand-prompt history.
+ *
+ * @param {import("./storage.js").UsageWindowRow[]} rows
+ */
+function countByClient(rows) {
+  /** @type {Map<string, {key: string, prompts: number, eligible: number, restricted: number}>} */
+  const groups = new Map();
+  let unattributed = 0;
+  for (const row of rows) {
+    // A prompt stored before attribution existed, or one on a source two clients already shared
+    // when the column arrived. It is counted and reported rather than dropped or assigned: the
+    // honest answer is that nobody knows which client produced it.
+    if (row.installation_id === null) {
+      unattributed += 1;
+      continue;
+    }
+    let group = groups.get(row.installation_id);
+    if (group === undefined) {
+      group = { key: row.installation_id, prompts: 0, eligible: 0, restricted: 0 };
+      groups.set(row.installation_id, group);
+    }
+    group.prompts += 1;
+    // Excluded observations are not evidence either way: seen, never refused. The same rule
+    // `countOutcomes` applies, applied here because here is where the rows already are.
+    if (row.outcome === "excluded") continue;
+    group.eligible += 1;
+    if (row.outcome === "restricted") group.restricted += 1;
+  }
+  return { groups: [...groups.values()], unattributed };
 }
 
 /**
@@ -2361,28 +2400,11 @@ function buildSourceStats(input) {
  * a fact about configuration rather than about the data, and it does it by looking the id up rather
  * than by testing it against any particular client's name -- so a third client needs no edit here.
  *
- * @param {{rows: import("./storage.js").UsageWindowRow[], pairs: import("./storage.js").CalibrationPair[], clients: {installation_id: string, client: string}[]}} input
+ * @param {{attribution: {groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number}, pairs: import("./storage.js").CalibrationPair[], clients: {installation_id: string, client: string}[]}} input
  */
 function buildClientComparison(input) {
   const names = new Map(input.clients.map((client) => [client.installation_id, client.client]));
-  /** @type {Map<string, import("./prediction.js").OutcomeRow[]>} */
-  const grouped = new Map();
-  let unattributed = 0;
-  for (const row of input.rows) {
-    // A prompt stored before attribution existed, or one on a source two clients already shared
-    // when the column arrived. It is counted and reported rather than dropped or assigned: the
-    // honest answer is that nobody knows which client produced it.
-    if (row.installation_id === null) {
-      unattributed += 1;
-      continue;
-    }
-    const outcomes = grouped.get(row.installation_id) ?? [];
-    outcomes.push({
-      started_at: row.started_at,
-      outcome: /** @type {"success" | "restricted" | "excluded"} */ (row.outcome),
-    });
-    grouped.set(row.installation_id, outcomes);
-  }
+  const unattributed = input.attribution.unattributed;
 
   /** @type {Map<string, import("./storage.js").CalibrationPair[]>} */
   const pairsByClient = new Map();
@@ -2393,9 +2415,7 @@ function buildClientComparison(input) {
     pairsByClient.set(pair.installation_id, pairs);
   }
 
-  const comparison = compareOutcomeGroups(
-    [...grouped.entries()].map(([key, outcomes]) => ({ key, outcomes })),
-  );
+  const comparison = compareOutcomeGroups(input.attribution.groups);
   return {
     policy_version: comparison.policy_version,
     status: comparison.status,
