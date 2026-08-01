@@ -1,8 +1,35 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 
 import { ExitCode, SnackError } from "../src/errors.js";
+import { run } from "../src/main.js";
 import { resolveUpdatePlan } from "../src/update.js";
+import { cleanupRunFixtures, makeRunFixture } from "./fixtures/run-fixture.js";
+
+afterEach(cleanupRunFixtures);
+
+/** A module path that looks like the layout `npm i -g` writes. */
+const globalModulePath = "/usr/local/lib/node_modules/@snack-ai/cli/src/update.js";
+
+/**
+ * A fixture whose installation layout is recognized, with an installer that records rather than
+ * runs. No test in this file may execute a package manager.
+ *
+ * @param {{fails?: boolean}} [behaviour]
+ */
+async function makeUpdateFixture(behaviour = {}) {
+  const fixture = await makeRunFixture("snack-update-");
+  /** @type {{command: string, args: string[]}[]} */
+  const executions = [];
+  fixture.options.modulePath = globalModulePath;
+  fixture.options.execute = async (/** @type {string} */ command, /** @type {string[]} */ args) => {
+    executions.push({ command, args });
+    if (behaviour.fails === true) {
+      throw new Error("npm ERR! network request to https://registry.npmjs.org failed");
+    }
+  };
+  return { ...fixture, executions };
+}
 
 test("an npm global install resolves to a global npm install of the CLI", () => {
   // The layout npm writes for `npm i -g`: the package lives under the prefix's `lib/node_modules`.
@@ -144,4 +171,76 @@ test("two lockfiles are two answers, so a local install refuses rather than pick
       }),
     { reason: "unrecognized_install_layout" },
   );
+});
+
+test("--dry-run prints the exact command and runs nothing", async () => {
+  // The command that will run is shown before anything happens, because "detected and then
+  // confirmed" is the whole reason the layout is resolved rather than assumed.
+  const fixture = await makeUpdateFixture();
+
+  const code = await run(["node", "snack", "update", "--dry-run"], fixture.options);
+
+  assert.equal(code, ExitCode.success);
+  assert.match(fixture.stdout.value, /npm install --global @snack-ai\/cli@latest/u);
+  assert.deepEqual(fixture.executions, []);
+});
+
+test("--yes installs, and only then re-execs the new build to finish", async () => {
+  // The order is the decision: the plugin registration is written by the process that comes after
+  // the install, because the pin lives in the build. Registering first, or from this process,
+  // writes the version being replaced -- which is finding 09 arriving by a new road.
+  const fixture = await makeUpdateFixture();
+
+  const code = await run(["node", "/usr/local/bin/snack", "update", "--yes"], fixture.options);
+
+  assert.equal(code, ExitCode.success);
+  assert.deepEqual(fixture.executions, [
+    { command: "npm", args: ["install", "--global", "@snack-ai/cli@latest"] },
+    { command: "/usr/local/bin/snack", args: ["update", "--finish"] },
+  ]);
+});
+
+test("without --yes the resolved command is confirmed, and a refusal runs nothing", async () => {
+  const fixture = await makeUpdateFixture();
+  /** @type {string[]} */
+  const asked = [];
+  fixture.options.prompt = async (/** @type {{message: string}} */ question) => {
+    asked.push(question.message);
+    return "n";
+  };
+
+  const code = await run(["node", "snack", "update"], fixture.options);
+
+  assert.equal(code, ExitCode.success);
+  assert.equal(asked.length, 1);
+  // The command is in the question, not just in a line above it: confirming something the prompt
+  // does not name is not confirmation.
+  assert.match(asked[0] ?? "", /npm install --global @snack-ai\/cli@latest/u);
+  assert.deepEqual(fixture.executions, []);
+});
+
+test("with no terminal to confirm at, update refuses rather than installing unasked", async () => {
+  // Same rule as `data purge`: prompting is impossible without a terminal and impossible in JSON
+  // mode without breaking the one-document contract.
+  const fixture = await makeUpdateFixture();
+  fixture.options.prompt = undefined;
+
+  const code = await run(["node", "snack", "update"], fixture.options);
+
+  assert.equal(code, ExitCode.usage);
+  assert.deepEqual(fixture.executions, []);
+  assert.match(fixture.stderr.value, /--yes/u);
+});
+
+test("an install that fails leaves the pair as it was, and reads as an environment failure", async () => {
+  const fixture = await makeUpdateFixture({ fails: true });
+
+  const code = await run(["node", "snack", "update", "--yes"], fixture.options);
+
+  // Not internal_error: a registry outage is not a defect in SNACK, and exit 10 would tell the user
+  // to file a bug about their own network.
+  assert.equal(code, ExitCode.unavailable);
+  // The install was attempted and nothing followed it -- no re-exec, so no registration rewritten.
+  assert.equal(fixture.executions.length, 1);
+  assert.match(fixture.stderr.value, /nothing was changed/u);
 });

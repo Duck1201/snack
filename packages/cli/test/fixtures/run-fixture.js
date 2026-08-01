@@ -54,10 +54,15 @@ export async function makeRunFixture(prefix = "snack-main-") {
       platform,
       nodeVersion: "24.18.1",
       now: new Date("2026-01-02T03:04:05.000Z"),
+      // Every injected port is listed here, typed and unset. Widening the whole bag to `RunOptions`
+      // instead would make `env` optional for the several dozen tests that read it back.
       writeConfig:
         /** @type {typeof import("../../src/config.js").writePrivateAtomic | undefined} */ (
           undefined
         ),
+      prompt: /** @type {import("../../src/main.js").SetupPrompt | undefined} */ (undefined),
+      modulePath: /** @type {string | undefined} */ (undefined),
+      execute: /** @type {import("../../src/main.js").ExecuteCommand | undefined} */ (undefined),
     },
   };
 }

@@ -501,7 +501,22 @@ test("the published command and flag surface has not changed", async () => {
     stats: ["--source", "--horizon", "--verbose", "--by-client", "--json", "--help"],
     status: ["--source", "--no-sync", "--prompt-file", "--json", "--help"],
     sync: ["--source", "--full", "--json", "--help"],
+    // `--finish` is deliberately absent: it is internal, hidden from help, and therefore invisible
+    // to this test, which reads the help text rather than Commander's object graph. The test below
+    // is what holds it to that.
+    update: ["--yes", "--dry-run", "--json", "--help"],
   });
+});
+
+test("update --finish stays out of the help, because it is not a flag anyone should type", async () => {
+  // It exists because a process cannot become a different version of itself, not because a user has
+  // a reason to run it. Documenting it in the help would invite exactly the half-applied upgrade
+  // -- a re-registration without an install -- that the two-process design exists to prevent.
+  const fixture = await makeRunFixture("snack-contracts-finish-");
+
+  await run(["node", "snack", "update", "--help"], fixture.options);
+
+  assert.doesNotMatch(fixture.stdout.value, /--finish/u);
 });
 
 /**

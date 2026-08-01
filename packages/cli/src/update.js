@@ -1,6 +1,37 @@
+import { spawn } from "node:child_process";
+import { readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
 import { SnackError, ExitCode } from "./errors.js";
 
 const cliPackageName = "@snack-ai/cli";
+
+/**
+ * Where this build actually lives, which is what says how it was installed.
+ *
+ * A workspace checkout resolves to no recognized layout and therefore refuses, which is correct: a
+ * development tree is not an installation, and replacing it from a registry would discard the
+ * changes being worked on.
+ */
+export const updateModulePath = fileURLToPath(import.meta.url);
+
+/**
+ * The lockfile names present directly inside `directory`.
+ *
+ * The one piece of filesystem the local layout needs, kept out of `resolveUpdatePlan` so that stays
+ * a pure seam. A directory that cannot be read reports no lockfiles, which routes to the refusal.
+ *
+ * @param {string} directory
+ * @returns {Promise<string[]>}
+ */
+export async function readLockfiles(directory) {
+  try {
+    const entries = await readdir(directory);
+    return entries.filter((name) => name in lockfileManagers);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * @typedef {object} UpdatePlan
@@ -56,6 +87,31 @@ export function resolveUpdatePlan(context) {
       `Then run: snack update --finish`,
     { code: ExitCode.unavailable, reason: "unrecognized_install_layout" },
   );
+}
+
+/**
+ * Run an executable to completion, inheriting the terminal so a package manager's own progress and
+ * errors reach the user unedited.
+ *
+ * `shell: false`: the arguments are built by `resolveUpdatePlan` from a fixed table and never
+ * interpolated into a command line, so nothing here is parsed by a shell.
+ *
+ * @param {string} command
+ * @param {string[]} args
+ * @returns {Promise<void>}
+ */
+export function executeCommand(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: "inherit", shell: false });
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${command} exited with ${signal ?? `code ${code}`}.`));
+    });
+  });
 }
 
 /** @type {Record<string, UpdatePlan["manager"]>} */
