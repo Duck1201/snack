@@ -8,7 +8,6 @@ import { Command, CommanderError } from "commander";
 import {
   checkSourceIdentifier,
   defaultConfig,
-  describeSourceIdentifier,
   getConfigValue,
   isConfiguredSource,
   prepareConfigValue,
@@ -1508,16 +1507,17 @@ async function resolveSetupValues(input) {
   /**
    * Ask until the answer is one the configuration will accept.
    *
-   * The rule rides on the question so the shape is known before the answer is typed, and a refusal
-   * costs one answer rather than the whole questionnaire.
+   * The question stays the question. The rule appears on the refusal instead, where it is the
+   * answer to something that just happened — carrying it on every question spends a line of regex
+   * on everyone who was going to type something ordinary anyway. A refusal still costs one answer
+   * rather than the whole questionnaire, which is the part that mattered.
    *
    * @param {"alias" | "provider" | "profile" | "plan"} field
    * @param {Parameters<SetupPrompt>[0]} question
    */
   const askIdentifier = async (field, question) => {
-    const message = `${question.message} (${describeSourceIdentifier(field)})`;
     for (;;) {
-      const answer = await ask({ ...question, message });
+      const answer = await ask(question);
       const problem = checkSourceIdentifier(field, answer);
       if (problem === null) return answer;
       input.stdout.write(`${problem}\n`);
