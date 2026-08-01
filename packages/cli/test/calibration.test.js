@@ -183,9 +183,30 @@ test("backtesting a long history stays linear in the number of prompts", () => {
     return Number(process.hrtime.bigint() - startedAt) / 1e6;
   };
 
-  time(short);
-  const shortMs = Math.max(time(short), 1);
-  const longMs = time(long);
+  // Both sizes are warmed, and both are measured as a median of several runs.
+  //
+  // The first version of this warmed only `short` and then timed `long` cold, so the larger input
+  // paid JIT and allocation costs the smaller one had already paid, and the ratio it reported was
+  // partly an artefact of the arrangement rather than of the algorithm. It measured 4.2-4.5 on an
+  // idle machine against a threshold of 8 -- under two-fold headroom on a wall-clock comparison --
+  // and a loaded macOS runner read 9.7 and failed the build on `main`.
+  //
+  // The algorithm is linear, which is why this is a fix to the measurement rather than to the code:
+  // measured across 400 to 6400 prompts the cost per prompt stays flat at 0.022-0.026 ms and each
+  // doubling costs about 2.05x. The signal this test exists for -- a quadratic replay, 16x at four
+  // times the input -- is nowhere near the noise floor once both sides are measured the same way.
+  const median = (/** @type {import("../src/prediction.js").OutcomeRow[]} */ rows) => {
+    for (let run = 0; run < 3; run += 1) time(rows);
+    const runs = Array.from({ length: 5 }, () => time(rows)).sort((a, b) => a - b);
+    const middle = runs[2];
+    // Thrown rather than defaulted: a default here would be a made-up duration, and both of the
+    // plausible ones lie in the direction that hides a failure.
+    if (middle === undefined) throw new Error("timing produced no samples");
+    return middle;
+  };
+
+  const shortMs = Math.max(median(short), 1);
+  const longMs = median(long);
 
   // Four times the history must not cost sixteen times the work; a quadratic replay would.
   assert.ok(
