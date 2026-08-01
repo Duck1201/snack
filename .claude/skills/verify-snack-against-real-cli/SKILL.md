@@ -1,14 +1,10 @@
 ---
 name: verify-snack-against-real-cli
 description: >
-  Use this skill after changing any SNACK command, and before claiming it works, to drive the
-  installed `snack` binary against a seeded database instead of trusting the test suite. Use it
-  whenever you touch stdout streaming, interactive prompts, wall-clock windows (pressure, trend,
-  horizons, freshness), performance budgets, or anything that reads storage. SNACK's command tests
-  inject stdout sinks, a fake prompt port and a frozen clock, so an entire class of defects — closed
-  pipes, stdin lifecycle, process start-up cost, real-clock data windows — is invisible to a green
-  `npm run check`. Includes the exact recipe for seeding a throwaway SNACK database anchored to the
-  real clock, which is the enabling step and easy to get wrong.
+  Drive the installed `snack` binary against a seeded database before claiming a command works — the
+  fakes a green `npm run check` runs on cannot reach these paths. Use after changing any SNACK
+  command, anything that reads storage, stdout streaming, interactive prompts, wall-clock windows
+  (pressure, trend, horizons, freshness), performance budgets, or a source adapter.
 license: MIT
 metadata:
   author: Duck
@@ -158,8 +154,8 @@ Run the same reconciliation once more at the end: the number is the check.
 - **Migrations apply before any write** (`initializeDatabase` runs first in `sync` and `status`), so
   temporarily removing a migration file to simulate an older build makes commands fail loudly — that
   is the fixture breaking, not the product.
-- No credentials are involved anywhere in this flow. If you ever need OpenCode's own configuration,
-  note that it may contain them: render only the `plugin` array, never the whole file.
+- **OpenCode's own configuration may hold credentials.** When you need to look at it, render only
+  the `plugin` array.
 
 ## What didn't work
 
@@ -173,12 +169,6 @@ Run the same reconciliation once more at the end: the number is the check.
 - **Opening and closing a `readline` interface per question.** Stdin pauses between them and the
   second question waits forever. One interface must serve the whole run, created lazily and closed
   once.
-- **Seeding with a fixed `now` such as `2026-03-01`.** Every prompt landed months outside the
-  31-hour span the pressure calculation reads, so every command reported an empty history.
-- **Moving an OpenCode fixture onto the real clock with `UPDATE message SET time_created = ?`.** The
-  columns moved and the prompt still landed at the fixture's original date, because the adapter
-  reads the timestamp out of the `data` JSON. `sync` said `1 inserted` and `stats` said `0 prompts`
-  across every horizon — a state that reads as a regression in the analytics windows and is not one.
 - **Driving the pty with `pty.fork()` and a single `os.write` of all answers.** It hung and produced
   no output; `script -qec` with paced input worked.
 - **Trusting a green fixture suite for a new source adapter.** Seventeen fixture assertions passed

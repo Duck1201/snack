@@ -1,16 +1,13 @@
 ---
 name: snack-public-contract-schemas
 description: >
-  Use this skill whenever a SNACK change touches a surface PLAN.md calls a public contract — the
-  `--json` envelope, the `export` document or its columns, exit codes, or the documented flag
-  surface — and whenever you are asked to freeze, version, or compatibility-test those contracts
-  (Stage 8 candidates, the Stage 9 freeze, the 1.0 confirmation). Use it even when the task is
-  phrased as "add a field to the JSON output", "add a column to the export", "add a flag", or "bump
-  the schema version", and even when schemas are never mentioned. The critical step has no second
-  chance: the fixtures that prove a released version's documents still validate must be captured
-  from the released tag BEFORE the change lands, because once the working tree has moved you can no
-  longer make the old binary emit them. Also gives the Ajv strict-mode rules these schemas must
-  satisfy and the rule for deciding whether a change is additive or a version bump.
+  Version and compatibility-test a SNACK public contract — the `--json` envelope, the `export`
+  document or its columns, exit codes, or the documented flag surface — and freeze or confirm those
+  contracts (Stage 8 candidates, the Stage 9 freeze, the 1.0 confirmation). Use even when the task
+  is phrased as "add a field to the JSON output", "add a column to the export", "add a flag", or
+  "bump the schema version", and even when schemas are never mentioned. Reach for it BEFORE writing
+  the code: the fixtures proving the released version's documents still validate can only be
+  captured while the tree still matches the released tag.
 license: MIT
 metadata:
   author: Duck
@@ -123,7 +120,7 @@ the change was breaking.
 
 - **Writing the schema first and capturing fixtures afterwards.** By then the export already emitted
   the new required columns, so the "old" fixtures were indistinguishable from the new ones and
-  proved nothing. Capture is step 1 for this reason alone.
+  proved nothing.
 - **Expecting old exports to validate against the new export schema.** They correctly do not — the
   plan assumed they would. Making `source_bindings` required _is_ a breaking change; the honest
   encoding is a version bump plus an assertion that a version 1 document does not pass as version 2.

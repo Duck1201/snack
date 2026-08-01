@@ -1,16 +1,11 @@
 ---
 name: snack-release-a-version
 description: >
-  Use this skill to take a finished SNACK stage from a green branch to a published version — cutting
-  the version, getting CI evidence, publishing to npm, tagging, and setting dist-tags. Use it
-  whenever the task mentions releasing, publishing, shipping, cutting a version, bumping, "put it on
-  npm", moving `latest`/`stable`/`rc`, or creating a GitHub release, and also when someone asks why
-  CI did not run on a pushed branch or why `npm install` still resolves the old version. Several
-  steps in this repo fail silently rather than loudly: CI does not run on feature-branch pushes, the
-  release workflow is gated on a confirmation string that is hardcoded per release, and a dist-tag
-  call before the publish answers a bare E400 that names nothing. The workflow sets the channel tag
-  on the publish itself, so an ordinary release needs no dist-tag command by hand at all, and there
-  is no `next` channel to move.
+  Take a finished SNACK stage from a green branch to a published version — cutting the version, CI
+  evidence, publishing to npm, tagging, dist-tags. Use whenever the task mentions releasing,
+  publishing, shipping, cutting a version, bumping, "put it on npm", moving `latest`/`stable`/`rc`,
+  or creating a GitHub release, and when someone asks why CI did not run on a pushed branch or why
+  `npm install` still resolves the old version.
 license: MIT
 metadata:
   author: Duck
@@ -32,9 +27,10 @@ agent cannot merge, publish, or move a dist-tag.** Those need a human:
 - The release workflow is `workflow_dispatch` only — someone dispatches it from the Actions UI. This
   is what publishes, and it sets `latest` or `rc` through `--tag` on the publish itself.
 - `npm dist-tag add|rm`, for the tags the workflow cannot set — `stable`, a temporary tag, or a
-  repair. It triggers an interactive web auth flow even when `npm whoami` already answers with a
-  username, so hand the command to the user to run with a `!` prefix and the output lands in the
-  conversation.
+  repair. Run as the agent it opens a web auth flow and leaves the tag unchanged, reporting
+  something that looks like a network error; it did this twice. `npm whoami` answering `duck1201` is
+  not evidence that writes will work. Hand the command to the user to run with a `!` prefix and the
+  output lands in the conversation.
 
 Say this up front rather than discovering it at the end — and say it **in order**, because these
 steps fail confusingly out of order rather than refusing. A dist-tag before the publish answers
@@ -148,8 +144,6 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
   session: the PR merged at the head it had, later commits were stranded on the branch, and each one
   cost a follow-up PR. Before saying "ready", push everything and confirm
   `git rev-list --count origin/main..HEAD` is what you expect.
-- **`npm whoami` succeeding does not mean writes will work.** It answered `duck1201` while
-  `dist-tag rm` still demanded interactive auth.
 - **The npm web page lags the registry** by minutes. `npm view` is the source of truth.
 - After merges, `git fetch --prune` then `git branch -d` — the remote branches are deleted on merge
   and the local refs linger.
@@ -161,9 +155,6 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
 - **Deriving the dist-tag from the version string.** `0.7.0` and `1.0.0-rc.1` belong to different
   channels and a version comparison does not say which; both are answers a human gives. It stays an
   explicit input behind the confirmation string.
-- **`npm dist-tag add` inside the release workflow.** `E401`, as above.
-- **Running `npm dist-tag rm` as the agent.** It opened a web auth flow and left the tag unchanged,
-  twice, while reporting an npm error that looks like a network failure.
 - **Editing `docs/release/identity.md` before the tag actually moved.** The table there is a record
   of fact; writing the intended state makes the document lie, which is the failure this repo spends
   the most effort avoiding.

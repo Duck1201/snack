@@ -1,14 +1,11 @@
 ---
 name: sqlite-constraint-migrations
 description: >
-  Use this skill when a SNACK migration has to change something SQLite cannot alter in place — a
-  CHECK constraint, a PRIMARY KEY, a column type, a NOT NULL, or dropping a column — i.e. whenever
-  the change is not a plain `ALTER TABLE ... ADD COLUMN` or `CREATE TABLE/INDEX`. Use it even if the
-  task is phrased as "allow another value in this column", "let two rows share this key", or "relax
-  this constraint", and even when SQLite is never mentioned. The published SQLite table-rebuild
-  procedure does NOT work here: it requires `PRAGMA foreign_keys = OFF`, which is a silent no-op
-  inside the transaction SNACK's migration runner wraps every migration in. This skill gives the
-  rebuild order that does work, and the upgrade test that proves no row was lost.
+  Rebuild a table in a SNACK migration when SQLite cannot alter it in place — a CHECK constraint, a
+  PRIMARY KEY, a column type, a NOT NULL, or dropping a column, i.e. anything that is not a plain
+  `ALTER TABLE ... ADD COLUMN` or `CREATE TABLE/INDEX`. Use even when the task is phrased as "allow
+  another value in this column", "let two rows share this key", or "relax this constraint", and even
+  when SQLite is never mentioned.
 license: MIT
 metadata:
   author: Duck
@@ -33,7 +30,8 @@ With `foreign_keys = ON` and no way to turn it off:
 
 - `ALTER TABLE parent RENAME TO parent_old` **rewrites every child table's `REFERENCES` clause** to
   point at `parent_old`. Create a fresh `parent` afterwards and the children still reference the old
-  name; drop `parent_old` and the references dangle.
+  name; drop `parent_old` and the references dangle. There is no second rename that fixes it — the
+  name is already taken.
 - `DROP TABLE parent` while children hold rows referencing it fails with an FK violation, because
   SQLite treats the drop as deleting every row.
 
@@ -132,12 +130,6 @@ commits and leaves the schema pointing at a table that no longer exists.
 
 - **`PRAGMA foreign_keys = OFF` at the top of the migration.** Silently ignored inside the runner's
   transaction. No error, no effect — this is what makes the trap expensive.
-- **Rename-and-replace** (`ALTER TABLE parent RENAME TO parent_old`, create a new `parent`, copy,
-  drop the old). With FK enforcement on, the rename rewrites the children's `REFERENCES` to
-  `parent_old`, so the children end up pointing at the table you are about to delete. There is no
-  second rename that fixes it — the name is already taken.
-- **Dropping the parent before the children.** FK violation: SQLite treats the drop as deleting
-  every referenced row.
 - **Seeding the upgrade test through `storeObservations`.** It writes today's columns, which the
   older schema does not have, so the test fails with `SQLITE_ERROR` before it ever reaches the
   migration. The database under test has to be what the _older_ binary would have left behind, so
