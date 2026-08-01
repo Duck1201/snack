@@ -98,6 +98,10 @@ const invocations = [
     command: "data purge",
     argv: ["data", "purge", "--source", "work", "--dry-run"],
   },
+  // `--dry-run`, so the payload is produced without a package manager anywhere near it. The layout
+  // it resolves comes from the injected `modulePath` below: a workspace checkout is not an
+  // installation and correctly refuses, which would make this invocation exit 4.
+  { name: "update-dry-run", command: "update", argv: ["update", "--dry-run"] },
 ];
 
 /** The published payload schema for a command, named by the command the envelope reports. */
@@ -124,6 +128,7 @@ async function makeConfiguredFixture() {
   const fixture = await makeRunFixture("snack-contracts-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  fixture.options.modulePath = "/usr/local/lib/node_modules/@snack-ai/cli/src/update.js";
   return fixture;
 }
 

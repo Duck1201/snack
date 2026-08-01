@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/update.schema.json",
+  "title": "snack update payload",
+  "description": "The `data` of a `snack update --json` document. `applied` is false for `--dry-run`, where `plan` describes exactly what would run and nothing is installed; it is true once the plugin has been re-registered, where `registered_plugin` names the pin written, or is null when nothing was registered and so nothing was rewritten. A consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["applied"],
+  "properties": {
+    "applied": {
+      "type": "boolean"
+    },
+    "plan": {
+      "description": "The resolved package-manager invocation. Present on a dry run.",
+      "type": "object",
+      "required": ["manager", "scope", "command", "args"],
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": ["npm", "pnpm", "bun", "yarn"]
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["global", "local"]
+        },
+        "command": {
+          "description": "The invocation as a single line, for display and confirmation.",
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "registered_plugin": {
+      "description": "The plugin specifier written into OpenCode's configuration, or null when nothing was registered.",
+      "type": ["string", "null"]
+    }
+  }
+}
