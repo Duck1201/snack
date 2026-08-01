@@ -23,21 +23,65 @@
     "restrictions"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
-    "event_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "installation_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "event_type": { "enum": ["prompt_started", "session_idle", "session_error"] },
-    "source_prompt_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "source_session_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "revision": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "revision_domain": { "const": "opencode-plugin-v1" },
-    "parser_version": { "const": "opencode-plugin-v1" },
-    "occurred_at": { "type": "string", "format": "date-time" },
-    "provider": { "type": ["string", "null"], "maxLength": 100 },
-    "model": { "type": ["string", "null"], "maxLength": 200 },
-    "completion": { "enum": ["provisional", "completed"] },
-    "outcome": { "enum": ["success", "restricted", "excluded"] },
-    "usage_slices": { "type": "array", "maxItems": 0 },
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "installation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "event_type": {
+      "enum": ["prompt_started", "session_idle", "session_error"]
+    },
+    "source_prompt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "source_session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "revision_domain": {
+      "const": "opencode-plugin-v1"
+    },
+    "parser_version": {
+      "const": "opencode-plugin-v1"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "provider": {
+      "type": ["string", "null"],
+      "maxLength": 100
+    },
+    "model": {
+      "type": ["string", "null"],
+      "maxLength": 200
+    },
+    "completion": {
+      "enum": ["provisional", "completed"]
+    },
+    "outcome": {
+      "enum": ["success", "restricted", "excluded"]
+    },
+    "usage_slices": {
+      "type": "array",
+      "maxItems": 0
+    },
     "restrictions": {
       "type": "array",
       "maxItems": 20,
@@ -49,9 +93,18 @@
           "class": {
             "enum": ["rate_limit", "usage_limit", "capacity_policy", "other_explicit_limit"]
           },
-          "source_code": { "type": "string", "minLength": 1, "maxLength": 100 },
-          "observed_at": { "type": "string", "format": "date-time" },
-          "classifier_version": { "const": "opencode-plugin-error-v1" }
+          "source_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "classifier_version": {
+            "const": "opencode-plugin-error-v1"
+          }
         }
       }
     },
@@ -66,53 +119,119 @@
         "attachment_count"
       ],
       "properties": {
-        "analyzer_version": { "const": "opencode-input-v1" },
-        "estimated_input_tokens": { "type": "integer", "minimum": 0 },
-        "line_count_bucket": { "enum": ["0", "1-10", "11-50", "51-200", "201+"] },
-        "code_block_count_bucket": { "enum": ["0", "1", "2-4", "5+"] },
-        "attachment_count": { "type": "integer", "minimum": 0 }
+        "analyzer_version": {
+          "const": "opencode-input-v1"
+        },
+        "estimated_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "line_count_bucket": {
+          "enum": ["0", "1-10", "11-50", "51-200", "201+"]
+        },
+        "code_block_count_bucket": {
+          "enum": ["0", "1", "2-4", "5+"]
+        },
+        "attachment_count": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   },
   "allOf": [
     {
-      "if": { "properties": { "event_type": { "const": "prompt_started" } } },
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "prompt_started"
+          }
+        },
+        "type": "object"
+      },
       "then": {
         "properties": {
-          "completion": { "const": "provisional" },
-          "outcome": { "const": "excluded" },
-          "restrictions": { "maxItems": 0 }
-        }
+          "completion": {
+            "const": "provisional"
+          },
+          "outcome": {
+            "const": "excluded"
+          },
+          "restrictions": {
+            "maxItems": 0,
+            "type": "array"
+          }
+        },
+        "type": "object"
       }
     },
     {
-      "if": { "properties": { "event_type": { "const": "session_idle" } } },
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "session_idle"
+          }
+        },
+        "type": "object"
+      },
       "then": {
         "properties": {
-          "completion": { "const": "completed" },
-          "outcome": { "const": "success" },
-          "restrictions": { "maxItems": 0 }
-        }
+          "completion": {
+            "const": "completed"
+          },
+          "outcome": {
+            "const": "success"
+          },
+          "restrictions": {
+            "maxItems": 0,
+            "type": "array"
+          }
+        },
+        "type": "object"
       }
     },
     {
-      "if": { "properties": { "event_type": { "const": "session_error" } } },
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "session_error"
+          }
+        },
+        "type": "object"
+      },
       "then": {
-        "properties": { "completion": { "const": "completed" } },
+        "properties": {
+          "completion": {
+            "const": "completed"
+          }
+        },
         "oneOf": [
           {
             "properties": {
-              "outcome": { "const": "restricted" },
-              "restrictions": { "minItems": 1 }
-            }
+              "outcome": {
+                "const": "restricted"
+              },
+              "restrictions": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           {
             "properties": {
-              "outcome": { "const": "excluded" },
-              "restrictions": { "maxItems": 0 }
-            }
+              "outcome": {
+                "const": "excluded"
+              },
+              "restrictions": {
+                "maxItems": 0,
+                "type": "array"
+              }
+            },
+            "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     }
   ]
