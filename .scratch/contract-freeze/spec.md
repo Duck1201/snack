@@ -1,7 +1,7 @@
 # Stage 9 — Feature Freeze and Beta Hardening
 
-Status: Waves 1 and 2 implemented, unreleased. Release: `@snack-ai/cli@0.9.0` on npm `latest`, in
-Wave 3.
+Status: complete. `@snack-ai/cli@0.9.0` and `@snack-ai/opencode@0.1.3` published to npm `latest` on
+2026-08-01 from `5a5e8f1`, tagged `v0.9.0`.
 
 Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 `docs/architecture.md`; this file records what was decided while building it and what remains.
@@ -130,17 +130,32 @@ The changeset, the `0.6+` upgrade path and the public-beta note in `docs/compati
 confirmation string in `release.yml`, and the `## 0.9.0` section of
 `docs/release/platform-smoke.md`, which could not be written before there was a CI run to record.
 
-**The plugin moves too, and the handoff said it would not.** `@snack-ai/opencode` has no behaviour
+**The plugin moved too, and the handoff said it would not.** `@snack-ai/opencode` has no behaviour
 change since `0.1.2`, which is what "unchanged" was reading — but `schemas/spool-event.schema.json`
 is in the package's `files` array, so it ships inside the tarball, and Wave 2 rewrote it. The
 published `0.1.2` artifact carries a schema that does not compile, and no CLI release fixes that for
-someone who installs the plugin. It takes a patch to `0.1.3`. The general trap: "did the behaviour
+someone who installs the plugin. It took a patch to `0.1.3`. The general trap: "did the behaviour
 change?" is the wrong question for whether a package republishes. The question is whether anything
 named in `files` changed.
 
-Remaining after this branch: the publication itself, which needs the user — merge, dispatch — and
-the record in `docs/release/identity.md`, which is written only after `npm view` says the registry
-agrees.
+Checked against the two published tarballs rather than the tree, since the tree agreeing with itself
+says nothing about what a consumer downloads. `0.1.2` answers
+`strict mode: missing type "array" for keyword "maxItems" ... (strictTypes)`; `0.1.3` compiles.
+
+### What the release did
+
+Published from `5a5e8f1` by run 30694400969. Registry: `@snack-ai/cli` `latest` `0.9.0`, `stable`
+`0.6.1`; `@snack-ai/opencode` `latest` `0.1.3`. Tag `v0.9.0`, GitHub release marked Latest, and the
+record in `docs/release/identity.md` written after `npm view` agreed rather than before.
+
+Verified against the published CLI in a throwaway XDG root: `--version` `0.9.0`, `doctor --json`
+`schema_version` 2, `doctor --source nope --json` exit 4 `source_not_configured`.
+
+One process defect worth recording: the release workflow was dispatched twice, once by the user and
+once by the agent six minutes later, because neither checked whether the other had. The second run
+sat in the `npm` environment's approval gate and was cancelled. Nothing published twice — the
+workflow skips a version already on the registry — but the check costs one `gh run list` and the
+confusion costs more than that. Look before dispatching.
 
 ## Rejected on this branch for the duration of the freeze
 
