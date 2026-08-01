@@ -1,7 +1,7 @@
 # Stage 8 — Multi-client Convergence
 
-Status: implemented, pending independent review and publication. Release: `@snack-ai/cli@0.8.0` on
-npm `latest`.
+Status: implemented and independently reviewed, pending publication. Release: `@snack-ai/cli@0.8.0`
+on npm `latest`.
 
 Product contracts live in `docs/specification.md` and `docs/architecture.md`; this file records what
 was decided while building it and what remains.
@@ -17,8 +17,8 @@ was decided while building it and what remains.
 | E     | `storage_newer_than_application` told apart from a corrupted migration history                                                             |
 | F     | Mixed-client budgets: `status --no-sync` p95 190 ms against 250 ms, `stats --by-client` inside a 150 MB heap                               |
 
-375 CLI tests, 4 plugin tests, zero failures. Formatting, lint, type checking, and package smoke all
-green on Node.js `24.18.1`.
+382 CLI tests, 4 plugin tests, zero failures. Formatting, lint, type checking, package smoke and the
+release gate all green on Node.js `24.18.1`.
 
 ## What Stage 7 had already satisfied
 
