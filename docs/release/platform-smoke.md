@@ -189,10 +189,18 @@ WSL gate: passed
 | Debian 13 on WSL2, AMD64 | `windows-2025-vs2026` host | 407 passed, 2 skipped | passed |
 
 Each environment packed and installed `snack-ai-cli-0.8.2.tgz` (57 files) alongside
-`@snack-ai/opencode`, which is unchanged at `0.1.2`. The plugin workspace contributed 4 passing
-tests and 1 skip — the packed-plugin dispatch test, which needs a real OpenCode installation — on
-every environment. The tarball grew from 47 files to 57: the ten per-command payload schemas the
-Stage 9 freeze published.
+`@snack-ai/opencode` at `0.1.2` — the versions the tree carried when the run was measured, before
+the release cut them to `0.9.0` and `0.1.3`. The plugin workspace contributed 4 passing tests and 1
+skip — the packed-plugin dispatch test, which needs a real OpenCode installation — on every
+environment. The tarball grew from 47 files to 57: the ten per-command payload schemas the Stage 9
+freeze published.
+
+**The plugin moves in this release even though its behaviour did not.**
+`schemas/spool-event.schema.json` is named in the `files` array, so it ships inside the tarball, and
+Wave 2 rewrote it to compile under Ajv strict. The published `0.1.2` artifact therefore carries a
+schema that errors instead of compiling, and only a republish fixes that for a consumer who
+downloads it — hence the patch to `0.1.3`. What the schema accepts is unchanged, so this is a
+correction to the form of a contract and not a reset.
 
 The two skips unique to WSL2 remain the permission-denial tests in `resilience.test.js`: that job
 runs as root, and a mode bit denies nothing to uid 0.
