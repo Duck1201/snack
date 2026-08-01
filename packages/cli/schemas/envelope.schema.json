@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/envelope.schema.json",
+  "title": "SNACK JSON output envelope",
+  "description": "The document every `--json` invocation writes to stdout. A candidate public contract: from 1.0 the named fields do not change meaning or disappear without a major release. `data` is deliberately unconstrained here -- per-command payloads freeze at the 0.9 feature freeze, not before, and constraining them now would freeze shapes that are still moving.",
+  "type": "object",
+  "required": ["schema_version", "command", "generated_at", "status", "data", "warnings", "errors"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Version of this envelope contract. Additive fields do not bump it; a removal or a changed meaning does.",
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "command": {
+      "description": "The command that produced the document, as the user would type it after `snack`.",
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "description": "When the document was produced, from the injected clock.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "status": {
+      "description": "Whether the command answered fully, answered with something degraded, or failed.",
+      "enum": ["ok", "degraded", "error"]
+    },
+    "data": {
+      "description": "The command's payload, or null when there is none to give."
+    },
+    "warnings": {
+      "$ref": "#/$defs/diagnostics"
+    },
+    "errors": {
+      "$ref": "#/$defs/diagnostics"
+    }
+  },
+  "$defs": {
+    "diagnostics": {
+      "description": "Always present, empty when there is nothing to report, so a consumer never has to distinguish absent from empty.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
