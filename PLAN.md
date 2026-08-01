@@ -196,11 +196,12 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 **Purpose:** close the P2/P3 findings Phase 1 left open. Compatible defect fixes, which is what a patch is for; nothing here adds a command, a flag, or a field.
 
 - **an OpenCode prompt with no assistant reply is emitted, not dropped** ([finding 01](./.scratch/end-to-end-review/issues/01-opencode-drops-unanswered-prompts.md)). Eleven of 194 real prompts vanished without reaching any counter, so a source could not be reconciled against its own history. `docs/specification.md` §4.3 already defines the state they are in — completion `unknown`, outcome `excluded` — and the adapter simply never produced it;
-- **`setup` no longer hangs on a closed stdin** ([08](./.scratch/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md)). `readline/promises`' `question()` never settles when the stream has already ended, so `snack setup < /dev/null` waits forever;
 - **a provider mapped after the first sync attributes its backlog without `--full`, and `doctor` names the providers it is waiting on** ([02](./.scratch/end-to-end-review/issues/02-late-provider-mapping-recovers-nothing.md), [03](./.scratch/end-to-end-review/issues/03-pending-mapping-warning-is-a-dead-end.md)). The pending rows are already retained; nothing replays them, and nothing says which providers they belong to or what to do;
 - **the Claude fingerprint check stops re-reading the whole history on every command** ([06](./.scratch/end-to-end-review/issues/06-fingerprint-check-reads-the-whole-history-every-command.md)). A no-op `sync` reads and parses 222 MB to sample 200 records per file: 238 MB of process RSS, O(total history) where the cursor was designed to make it O(new data).
 
-**Exit:** each fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
+[Finding 08](./.scratch/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md) was scoped into this release and then **retracted**: `setup` cancels cleanly on `Ctrl+D` and refuses without a terminal, and the reported hang was the review's own harness tearing down a pty while the command was still working. The fix was written and reverted rather than shipped, because a refactor justified by a defect that does not exist is not what a patch is for. The finding is kept, marked invalid, with the analysis — a red result from a harness is not evidence until the harness is shown able to tell a wait from an exit, which is the same rule this project already applies to a failing test.
+
+**Exit:** each remaining fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
 
 ### 1.1.0 - Interface, `snack update`, and the documentation restructure
 

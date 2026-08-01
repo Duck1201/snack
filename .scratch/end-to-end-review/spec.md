@@ -47,18 +47,18 @@ falls back to it, and redirecting it would have hidden the real history the phas
 
 ## Findings
 
-| #                                                                             | Severity | Summary                                                                                         | Target            |
-| ----------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------- | ----------------- |
-| [05](./issues/05-second-setup-discards-the-forecast-evidence.md)              | **P1**   | Re-running `setup` on an existing source discards every forecast's evidence, permanently        | `1.0.1`           |
-| [09](./issues/09-cli-1.0.0-installs-plugin-0.1.2-and-calls-1.0.0-outdated.md) | **P1**   | The `1.0.0` CLI installs the plugin at `0.1.2`, and tells anyone on `1.0.0` to downgrade        | `1.0.1`           |
-| [10](./issues/10-live-capture-emits-null-provider-and-can-never-attribute.md) | **P1**   | Live capture emits `provider: null` on OpenCode `1.18.10`; no live event can ever be attributed | `1.0.1`           |
-| [01](./issues/01-opencode-drops-unanswered-prompts.md)                        | P2       | The OpenCode adapter drops a prompt with no assistant reply, and counts it nowhere              | `1.1.0`           |
-| [02](./issues/02-late-provider-mapping-recovers-nothing.md)                   | P2       | A provider mapping added after the first sync recovers nothing, and nothing says so             | `1.1.0`           |
-| [06](./issues/06-fingerprint-check-reads-the-whole-history-every-command.md)  | P2       | The Claude fingerprint check re-reads and re-parses the entire history on every command         | `1.1.0`           |
-| [08](./issues/08-setup-hangs-when-stdin-is-already-closed.md)                 | P2       | Interactive `setup` hangs forever when stdin is already at EOF                                  | `1.0.1` / `1.1.0` |
-| [03](./issues/03-pending-mapping-warning-is-a-dead-end.md)                    | P3       | `doctor`'s pending-mapping warning names a count and nothing else                               | `1.1.0`           |
-| [04](./issues/04-applied-setup-reports-under-a-dry-run-key.md)                | P3       | An applied `setup` reports its observation count under a `dry_run` key                          | `1.1.0`           |
-| [07](./issues/07-steady-state-memory-budget-does-not-name-its-unit.md)        | P3       | The steady-state memory budget does not say which memory it means                               | `1.1.0`           |
+| #                                                                             | Severity | Summary                                                                                         | Target    |
+| ----------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------- | --------- |
+| [05](./issues/05-second-setup-discards-the-forecast-evidence.md)              | **P1**   | Re-running `setup` on an existing source discards every forecast's evidence, permanently        | `1.0.1`   |
+| [09](./issues/09-cli-1.0.0-installs-plugin-0.1.2-and-calls-1.0.0-outdated.md) | **P1**   | The `1.0.0` CLI installs the plugin at `0.1.2`, and tells anyone on `1.0.0` to downgrade        | `1.0.1`   |
+| [10](./issues/10-live-capture-emits-null-provider-and-can-never-attribute.md) | **P1**   | Live capture emits `provider: null` on OpenCode `1.18.10`; no live event can ever be attributed | `1.0.1`   |
+| [01](./issues/01-opencode-drops-unanswered-prompts.md)                        | P2       | The OpenCode adapter drops a prompt with no assistant reply, and counts it nowhere              | `1.1.0`   |
+| [02](./issues/02-late-provider-mapping-recovers-nothing.md)                   | P2       | A provider mapping added after the first sync recovers nothing, and nothing says so             | `1.1.0`   |
+| [06](./issues/06-fingerprint-check-reads-the-whole-history-every-command.md)  | P2       | The Claude fingerprint check re-reads and re-parses the entire history on every command         | `1.1.0`   |
+| [08](./issues/08-setup-hangs-when-stdin-is-already-closed.md)                 | ~~P2~~   | **Invalid.** `setup` cancels cleanly; the hang was this review's own harness                    | retracted |
+| [03](./issues/03-pending-mapping-warning-is-a-dead-end.md)                    | P3       | `doctor`'s pending-mapping warning names a count and nothing else                               | `1.1.0`   |
+| [04](./issues/04-applied-setup-reports-under-a-dry-run-key.md)                | P3       | An applied `setup` reports its observation count under a `dry_run` key                          | `1.1.0`   |
+| [07](./issues/07-steady-state-memory-budget-does-not-name-its-unit.md)        | P3       | The steady-state memory budget does not say which memory it means                               | `1.1.0`   |
 
 Two more were found while fixing those:
 [11](./issues/11-host-test-named-a-tarball-that-stopped-existing.md) (P2, fixed — the packed-plugin
@@ -110,8 +110,10 @@ Clean: `sync` (both paths), `status`, `status --no-sync`, `stats`, `stats --by-c
   usage error.
 - `setup --non-interactive` with no values — `setup_values_required`, exit 2.
 - Interactive `setup` through a pty, answers fed with delays — completes, exit 0. Fewer answers than
-  questions — `Setup cancelled; nothing was changed.`, exit 0. **Stdin already at EOF — hangs**
-  ([08](./issues/08-setup-hangs-when-stdin-is-already-closed.md)).
+  questions — `Setup cancelled; nothing was changed.`, exit 0. `Ctrl+D` at the first question — the
+  same clean cancellation. This wave originally recorded a hang here
+  ([08](./issues/08-setup-hangs-when-stdin-is-already-closed.md)); it was **this review's own
+  harness** closing the pty under a working command, and the finding is retracted with the analysis.
 - `data purge --all --yes` deleted 735 prompts and 68 snapshots, warned that the source will restore
   them and named `--prevent-reimport`, and a following `status` re-synchronized correctly.
 
