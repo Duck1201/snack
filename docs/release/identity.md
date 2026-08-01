@@ -256,3 +256,25 @@ None of that came from the workflow. Trusted publishing authorizes a publish req
 `dist-tag` call, which answers `E401` even for the package just published — the workflow sets a tag
 only through `--tag` on the publish itself, and it is now an input of the dispatch rather than
 hardcoded. `stable` is never set by a release: it moves by decision.
+
+## 0.8.0
+
+`@snack-ai/cli@0.8.0` was published from commit `ade53a4` by protected release run
+[30681725922](https://github.com/Duck1201/snack/actions/runs/30681725922). The plugin step skipped
+again: Stage 8 changed nothing in `@snack-ai/opencode`, which stays at `0.1.2`.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.8.0` | `0.8.0` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | publish + SLSA provenance |
+
+This is the first release where no tag was moved by hand. `latest` was set by `--tag latest` on the
+publish and asserted by the workflow's own verification step; `stable` did not move, because it
+moves by decision and no decision was taken. The registry confirms it: `npm view @snack-ai/cli
+dist-tags` answers `{ stable: '0.6.1', latest: '0.8.0' }`.
+
+An `npm dist-tag add @snack-ai/cli@0.8.0 latest` was attempted before the dispatch and answered
+`400 Bad Request`. The cause was ordering, not permissions: `0.8.0` was not yet in the registry, and
+npm reports a tag pointed at a missing version with a bare status code and no explanation. The
+release skill that suggested the command as a routine step has been corrected, and the same release
+then completed without it.
