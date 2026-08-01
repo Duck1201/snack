@@ -4,22 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type publish-0.9.0 after reviewing the release evidence
+        description: Type publish-1.0.0 after reviewing the release evidence
         required: true
         type: string
       dist_tag:
         description: >
           npm dist-tag to publish under. Each minor takes latest, so a plain `npm install` gets the
-          newest supported product; rc is for release candidates, which are not that. There is no
-          `next`: a tag meaning "whatever is newest" either shadows latest or contradicts it, and it
-          was retired after 0.7.0. `stable` is never set here — it moves by hand, by decision, and
-          not by a release. See the npm Channel Policy in PLAN.md.
+          newest supported product; rc is for release candidates, which are not that. `candidate` is
+          the temporary tag the 1.0.0 promotion publishes under before latest is moved by hand, so
+          the final tarballs can be checksum-verified on the registry without any default install
+          resolving to them first; it is removed once latest moves. There is no `next`: a tag
+          meaning "whatever is newest" either shadows latest or contradicts it, and it was retired
+          after 0.7.0. `stable` is never set here — it moves by hand, by decision, and not by a
+          release. See the npm Channel Policy in PLAN.md.
         required: true
         type: choice
         default: latest
         options:
           - latest
           - rc
+          - candidate
 
 permissions:
   actions: read
@@ -28,7 +32,7 @@ permissions:
 
 jobs:
   publish:
-    if: inputs.confirmation == 'publish-0.9.0' && github.ref == 'refs/heads/main'
+    if: inputs.confirmation == 'publish-1.0.0' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:

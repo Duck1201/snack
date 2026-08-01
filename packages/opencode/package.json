@@ -1,6 +1,6 @@
 {
   "name": "@snack-ai/opencode",
-  "version": "0.1.3",
+  "version": "1.0.0",
   "description": "Fail-open OpenCode metadata capture for SNACK",
   "license": "Apache-2.0",
   "repository": {

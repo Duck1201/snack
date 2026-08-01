@@ -127,13 +127,24 @@ major. Until then the Stage 9 reset rule below is what governs, and it governed 
 change to any public schema or semantic during the audit would have reset the freeze and required a
 new `0.9.x` rather than being folded into `1.0.0`.
 
-**No soak.** PLAN.md originally gated promotion on a seven-day release-candidate soak with no
-P0/P1. That gate was dropped by decision: `1.0.0-rc.1` and the promotion happen the same day. Every
-artifact-level gate is unchanged — the isolated staging registry, the checksums, the provenance, and
-the migration chains all still run against the published artifacts — and what is given up is calendar
-time under real use, which is the one class of defect the remaining gates cannot reach. Recorded here
-because the beta published the original promise, and a criterion quietly dropped is worse than one
-openly changed.
+**No release candidate, and no soak.** PLAN.md originally required publishing `1.0.0-rc.N` to the
+`rc` channel and soaking it for seven days with no P0/P1 before promotion. Both were dropped by
+decision. `1.0.0-rc.0` was cut and every gate was run against it, but it was never published, and
+the version went straight to `1.0.0`. No package has ever carried the `rc` tag.
+
+This is recorded rather than quietly removed, because the beta published the original promise, and a
+criterion silently dropped is worse than one openly changed. Two things were given up:
+
+- **calendar time under real use** — the class of defect that only appears when people run something
+  for a week;
+- **the only rehearsal of the npm publish path itself** — provenance signing, trusted publishing,
+  dist-tag resolution, and a real `npm install` from the public registry. The staging registry
+  proves a tarball resolves and installs; it cannot prove npm's own workflow does. `1.0.0` is the
+  first artifact to traverse that path, and it does so as the final release.
+
+Every artifact-level gate is unchanged and did run: the isolated staging registry, per-tarball
+checksums, CycloneDX SBOMs, a double-pack reproducibility comparison, the migration chains from
+every published release since the `0.6.0` floor, and the three-platform CI matrix.
 
 ## Upgrading from 0.6+
 
@@ -179,7 +190,8 @@ unintended break cannot hide behind this one. Each payload now has a published s
 `schema_version` is still `1` and the set of accepted documents is unchanged; the file gained the
 `type` declarations Ajv strict requires, so it now compiles instead of erroring.
 
-**Not ready for this?** `stable` still holds `0.6.1` — see [npm channels](#npm-channels).
+**Pinned to `stable` to sit out the pre-1.0 churn?** `stable` moves to `1.0.0` with this
+release, so the pin now resolves here — see [npm channels](#npm-channels) for why.
 
 ## Deprecation policy
 
@@ -191,7 +203,7 @@ unintended break cannot hide behind this one. Each payload now has a published s
 
 ## Support matrix
 
-| Axis            | Supported at `0.9`                                                            |
+| Axis            | Supported at `1.0`                                                            |
 | --------------- | ----------------------------------------------------------------------------- |
 | Runtime         | Node 24 LTS (`>=24 <25`)                                                       |
 | Platforms       | Linux, macOS, WSL2/Debian 13                                                    |
@@ -205,10 +217,22 @@ SNACK never promises every historical client version.
 
 ## npm channels
 
-`latest` holds the newest supported release, which is `0.9.x` until 1.0. `stable` holds `0.6.1`, the
-newest release whose surface the project was willing to hold still before this freeze, and it moves
-only by a deliberate decision. Pin `stable` when contract churn is unacceptable. See
-[docs/release/identity.md](./release/identity.md).
+`latest` holds the newest supported release, which is `1.0.0`.
+
+**`stable` moves to `1.0.0` with this release**, off the `0.6.1` it held through the whole pre-1.0
+line. That channel existed to answer one question — "which version's surface will not move under
+me?" — and before 1.0 the honest answer was the MVP, because every minor after it was allowed to
+evolve flags, JSON shapes, and config and export schemas. From 1.0 that answer changes: the newest
+release is also the one whose contracts are held, because breaking any of the six frozen surfaces
+now requires a major version. `latest` and `stable` therefore point at the same version, and will
+keep doing so until a `2.0.0` exists.
+
+If you pinned `stable` to avoid pre-1.0 contract churn, this is the release you were waiting for.
+Nothing about the pin changes: it still moves only by deliberate decision and never by a release,
+and it is still moved by hand rather than by the publish workflow. `0.6.1` stays installable by
+exact version forever; it simply stops being what `stable` resolves to.
+
+See [docs/release/identity.md](./release/identity.md).
 
 ## The freeze reset rule
 

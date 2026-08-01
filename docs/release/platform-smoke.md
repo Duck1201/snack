@@ -195,7 +195,7 @@ plugin workspace is unchanged at 4 passing and 1 skip, the packed-plugin dispatc
 real OpenCode installation.
 
 Each environment packed and installed `snack-ai-cli-0.9.0.tgz` (57 files) — the version the tree
-carried when the audit ran, before Wave 2 cuts it to `1.0.0-rc.1`.
+carried when the audit ran, before Wave 2 cut it to `1.0.0-rc.0` and Wave 3 to `1.0.0`.
 
 The two skips unique to WSL2 remain the permission-denial tests in `resilience.test.js`: that job
 runs as root, and a mode bit denies nothing to uid 0.

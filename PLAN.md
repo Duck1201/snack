@@ -130,7 +130,6 @@ stage names explicitly, which so far is Stage 6's **SNACK MVP**.
 | `0.7.0` | Claude Code parity | `latest` | Post-MVP development |
 | `0.8.0` | Multi-client convergence | `latest` | Candidate public contracts |
 | `0.9.0` | Feature freeze and public beta | `latest` | 1.0 contract candidate |
-| `1.0.0-rc.N` | Required stable candidate | `rc` | No feature changes |
 | `1.0.0` | First stable release | `latest` | Strict SemVer public contracts |
 
 External pilots and beta feedback are encouraged but are consultative. No release, including MVP and 1.0, depends on an external-user count.
@@ -930,7 +929,7 @@ no owner:
 - no unversioned public contract;
 - full matrix and budgets pass reproducibly;
 - migration `0.6 -> 0.9` preserves all supported data;
-- feature-freeze controls and RC checklist are approved.
+- feature-freeze controls and the stable-release checklist are approved.
 
 **Excluded**
 
@@ -945,15 +944,25 @@ no owner:
 
 ### Stage 10 - First Stable Release
 
-- **Release:** `1.0.0-rc.N` on npm `rc`, then `1.0.0` on npm `latest`
-- **Status:** Wave 1 in progress. The `0.9` contract corpus is captured and validates unchanged
+- **Release:** `1.0.0` on npm `latest`
+- **Status:** Waves 1 and 2 complete. The `0.9` contract corpus is captured and validates unchanged
   against today's schemas; every published release from the `0.6.0` floor forward upgrades under the
-  candidate with integrity intact; the artifact evidence is measured rather than asserted.
+  candidate with integrity intact; the artifact evidence is measured rather than asserted; the final
+  tarballs pass an isolated staging registry before npm sees them.
 - **Effort:** 3 AI-assisted waves
-- **Soak:** the seven-day RC soak is **dropped by decision**, recorded in
-  [docs/compatibility.md](./docs/compatibility.md#10-the-freeze-confirmed-not-redefined). `rc.1` and
-  the promotion happen the same day. Every artifact-level gate stands; what is given up is calendar
-  time under real use, which is the one class of defect the remaining gates cannot reach.
+- **No release candidate, and no soak.** Both were **dropped by decision**, recorded in
+  [docs/compatibility.md](./docs/compatibility.md#10-the-freeze-confirmed-not-redefined). `1.0.0-rc.0`
+  was cut, gated locally, and never published; the version went straight to `1.0.0`.
+
+  What this costs is worth stating rather than burying. Every artifact-level gate stands — the
+  isolated staging registry, the checksums, the SBOMs, the migration chains from every published
+  release, the three-platform CI. What is given up is (a) calendar time under real use, and (b) the
+  only rehearsal of the **npm publish path itself**: provenance signing, trusted publishing,
+  dist-tag resolution, and a real `npm install` from the public registry. The staging registry
+  proves the tarball resolves and installs; it cannot prove npm's own workflow does. Stage 3 in this
+  same project reported a successful publish from a job its own gate had skipped, which is precisely
+  the class of failure only publishing reveals. `1.0.0` is therefore the first artifact to traverse
+  that path, and it does so as the final release rather than as a candidate.
 **Purpose:** Freeze supported public behavior and publish the first stable OpenCode + Claude Code release.
 
 **Dependencies**
@@ -966,25 +975,41 @@ no owner:
 
 - verify OpenCode and Claude Code feature parity and latest + one previous validated family for each;
 - verify Node 24 across Linux/macOS/WSL;
-- rehearse direct `0.6.0 -> 1.0.0` and representative adjacent/intermediate chains against RC/final-candidate builds, including backup/restore, integrity, and unknown-schema behavior; the exact published final artifact is gated in Wave 3;
+- rehearse direct `0.6.0 -> 1.0.0` and representative adjacent/intermediate chains against candidate builds, including backup/restore, integrity, and unknown-schema behavior; the exact published final artifact is gated in Wave 3;
 - confirm the Stage 9 freeze for public v1 commands/flags, exit codes, JSON, config, export, and spool contracts; Stage 10 cannot redefine it without resetting Stage 9;
 - verify privacy canaries, threat model, SBOM, npm provenance, Apache-2.0/NOTICE, security policy, docs, and budgets;
-- set `@snack-ai/opencode` to a compatible `1.0.0` release candidate.
+- set `@snack-ai/opencode` to a compatible `1.0.0`.
 
-**Wave 2: Required release candidate**
+**Wave 2: Release candidate** (cut, gated, not published)
 
-- publish `@snack-ai/cli@1.0.0-rc.1` and compatible plugin RC to `rc`;
-- run installation/upgrade/live smoke suites against the published artifacts rather than workspace builds;
-- allow only blocker fixes followed by a new `rc.N`;
-- the seven-day soak this wave originally required is dropped; see **Soak** above.
+This wave originally required publishing `1.0.0-rc.N` to `rc`, soaking it for seven days, and
+allowing only blocker fixes. Both the publication and the soak were dropped; see the note above the
+waves for what that costs.
+
+What the wave still did, and what earned its keep:
+
+- cut `1.0.0-rc.0` on both packages and run every gate against that candidate rather than against a
+  workspace build at the previous version;
+- which found a defect nothing in ten releases had been able to find: `export.test.js` asserted the
+  export's `cli_version` against `^\d+\.\d+\.\d+$`, an assumption no prerelease had ever tested. The
+  **published schema** was checked first, because the same constraint there would have meant an
+  artifact emitting a document invalid against its own frozen contract; it declares the field a
+  plain string, so only the test was wrong. It now asserts equality with the manifest version.
+
+The lesson is worth keeping even though the RC was not published: cutting a version and running the
+gates against it is a different act from running them against the tree, and it finds different
+things.
 
 **Wave 3: Version-only final promotion**
 
-- create a final commit containing only version/changelog/release metadata changes from the accepted RC source;
+- version the packages to `1.0.0` from the gated candidate source, changing only version, changelog,
+  and release metadata. With no RC published, the changelog carries no `1.0.0-rc.0` section: a
+  changelog entry for a version nobody can install is the same defect the unpublished `0.3.0` left
+  behind, and it is removed rather than shipped;
 - build final CLI/plugin tarballs once, record checksums/SBOM, and prove reproducible equivalence except required version metadata;
 - publish those exact `1.0.0` tarballs to an isolated staging registry and run direct `0.6.0 -> 1.0.0`, install, smoke, and integrity tests;
-- if staging fails, discard the unpublished final tarballs and fix through a new `rc.N`;
-- only after staging passes, publish the same checksum-verified tarballs to official npm under temporary `candidate`, verify registry integrity, move both packages' `latest` tag to final `1.0.0`, remove the `rc` and temporary tags, tag releases, and archive milestone evidence;
+- if staging fails, discard the unpublished final tarballs and fix on the release branch before any npm publish;
+- only after staging passes, publish the same checksum-verified tarballs to official npm under temporary `candidate`, verify registry integrity, move both packages' `latest` tag to final `1.0.0`, remove the temporary tag, tag releases, and archive milestone evidence. No `rc` tag is set or retired, because none was ever published;
 - keep `0.6.0` installable by exact version but no longer the default.
 
 **Deliverables**
@@ -992,14 +1017,14 @@ no owner:
 - first stable SNACK release;
 - stable OpenCode + Claude Code support;
 - strict SemVer public contracts and support policy;
-- reproducible RC-to-final release evidence.
+- reproducible release evidence, measured rather than asserted.
 
 **Pending items resolved**
 
 - stable runtime/platform/client matrix;
 - final public contract schemas;
 - migration baseline through 1.0;
-- RC and artifact-promotion process.
+- artifact-promotion process.
 
 **Exit criteria**
 
@@ -1008,7 +1033,7 @@ no owner:
 - Node 24 Linux/macOS/WSL matrix passes;
 - direct `0.6.0 -> 1.0.0` and representative adjacent/intermediate migration chains preserve all supported data/config;
 - public v1 schemas and compatibility tests are published;
-- final source differs from accepted RC only by version/changelog/release metadata;
+- the released source differs from the gated candidate source only by version, changelog, and release metadata;
 - final artifacts have provenance, SBOM, licenses, checksums, docs, and reproducible-build evidence.
 
 **Excluded**
@@ -1018,7 +1043,7 @@ no owner:
 
 **Primary risks**
 
-- a blocker forces a new `rc.N`, and with no soak left to absorb it, forces it late;
+- with no release candidate published and no soak, a defect in the npm publish path itself surfaces on the final release rather than on a candidate;
 - client releases invalidate fingerprints during stabilization;
 - accidental breaking changes hide in generated schemas or package metadata.
 
@@ -1083,20 +1108,24 @@ Strict SemVer applies:
   install on a version SNACK had moved past, and the alternative it protected — never surprising an
   installer with pre-1.0 contract churn — is served better by an explicit channel than by a stale
   default. `0.7.0` was the first release under this rule.
-- `stable`: points at the newest release whose surface the project is willing to hold still, which
-  is `0.6.1` until 1.0. It is the channel to pin when contract churn is unacceptable, and it moves
-  only by a deliberate decision, never by a release. Pre-1.0 minors on `latest` may evolve CLI
-  flags, JSON shapes, and config/export schemas; every release from `0.6.0` forward still preserves
-  user data through supported migrations.
-- `1.0.0-rc.N`: publishes to `rc`. A release candidate is not the newest supported product, and
-  `next` is not a channel this project keeps: a tag that means "whatever is newest" either shadows
-  `latest` or contradicts it, and it was removed from both packages after `0.7.0` rather than left
-  pointing at the current release. `rc` says what it holds.
+- `stable`: points at the newest release whose surface the project is willing to hold still. It held
+  `0.6.1` for the whole pre-1.0 line and **moves to `1.0.0` with the stable release**. It is the
+  channel to pin when contract churn is unacceptable, and it moves only by a deliberate decision,
+  never by a release. Before 1.0 that meant holding the MVP, because pre-1.0 minors on `latest` were
+  allowed to evolve CLI flags, JSON shapes, and config and export schemas; from 1.0 breaking any
+  frozen surface requires a major, so `latest` and `stable` name the same version until a `2.0.0`
+  exists. Every release from `0.6.0` forward still preserves user data through supported migrations,
+  and `0.6.1` stays installable by exact version.
+- `rc`: reserved and never used. Stage 10 cut `1.0.0-rc.0`, gated it locally, and published no
+  release candidate at all, so no package ever carried the tag. The channel keeps its meaning for a
+  future major. `next` is not a channel this project keeps: a tag that means "whatever is newest"
+  either shadows `latest` or contradicts it, and it was removed from both packages after `0.7.0`
+  rather than left pointing at the current release.
 - `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and takes `latest` from the last pre-1.0 minor after checksum verification.
 - `@snack-ai/opencode` first published its own `0.1.0` to `next` in Stage 4 rather than Stage 3, and `latest` resolved to that first `0.1.0` for the same npm first-publication behavior described for the CLI until Stage 6 moved it.
-- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries an `rc` tag only while a release candidate is outstanding.
-- CLI/plugin RCs publish to each package's `rc`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then `latest` moves to it and both `rc` and the temporary tag are removed after checksum verification. `stable` moves to `1.0.0` at that point, because from 1.0 the newest release is also the one whose contracts are held.
-- Only `latest` and `rc` are set by the release workflow, on the publish itself. `stable` and any temporary tag are moved by hand with an authenticated npm session: trusted publishing authorizes a publish request and not a `dist-tag` call, which answers `E401` even for the package just published. See [docs/release/identity.md](./docs/release/identity.md).
+- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`. It would carry an `rc` tag only while a release candidate is outstanding, and none has been.
+- final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then `latest` moves to it and the temporary tag is removed after checksum verification. `stable` moves to `1.0.0` at that point, because from 1.0 the newest release is also the one whose contracts are held.
+- Only the tag chosen at dispatch is set by the release workflow, on the publish itself. `stable` and any temporary tag are moved by hand with an authenticated npm session: trusted publishing authorizes a publish request and not a `dist-tag` call, which answers `E401` even for the package just published. See [docs/release/identity.md](./docs/release/identity.md).
 
 ## Quality Budgets
 
@@ -1124,7 +1153,7 @@ These are release gates from MVP onward, not cross-device guarantees. Regression
 | Pressure/model parameters | Model family chosen; constants intentionally unset | Stages 4-5 | Simulation + sanitized-history evidence and versioned policy |
 | Claude history and lifecycle | Local JSONL histories confirmed; hooks deferred by ADR-0006 | Stage 7 | Backfill fixtures per supported version and feature parity |
 | Multi-client abstraction | Architectural seam designed but unproven | Stage 8 | No client leakage and shared-source convergence tests |
-| Stable public contracts | Public contract surfaces identified in prose; executable candidate schemas do not yet exist | Stages 8-10 | Executable schemas/compatibility tests, 0.9 freeze, and RC audit |
+| Stable public contracts | Public contract surfaces identified in prose; executable candidate schemas do not yet exist | Stages 8-10 | Executable schemas/compatibility tests, 0.9 freeze, and the stable gate audit |
 
 ## Post-1.0 Sequence
 
@@ -1152,4 +1181,4 @@ These items are explicitly outside the roadmap to 1.0 and require their own desi
 
 ## Roadmap Completion Definition
 
-The roadmap is complete only when `1.0.0` is published to npm `latest` after the required RC process and every Stage 10 technical gate passes. Completing MVP at `0.6.0` is a major product marker, not completion of the roadmap.
+The roadmap is complete only when `1.0.0` is published to npm `latest` and every Stage 10 technical gate passes. Completing MVP at `0.6.0` is a major product marker, not completion of the roadmap.
