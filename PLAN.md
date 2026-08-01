@@ -13,7 +13,7 @@ SNACK is a local-first command-line application that describes observed AI-tool 
 - [Architecture](./docs/architecture.md): modules, data model, stack, ingestion, security, and operations.
 - [Compatibility](./docs/compatibility.md): the frozen public surfaces, their versions, and the freeze-reset rule.
 - [Archived roadmap 0.1.0 - 1.0.0](./docs/history/roadmap-0.1-1.0.md): the ten stages that produced the stable release, kept because the compatibility policy and the ADRs refer to them by number.
-- ADRs: [0001](./docs/adr/0001-nodejs-modular-monolith.md) modular monolith · [0002](./docs/adr/0002-local-metadata-without-content.md) local metadata without content · [0003](./docs/adr/0003-hybrid-opencode-ingestion.md) hybrid OpenCode ingestion · [0004](./docs/adr/0004-nodejs-24-baseline.md) Node.js 24 baseline · [0005](./docs/adr/0005-retain-snack-name.md) the SNACK name · [0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) Claude JSONL without hooks · [0007](./docs/adr/0007-quote-codex-reported-capacity.md) quoting Codex's reported capacity · [0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md) `--watch` and prediction snapshots · [0009](./docs/adr/0009-documentation-lives-in-the-repository.md) documentation in the repository.
+- ADRs: [0001](./docs/adr/0001-nodejs-modular-monolith.md) modular monolith · [0002](./docs/adr/0002-local-metadata-without-content.md) local metadata without content · [0003](./docs/adr/0003-hybrid-opencode-ingestion.md) hybrid OpenCode ingestion · [0004](./docs/adr/0004-nodejs-24-baseline.md) Node.js 24 baseline · [0005](./docs/adr/0005-retain-snack-name.md) the SNACK name · [0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) Claude JSONL without hooks · [0007](./docs/adr/0007-quote-codex-reported-capacity.md) quoting Codex's reported capacity · [0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md) `--watch` and prediction snapshots · [0009](./docs/adr/0009-documentation-lives-in-the-repository.md) documentation in the repository · [0010](./docs/adr/0010-snack-update-may-reach-the-network.md) `snack update` may reach the network.
 
 ## Product Thesis
 
@@ -54,7 +54,9 @@ SNACK will:
 - forecast the next user-initiated prompt execution, and a user-supplied number of consecutive prompts;
 - assess each capacity source independently;
 - aggregate usage across clients that share a capacity source;
-- collect metadata only and remain local-only;
+- collect metadata only, and remain local-only in every command that observes, stores, analyzes or
+  reports — the single exception is `snack update`, which installs packages and does nothing else
+  ([ADR-0010](./docs/adr/0010-snack-update-may-reach-the-network.md));
 - distinguish observed restrictions from operational errors;
 - use rolling analysis horizons, not presumed quota windows;
 - expose human-readable and versioned JSON output;
@@ -69,7 +71,8 @@ SNACK will not:
 - derive a count of prompts from a probability — the count is always supplied by the user;
 - treat a timeout, cancellation, network fault, or client error as a restriction;
 - store prompt text, response text, project paths, titles, or credentials;
-- upload telemetry or contact a SNACK service;
+- upload telemetry, contact a SNACK service, or send observations anywhere — `snack update` talks to
+  a package registry and carries nothing about your usage;
 - require Python for setup, synchronization, statistics, or prediction;
 - use an AI model for prediction.
 
@@ -85,6 +88,11 @@ The top-level command is `snack`.
 - `snack export`: explicitly export local metadata and predictions.
 - `snack data purge`: delete selected local history transactionally.
 - `snack config get|set|path`: inspect and change schema-validated configuration.
+- `snack update` (from `1.1.0`): bring the CLI and the capture plugin to the versions that belong
+  together, re-registering the plugin with the values already configured so no capacity period
+  rotates. **The only command that reaches the network** — see
+  [ADR-0010](./docs/adr/0010-snack-update-may-reach-the-network.md), which scopes the exception that
+  the "local only" boundary would otherwise forbid.
 
 Three long-deferred commands are **cut rather than pending**, so nobody reserves a surface for them again:
 
@@ -165,27 +173,41 @@ P0 and P1 block any release. P2/P3 may ship only when documented and assigned.
 
 ## Roadmap
 
-### Phase 1 - End-to-end review (no version)
+### Phase 1 - End-to-end review (no version) — **complete**
 
 **Purpose:** exercise the published product as a user before building five releases on top of it.
 
 **Subject:** the published `1.0.0`, installed from npm. Not a workspace build and not a staging tarball — the review exists to exercise what a user actually receives, and the artifact that traverses the npm publish path is the one this project has never observed under real use.
 
-**Scope**
+**Outcome:** twelve findings, three of them P1, shipped as [`1.0.1`](./docs/release/identity.md). Full record in `.scratch/end-to-end-review/spec.md`.
 
-- install the published `1.0.0` into a clean environment and run `setup` → `sync` → `status` → `stats` → `doctor` → `export` → `data purge` against real OpenCode and Claude Code history;
-- measure the quality budgets rather than assume them;
-- check the privacy canaries against the artifacts an actual run produces — database, spool, logs, export, snapshots;
-- record every finding in `.scratch/` with a severity and an owner.
+The phase paid for itself in the first hour, and what it proved is worth stating plainly: **`npm run check` was green the entire time.** Every defect it found was invisible to a suite of 413 tests, and each one names its own blind spot — fixtures with one provider per source where real histories have five; fixtures small enough that reading all of them costs nothing; an injected prompt port that never sees an already-closed stream; a constant naming another package's version with nothing tying the two together; and a host test asserting that an event was written rather than where it landed.
 
-**Findings policy:** P0/P1 ship as `1.0.1` immediately; a known P1 does not sit on `latest` for the length of a feature release. P2/P3 are triaged into the minors below.
+The three P1s were: re-running `setup` erasing a source's history from every forecast, permanently; the CLI installing a plugin three minors old and telling anyone on the current one to downgrade; and live capture emitting a null provider, so no live observation could ever be attributed, on the exact OpenCode version the support matrix listed as supported.
 
-**Exit:** the run is recorded, every finding is triaged, and no P0/P1 is outstanding.
+What held: the content-free invariant, swept with 1186 canaries built from the real sources rather than from the fixture file, zero hits across database, backups, spool, state and exports — with a control proving the sweep finds content when content is there. And all four quality budgets, measured rather than assumed.
 
-### 1.1.0 - Interface, and the documentation restructure
+**The lesson that outlives the phase:** a green gate is evidence that the code does what the tests describe, never that the tests describe what a user does. This is why the review ran against the published artifact and not the tree, and why it is worth repeating whenever a release changes a capture path.
 
-**Purpose:** the terminal output is the product's only surface, and it is currently unreadable.
+**Exit, met:** the run is recorded, every finding is triaged, and no P0/P1 is outstanding.
 
+### 1.0.2 - the review's remaining defects
+
+**Purpose:** close the P2/P3 findings Phase 1 left open. Compatible defect fixes, which is what a patch is for; nothing here adds a command, a flag, or a field.
+
+- **an OpenCode prompt with no assistant reply is emitted, not dropped** ([finding 01](./.scratch/end-to-end-review/issues/01-opencode-drops-unanswered-prompts.md)). Eleven of 194 real prompts vanished without reaching any counter, so a source could not be reconciled against its own history. `docs/specification.md` §4.3 already defines the state they are in — completion `unknown`, outcome `excluded` — and the adapter simply never produced it;
+- **`setup` no longer hangs on a closed stdin** ([08](./.scratch/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md)). `readline/promises`' `question()` never settles when the stream has already ended, so `snack setup < /dev/null` waits forever;
+- **a provider mapped after the first sync attributes its backlog without `--full`, and `doctor` names the providers it is waiting on** ([02](./.scratch/end-to-end-review/issues/02-late-provider-mapping-recovers-nothing.md), [03](./.scratch/end-to-end-review/issues/03-pending-mapping-warning-is-a-dead-end.md)). The pending rows are already retained; nothing replays them, and nothing says which providers they belong to or what to do;
+- **the Claude fingerprint check stops re-reading the whole history on every command** ([06](./.scratch/end-to-end-review/issues/06-fingerprint-check-reads-the-whole-history-every-command.md)). A no-op `sync` reads and parses 222 MB to sample 200 records per file: 238 MB of process RSS, O(total history) where the cursor was designed to make it O(new data).
+
+**Exit:** each fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
+
+### 1.1.0 - Interface, `snack update`, and the documentation restructure
+
+**Purpose:** the terminal output is the product's only surface, and it is currently unreadable. And keeping the product current is currently a manual reconstruction of flags.
+
+- `snack update`: bring the CLI and the capture plugin to the versions that belong together. Phase 1 made the case — upgrading by hand meant reading the local configuration to rebuild the exact `setup` invocation, because any field typed differently starts a new capacity period and retires the evidence. The command already knows every one of those values;
+- **this is the one command allowed to reach the network**, and it needs [ADR-0010](./docs/adr/0010-snack-update-may-reach-the-network.md) before it needs code. "Local only" is a product boundary and `setup` "performs no package fetch itself" is a stated one; an update command that installs packages changes both. The ADR records the scope of the exception rather than letting it become a precedent;
 - colour through `util.styleText` from the standard library — it honours `NO_COLOR`, `FORCE_COLOR`, and TTY detection on its own, so no dependency and no `--color` flag are added;
 - colour never carries meaning alone: the risk label is printed as a word and coloured, so a colourblind reader, a `NO_COLOR` terminal, and a captured log all read the same thing;
 - column-aligned layout, one panel per **capacity source**;
@@ -193,7 +215,7 @@ P0 and P1 block any release. P2/P3 may ship only when documented and assigned.
 - `--json` output is never coloured and never reflows;
 - the documentation restructure and the new roadmap ship in this release rather than as a docs-only patch, which would spend a version and a full npm publish without changing behavior.
 
-**Exit:** rendering is covered by tests with colour forced on and off; no new dependency; `--json` bytes are unchanged from `1.0.x` for the same input.
+**Exit:** rendering is covered by tests with colour forced on and off; no new dependency for colour; `--json` bytes are unchanged from `1.0.x` for the same input; and `snack update` never rotates a capacity period it was not asked to.
 
 ### 1.2.0 - `status --watch` and `man snack`
 
