@@ -151,6 +151,34 @@ export async function preparePluginRegistration(configFile, options) {
   };
 }
 
+/**
+ * The installation this machine already registered, or `null` when nothing is registered.
+ *
+ * `update --finish` needs it because a registration names one installation and SNACK mints a fresh
+ * `installation_id` per configured source: reading it back off the entry is what makes the rewrite
+ * a re-registration of what is there rather than a guess at which source was registered last.
+ *
+ * @param {string} configFile
+ * @returns {Promise<string | null>}
+ */
+export async function readRegisteredInstallationId(configFile) {
+  let source;
+  try {
+    source = await readFile(configFile, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw configError();
+  }
+  const parsed = parse(source, [], { allowTrailingComma: true });
+  if (!isRecord(parsed) || !Array.isArray(parsed.plugin)) return null;
+  const entry = parsed.plugin.find(
+    (plugin) => Array.isArray(plugin) && isSnackPluginSpecifier(plugin[0]),
+  );
+  if (!Array.isArray(entry) || !isRecord(entry[1])) return null;
+  const installationId = entry[1].installation_id;
+  return typeof installationId === "string" ? installationId : null;
+}
+
 /** @param {string} configFile @param {string} content @param {string} expectedContent */
 export async function writePluginRegistration(configFile, content, expectedContent) {
   // OpenCode config can contain credentials; never duplicate it into a SNACK-managed backup.

@@ -162,7 +162,7 @@ the honest uncertainty it is.
 A plan profile provides weak initial assumptions, pressure weights, and provenance. Bundled profiles:
 
 - ship with npm releases;
-- never update over the network at runtime;
+- never update over the network at runtime, and are not what `snack update` fetches — it installs the package, and a new profile arrives inside it;
 - include profile ID, version, publication/as-of date, source/provenance, prior strength, and dimension weights;
 - may not claim a quota value that SNACK presents as real capacity.
 
@@ -590,7 +590,7 @@ The ingestion cursor is a single high-watermark and cannot express a purged midd
 
 Confirmation is required unless `--dry-run` or `--yes` is given, and the confirmation is the source alias typed back rather than a single keystroke. Without a terminal, or in `--json` mode where prompting would break the one-document contract, purge exits `2`.
 
-**Purge takes no pre-purge backup.** Leaving a copy of just-deleted records on disk would contradict what the command promises, and §3.5.7 already states that purged records are not restorable. Consequently purge has no I/O failure of its own: storage failures exit `5`, configuration write failures exit `3`, and misuse exits `2`. Exit code `6` in §12.10 is reached by `export` alone.
+**Purge takes no pre-purge backup.** Leaving a copy of just-deleted records on disk would contradict what the command promises, and §3.5.7 already states that purged records are not restorable. Consequently purge has no I/O failure of its own: storage failures exit `5`, configuration write failures exit `3`, and misuse exits `2`. Exit code `6` in §12.11 is reached by `export` alone.
 
 ### 12.9 `snack config`
 
@@ -602,7 +602,25 @@ snack config path
 
 Values are parsed and validated against the configuration schema before atomic replacement. Sensitive values are not supported because SNACK configuration must not contain provider credentials.
 
-### 12.10 Exit Codes
+### 12.10 `snack update`
+
+```text
+snack update [--yes] [--dry-run] [--json]
+```
+
+Brings the CLI and the capture plugin to versions that belong together, and is the only command permitted to reach the network ([ADR-0010](./adr/0010-snack-update-may-reach-the-network.md)).
+
+It resolves how the CLI was installed from the running module's path, the working directory and the lockfile beside the project root, covering npm, pnpm, bun and yarn across global and local layouts. **An unrecognized layout refuses** with exit `4`, naming the resolved path and the command to run by hand: installing into a place the user did not expect, silently, is worse than not installing.
+
+The resolved command is printed and confirmed before anything runs. `--dry-run` prints and exits; `--yes` skips the confirmation for automation; without either, and with no terminal or in JSON mode, it refuses rather than installing unasked.
+
+Only `@snack-ai/cli` is installed. SNACK never installs the capture plugin — it writes a package specifier that OpenCode resolves — so the matched pair arrives through the registration rather than through a second install.
+
+After a successful install the command re-execs the newly installed binary, which re-registers the plugin at the pin that build carries. The running process only knows the pin it shipped with, and registering from it would write the version being replaced. This step **never rotates a capacity period**: it does not go through `setup`, and therefore never reaches the code that could. A registration is rewritten only if one already exists; nothing registered means live capture was never asked for, and `update` does not start it.
+
+A failed install exits `4` and changes nothing. Offline, a proxy, a registry outage or a private mirror are failures of the environment and are reported as such, never as an internal error.
+
+### 12.11 Exit Codes
 
 Initial stable categories:
 
@@ -637,7 +655,11 @@ Breaking field changes require a schema-version and SemVer decision. Human forma
 
 ## 14. Privacy and Safety Behavior
 
-SNACK makes no background network request. Runtime network access is not required for setup, sync, status, stats, prediction, doctor, export, purge, or config. npm installation/update and OpenCode's later resolution of a user-approved registered plugin package are outside SNACK application runtime.
+SNACK makes no background network request, and no command that observes, stores, analyzes or reports opens a socket: not setup, sync, status, stats, prediction, doctor, export, purge, or config. That is a release gate rather than a claim — every one of them runs in the suite with network access denied, with a control proving the denial is real.
+
+`snack update` is the single exception, scoped by [ADR-0010](./adr/0010-snack-update-may-reach-the-network.md). It invokes the user's own package manager to install `@snack-ai/cli`, then re-registers the capture plugin from values already in local configuration. The request carries a package name and a version and nothing else — nothing derived from observations, prompts, usage, timings, identifiers or configuration travels in either direction. It never runs implicitly: no schedule, no side effect of another command, no availability probe. A failed install changes nothing, because the registration is only rewritten by the process that follows a successful one.
+
+OpenCode's later resolution of a user-approved registered plugin package remains outside SNACK application runtime.
 
 Local files use private permissions. Neither the MVP nor 1.0 claims application-level encryption. Optional complete database encryption is post-1.0 and must not be represented by partial field encryption.
 

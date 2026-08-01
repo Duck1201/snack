@@ -18,8 +18,9 @@ SNACK is a small command that tries to give you that warning.
 
 It reads the history your AI coding tool already keeps on your own machine, works out how hard you
 have been going lately, and tells you how likely your next prompt is to go through. That is the
-whole idea. No account, no signup, no server, no telemetry. It never sends anything anywhere,
-because there is nowhere for it to send anything to.
+whole idea. No account, no signup, no server, no telemetry. No command that touches your data
+touches the network, because there is nowhere for it to send anything to. `snack update` is the one
+exception, and it only installs packages.
 
 ```bash
 npm install -g @snack-ai/cli
@@ -93,6 +94,7 @@ fails the build if a single one shows up in any byte SNACK writes.
 | `snack data purge`                            | Deletes a scope you choose, transactionally, after showing you exactly what goes.                         |
 | `snack config`                                | Reads and edits local configuration.                                                                      |
 | `snack doctor`                                | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.              |
+| `snack update`                                | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.   |
 
 Every command takes `--json` and answers with one versioned document, so scripting it never means
 parsing prose.
@@ -282,9 +284,20 @@ Requires Node.js 24 on Linux, macOS, or Windows through WSL2.
 
 ### Upgrading
 
+**From `1.1.0`, run `snack update`.** It works out how this CLI was installed, shows you the exact
+command before running it, installs, and then re-registers the capture plugin at the version this
+release was validated against. Doing that by hand meant reading your own configuration back and
+retyping five values into `setup` exactly — and any one of them typed differently starts a new
+capacity period, which retires everything SNACK has learned about that source. `snack update` never
+rotates a capacity period.
+
+It is also the only command in the product that reaches the network, and it carries a package name
+and a version and nothing else. If SNACK cannot tell how it was installed, it refuses and prints the
+command to run yourself rather than installing somewhere you did not expect.
+
 `0.6.0` is the guaranteed migration baseline: every release from it forward preserves your data and
-configuration through documented migrations. Install, then run `snack sync` — the first command that
-opens storage for writing applies pending migrations, taking a backup first. Read-only commands
+configuration through documented migrations. After installing, run `snack sync` — the first command
+that opens storage for writing applies pending migrations, taking a backup first. Read-only commands
 refuse rather than crash until it has.
 
 The full upgrade path, including the one payload that changed shape at the `0.9` freeze, is in
@@ -318,8 +331,9 @@ SNACK é um comando pequeno que tenta te dar esse aviso.
 
 Ele lê o histórico que sua ferramenta de IA já guarda na sua própria máquina, calcula o quanto você
 tem forçado ultimamente, e diz o quão provável é que o próximo prompt passe. É essa a ideia inteira.
-Sem conta, sem cadastro, sem servidor, sem telemetria. Nunca manda nada para lugar nenhum, porque
-não existe lugar nenhum para onde mandar.
+Sem conta, sem cadastro, sem servidor, sem telemetria. Nenhum comando que toca seus dados toca a
+rede, porque não existe lugar nenhum para onde mandar. O `snack update` é a única exceção, e ele só
+instala pacotes.
 
 ```bash
 npm install -g @snack-ai/cli
@@ -394,6 +408,7 @@ escreve.
 | `snack data purge`                            | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                 |
 | `snack config`                                | Lê e edita a configuração local.                                                                                             |
 | `snack doctor`                                | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                     |
+| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                     |
 
 Todo comando aceita `--json` e responde com um documento versionado, então automatizar nunca
 significa fazer parsing de prosa.
@@ -585,10 +600,21 @@ Requer Node.js 24 em Linux, macOS ou Windows via WSL2.
 
 ### Atualizando
 
+**A partir da `1.1.0`, rode `snack update`.** Ele descobre como este CLI foi instalado, mostra o
+comando exato antes de rodar, instala, e depois re-registra o plugin de captura na versão contra a
+qual esta release foi validada. Fazer isso à mão significava ler a sua própria configuração de volta
+e redigitar cinco valores no `setup` exatamente iguais — e qualquer um deles digitado diferente abre
+um novo período de capacidade, o que aposenta tudo o que o SNACK aprendeu sobre aquela fonte. O
+`snack update` nunca rotaciona um período de capacidade.
+
+Ele também é o único comando do produto que alcança a rede, e carrega um nome de pacote e uma
+versão, mais nada. Se o SNACK não conseguir descobrir como foi instalado, ele recusa e imprime o
+comando para você rodar, em vez de instalar num lugar que você não esperava.
+
 `0.6.0` é a linha de base garantida de migração: toda release a partir dela preserva seus dados e
-configuração através de migrações documentadas. Instale e rode `snack sync` — o primeiro comando que
-abre o armazenamento para escrita aplica as migrações pendentes, tirando um backup antes. Comandos
-somente-leitura recusam em vez de quebrar até que isso aconteça.
+configuração através de migrações documentadas. Depois de instalar, rode `snack sync` — o primeiro
+comando que abre o armazenamento para escrita aplica as migrações pendentes, tirando um backup
+antes. Comandos somente-leitura recusam em vez de quebrar até que isso aconteça.
 
 O caminho completo de atualização, incluindo o único payload que mudou de formato no congelamento da
 `0.9`, está em

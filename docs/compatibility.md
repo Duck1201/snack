@@ -146,6 +146,22 @@ Every artifact-level gate is unchanged and did run: the isolated staging registr
 checksums, CycloneDX SBOMs, a double-pack reproducibility comparison, the migration chains from
 every published release since the `0.6.0` floor, and the three-platform CI matrix.
 
+## What 1.1.0 adds, and why it is a minor
+
+`snack update` is a new command with `--yes`, `--dry-run` and `--json`. A new command and new flags
+are additive: nothing documented was removed, renamed, or given a different meaning, so this is a
+minor under the strict SemVer that `1.0` confirmed. The literal map in `contracts.test.js` gains a
+row, which is how the addition is visible in a diff rather than only in a release note.
+
+`snack update --finish` is **not** part of the frozen surface. It is internal, hidden from `--help`,
+and exists because a process cannot become a different version of itself. Since the surface test
+reads help text, a hidden flag is invisible to it by construction — so a separate assertion holds it
+out of the help, rather than the absence being an accident nobody would notice.
+
+The `--json` envelope, every payload schema, the export document, the configuration schema, the
+spool contract and the exit-code categories are unchanged. `update` reports under the existing
+envelope with a new payload schema of its own; no existing document gains or loses a field.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

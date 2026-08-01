@@ -65,6 +65,9 @@
     },
     {
       "$ref": "#/$defs/payloadOf/data-purge"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/update"
     }
   ],
   "$defs": {
@@ -305,6 +308,30 @@
           "properties": {
             "data": {
               "$ref": "https://snack-ai.dev/schemas/commands/data-purge.schema.json"
+            }
+          }
+        }
+      },
+      "update": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "update"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/update.schema.json"
             }
           }
         }

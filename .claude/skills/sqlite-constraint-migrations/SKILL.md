@@ -130,6 +130,25 @@ commits and leaves the schema pointing at a table that no longer exists.
 
 - **`PRAGMA foreign_keys = OFF` at the top of the migration.** Silently ignored inside the runner's
   transaction. No error, no effect — this is what makes the trap expensive.
+- **`PRAGMA legacy_alter_table = ON` as a way around the rebuild.** It would make
+  `ALTER TABLE ... RENAME` leave every child's `REFERENCES` clause alone, which would rebuild a
+  parent without touching its children at all — very attractive when a child is the observations
+  table. It is ignored inside the transaction the same way, and fails the same silent way:
+
+  ```
+  child DDL after rename: ... REFERENCES "parent_old"(id) ...
+  SqliteError: FOREIGN KEY constraint failed
+  ```
+
+  Generalize from the two: **assume no pragma can be set from inside a migration.** The runner opens
+  the transaction before the first statement, so whatever the connection is holding is what you get.
+
+- **Rebuilding a parent whose child is large.** The cost is not the parent, it is every child: with
+  `foreign_keys = ON` there is no way to drop the parent without dropping them first. Before
+  committing to a rebuild, list the children and their sizes — `capacity_period` looks like a
+  handful of rows until you notice `prompt_execution` references it, and then the migration copies
+  the user's whole history out and back. That may still be right; it should be a decision and not a
+  surprise.
 - **Seeding the upgrade test through `storeObservations`.** It writes today's columns, which the
   older schema does not have, so the test fails with `SQLITE_ERROR` before it ever reaches the
   migration. The database under test has to be what the _older_ binary would have left behind, so

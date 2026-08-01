@@ -1,4 +1,7 @@
+import dns from "node:dns";
+import dnsPromises from "node:dns/promises";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -19,6 +22,61 @@ export async function cleanupRunFixtures() {
   await Promise.all(
     temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
+}
+
+/**
+ * Deny every way this process could reach the network, and record any attempt.
+ *
+ * ADR-0010 makes one command an exception to "local only", which turns "no command opens a socket"
+ * from a structural fact into a property that has to be proven. Node cannot enforce this: its
+ * permission model covers `fs`, `child_process`, `worker`, `wasi` and `addons`, and there is no
+ * `--allow-net`. So the denial is built here instead.
+ *
+ * Patched at `net.Socket.prototype.connect` rather than at `net.connect`, because `http`, `https`,
+ * `tls` and `fetch` all end up there, and because replacing a named export would not reach code
+ * that already destructured it.
+ *
+ * ponytail: this proves the paths a test exercises, not the paths it does not. The complement is a
+ * static walk of the import graph that fails when a module outside `update.js` imports a networking
+ * builtin -- worth adding when a dependency, rather than this code, becomes the thing to doubt.
+ *
+ * @returns {{attempts: string[], restore(): void}}
+ */
+export function denyNetwork() {
+  /** @type {string[]} */
+  const attempts = [];
+  /** @param {string} label */
+  const deny =
+    (label) =>
+    (/** @type {unknown[]} */ ...args) => {
+      attempts.push(`${label}(${args.map((value) => String(value)).join(", ")})`);
+      throw new Error(`Network access denied in this test: ${label}`);
+    };
+
+  const socketConnect = net.Socket.prototype.connect;
+  const originalFetch = globalThis.fetch;
+  const lookup = dns.lookup;
+  const promisesLookup = dnsPromises.lookup;
+
+  net.Socket.prototype.connect = deny("net.Socket.connect");
+  // `fetch` rejects rather than throwing, so a caller that only catches asynchronously still sees
+  // the denial the way it would see a real failure.
+  globalThis.fetch = /** @type {typeof globalThis.fetch} */ (
+    async (/** @type {unknown[]} */ ...args) => deny("fetch")(...args)
+  );
+  // @ts-expect-error -- the stub deliberately does not match the overloaded signature.
+  dns.lookup = deny("dns.lookup");
+  dnsPromises.lookup = /** @type {typeof dnsPromises.lookup} */ (deny("dns.promises.lookup"));
+
+  return {
+    attempts,
+    restore() {
+      net.Socket.prototype.connect = socketConnect;
+      globalThis.fetch = originalFetch;
+      dns.lookup = lookup;
+      dnsPromises.lookup = promisesLookup;
+    },
+  };
 }
 
 /** @param {string} [prefix] */
@@ -54,10 +112,15 @@ export async function makeRunFixture(prefix = "snack-main-") {
       platform,
       nodeVersion: "24.18.1",
       now: new Date("2026-01-02T03:04:05.000Z"),
+      // Every injected port is listed here, typed and unset. Widening the whole bag to `RunOptions`
+      // instead would make `env` optional for the several dozen tests that read it back.
       writeConfig:
         /** @type {typeof import("../../src/config.js").writePrivateAtomic | undefined} */ (
           undefined
         ),
+      prompt: /** @type {import("../../src/main.js").SetupPrompt | undefined} */ (undefined),
+      modulePath: /** @type {string | undefined} */ (undefined),
+      execute: /** @type {import("../../src/main.js").ExecuteCommand | undefined} */ (undefined),
     },
   };
 }
