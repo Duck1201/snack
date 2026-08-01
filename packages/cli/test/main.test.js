@@ -1206,6 +1206,48 @@ test("ambiguous OpenCode provider profiles remain pending without affecting fore
   );
 });
 
+test("the pending-mapping warning names the providers and what to do about them", async () => {
+  // "183 schema-valid observation(s) need an explicit mapping." was the whole message. It does not
+  // say which providers are waiting, how many each has, or what the remedy is -- and a real
+  // OpenCode history is multi-provider, so this is the state a new user lands in. SNACK has all of
+  // it: `pending_mapping` stores the provider and model per row.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-openai",
+      "--provider",
+      "openai",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+  await run(["node", "snack", "sync", "--full", "--json"], fixture.options);
+  fixture.stdout.value = "";
+
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const check = /** @type {{id: string, status: string, message: string}[]} */ (
+    JSON.parse(fixture.stdout.value).data.checks
+  ).find((one) => one.id === "source_mapping:personal-openai");
+
+  assert.equal(check?.status, "warn");
+  // The provider the observations actually carry, with its count.
+  assert.match(check?.message ?? "", /anthropic 1/u);
+  // And the command that attributes them, because a mapping added later is not applied to what the
+  // cursor already passed -- `pending_mapping` keeps no payload to replay from.
+  assert.match(check?.message ?? "", /snack sync --full/u);
+});
+
 test("mapped providers do not create false pending mappings on sibling sources", async () => {
   const fixture = await makeRunFixture();
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);

@@ -750,6 +750,40 @@ test("treats tool-calls finish as provisional even with a completed step", async
   );
 });
 
+test("a prompt whose assistant reply never arrived is emitted, not dropped", async () => {
+  // Eleven of 194 real prompts disappeared this way -- every one of them with no assistant message
+  // naming it as a parent. They reached no counter either: `sync` reported `read 183` and 183 was
+  // already the post-drop number, so a source could not be reconciled against its own history.
+  // `docs/specification.md` 4.3 defines the state they are in -- completion `unknown`, outcome
+  // `excluded`, "ambiguity prevents a valid success/restriction label" -- and an excluded
+  // observation still contributes its descriptive dimensions.
+  const databaseFile = await createFixtureDatabase("supported-v1.sql");
+  const database = new Database(databaseFile);
+  try {
+    database.exec(
+      `INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+         ('user-unanswered', 'session-1', 1767323400000, 1767323400000,
+          '{"role":"user","time":{"created":1767323400000},"agent":"build","model":{"providerID":"anthropic","modelID":"claude-sonnet"}}');`,
+    );
+  } finally {
+    database.close();
+  }
+
+  const observations = createOpenCodeAdapter({ databaseFile }).readSince(null).observations;
+  const orphan = observations.find((one) => one.source_prompt_id === "user-unanswered");
+
+  assert.ok(orphan, "the prompt with no assistant reply reached no observation at all");
+  // `provisional` rather than the spec's `unknown`: `prompt_execution.completion` is constrained to
+  // two values, so `unknown` needs a table rebuild. Nothing recorded says this prompt finished, and
+  // `excluded` is what keeps it out of the outcome model either way.
+  assert.equal(orphan.completion, "provisional");
+  assert.equal(orphan.outcome, "excluded");
+  assert.deepEqual(orphan.restrictions, []);
+  // It has a provider and a start, which is what makes it worth keeping.
+  assert.equal(orphan.provider, "anthropic");
+  assert.equal(orphan.completed_at, null);
+});
+
 /** @param {string} fixtureName */
 async function createFixtureDatabase(fixtureName) {
   const root = await mkdtemp(join(tmpdir(), "snack-opencode-adapter-"));

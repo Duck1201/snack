@@ -1,5 +1,6 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir as systemHomedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 
@@ -132,16 +133,74 @@ export function createClaudeAdapter(options) {
 function hasSupportedStructure(projectsDirectory) {
   let recognized = 0;
   for (const sessionFile of listReadableFiles(projectsDirectory)) {
-    let inspected = 0;
-    for (const record of readRecords(sessionFile)) {
+    for (const record of readSampleRecords(sessionFile, fingerprintSampleSize).records) {
       if (record.type !== "user" && record.type !== "assistant") continue;
-      if (inspected >= fingerprintSampleSize) break;
-      inspected += 1;
       if (!isSupportedTurnRecord(record)) return false;
       recognized += 1;
     }
   }
   return recognized > 0;
+}
+
+/**
+ * Read just enough of a transcript to recognize its shape.
+ *
+ * The fingerprint inspects at most `fingerprintSampleSize` records per file and then stops — but it
+ * used to stop inside an array `readRecords` had already built by reading the whole file and
+ * parsing every line. Sampling 200 records from a 9 MB transcript cost 9 MB, on every file, on
+ * every command that synchronizes. Over a real 222 MB history that was 238 MB of process RSS for a
+ * `sync` with nothing to read: O(total history) where the cursor was designed to make the work
+ * O(new data).
+ *
+ * Reading forward in chunks and stopping at the sample bounds it by the sample instead. This is the
+ * same class of sampling the check already did — it never looked past 200 records per file — so
+ * what it can conclude is unchanged; only what it reads to conclude it moves.
+ *
+ * @param {string} sessionFile
+ * @param {number} limit records to collect
+ * @returns {{records: Record<string, unknown>[], bytesRead: number}}
+ */
+export function readSampleRecords(sessionFile, limit) {
+  /** @type {Record<string, unknown>[]} */
+  const records = [];
+  let bytesRead = 0;
+  let handle;
+  try {
+    handle = openSync(sessionFile, "r");
+  } catch {
+    // A transcript deleted between listing and reading is absence of evidence, exactly as it is
+    // for a subagent file in `readRecords`.
+    return { records, bytesRead };
+  }
+  try {
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let pending = "";
+    while (records.length < limit) {
+      const read = readSync(handle, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      bytesRead += read;
+      pending += chunk.toString("utf8", 0, read);
+      let newline = pending.indexOf("\n");
+      while (newline !== -1 && records.length < limit) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (line !== "") {
+          try {
+            records.push(JSON.parse(line));
+          } catch {
+            // The fingerprint asks what shape the readable records have. A line that does not parse
+            // is `readRecords`' problem to report, and it reads the file properly.
+          }
+        }
+        newline = pending.indexOf("\n");
+      }
+    }
+    // A final line with no trailing newline is a session being written right now; `readRecords`
+    // skips it for the same reason.
+  } finally {
+    closeSync(handle);
+  }
+  return { records, bytesRead };
 }
 
 /** @param {Record<string, unknown>} record */

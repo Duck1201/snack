@@ -11,6 +11,7 @@ import { setupJournalFile } from "./setup-journal.js";
 import {
   inspectDatabase,
   readPendingMappingCount,
+  readPendingMappingProviders,
   readSourceSummary,
   readSpoolCursors,
   readSpoolIssueCount,
@@ -186,10 +187,7 @@ export async function runDoctor(paths, options = {}) {
               `source_mapping:${source.alias}`,
               "Provider and local profile mapping are explicit.",
             )
-          : warn(
-              `source_mapping:${source.alias}`,
-              `${pending} schema-valid observation(s) need an explicit mapping.`,
-            ),
+          : warn(`source_mapping:${source.alias}`, pendingMappingDetail(paths, source, pending)),
       );
     } catch {
       checks.push(warn(`source_mapping:${source.alias}`, "Pending source mappings are unknown."));
@@ -435,6 +433,34 @@ function planProfileCheck(source, now) {
   return ageDays > PLAN_PROFILE_STALE_DAYS
     ? warn(id, `Plan profile ${description} is older than ${PLAN_PROFILE_STALE_DAYS} days.`)
     : pass(id, `Plan profile ${description}.`);
+}
+
+/**
+ * Say which providers a source is waiting on, and how to attribute them.
+ *
+ * A count on its own is not actionable, and the compatibility policy asks `doctor` for actionable
+ * output. `snack sync --full` is named because a mapping configured after the first synchronization
+ * is not applied to what the cursor already passed: `pending_mapping` keeps identifiers, not the
+ * observation, so there is nothing to replay from and the source has to be read again.
+ *
+ * @param {import("./paths.js").SnackPaths} paths
+ * @param {{alias: string}} source
+ * @param {number} pending
+ */
+function pendingMappingDetail(paths, source, pending) {
+  const sentence = `${pending} schema-valid observation(s) need an explicit mapping.`;
+  let providers;
+  try {
+    providers = readPendingMappingProviders(paths.databaseFile, source.alias);
+  } catch {
+    return sentence;
+  }
+  if (providers.length === 0) return sentence;
+  const named = providers.map(({ provider, count }) => `${provider} ${count}`).join(", ");
+  return (
+    `${sentence} Waiting on: ${named}. Configure each with \`snack setup\` and its --provider, ` +
+    "then run `snack sync --full` to attribute what is already stored."
+  );
 }
 
 /** @param {string} id @param {string} message @returns {DoctorCheck} */
