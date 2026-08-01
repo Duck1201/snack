@@ -519,6 +519,8 @@ function readAffectedSessionIds(database, boundary) {
  * @property {number} time_created
  * @property {number} time_updated
  * @property {unknown} json_created
+ * @property {unknown} user_provider
+ * @property {unknown} user_model
  * @property {number} is_compaction
  * @property {number} is_continuation
  * @property {unknown} compaction_overflow
