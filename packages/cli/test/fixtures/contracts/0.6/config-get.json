@@ -1,0 +1,41 @@
+{
+  "schema_version": "1",
+  "command": "config get",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "key": null,
+    "value": {
+      "schema_version": 1,
+      "sources": [
+        {
+          "alias": "work",
+          "installation_id": "a71873ff-c28a-4e39-9d37-3aa74894f596",
+          "adapter": "opencode",
+          "database": "{{root}}/opencode.db",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "plan_profile": "generic",
+          "fingerprint": "oc-sqlite-msgpart-v1"
+        }
+      ],
+      "analysis": {
+        "horizons": [
+          "PT1H",
+          "PT5H",
+          "P1D",
+          "P7D"
+        ]
+      },
+      "presentation": {
+        "json": false
+      },
+      "prospective_analysis": {
+        "enabled": false
+      }
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

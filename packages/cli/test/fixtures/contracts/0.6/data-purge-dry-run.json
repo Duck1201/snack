@@ -1,0 +1,22 @@
+{
+  "schema_version": "1",
+  "command": "data purge",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "dry_run": true,
+    "scope": {
+      "source": "work"
+    },
+    "counts": {
+      "prompts": 1,
+      "predictions": 1
+    },
+    "cursor_reset": [
+      "work"
+    ],
+    "tombstones": 0
+  },
+  "warnings": [],
+  "errors": []
+}
