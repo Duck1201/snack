@@ -112,6 +112,29 @@ export function isConfiguredSource(value) {
 }
 
 /**
+ * Refuse an alias no configured capacity source answers to.
+ *
+ * Every command that narrows to one source owes the same answer to a typo, so the guard lives here
+ * rather than being restated per command — `doctor` restated it by omission and reported a healthy
+ * installation for an alias that did not exist.
+ *
+ * @param {string | undefined} alias
+ * @param {unknown} sources the `sources` array as it came out of the configuration
+ */
+export function requireConfiguredSource(alias, sources) {
+  if (alias === undefined) return;
+  const configured = Array.isArray(sources) ? sources : [];
+  if (configured.some((source) => isConfiguredSource(source) && source.alias === alias)) return;
+  // Never echo the value back. An alias arrives from argv, and argv is exactly where someone pastes
+  // something private by accident; a rejected value must not travel into a JSON document that gets
+  // shared.
+  throw new SnackError("The requested capacity source is not configured.", {
+    code: ExitCode.unavailable,
+    reason: "source_not_configured",
+  });
+}
+
+/**
  * @param {string} text
  * @returns {Record<string, unknown>}
  */

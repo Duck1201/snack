@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { access, constants, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { isConfiguredSource, readConfig } from "./config.js";
+import { isConfiguredSource, readConfig, requireConfiguredSource } from "./config.js";
 import { SnackError } from "./errors.js";
 import { createSourceAdapter } from "./source-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
@@ -111,6 +111,9 @@ export async function runDoctor(paths, options = {}) {
   if (backupFiles) checks.push(backupFiles);
 
   const sources = Array.isArray(config?.sources) ? config.sources : [];
+  // Before any check is reported, because a report is an answer and there is no honest answer to
+  // give about a source that does not exist.
+  requireConfiguredSource(options.source, sources);
   // Only an installation that actually configured OpenCode has any reason to hear about the
   // OpenCode capture plugin. Telling a Claude-only user their OpenCode plugin is unregistered is
   // an answer to a question they did not ask.

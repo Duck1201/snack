@@ -13,6 +13,7 @@ import {
   prepareConfigValue,
   prepareConfigValues,
   readConfig,
+  requireConfiguredSource,
   withConfigLock,
   writePrivateAtomic,
 } from "./config.js";
@@ -1852,19 +1853,7 @@ async function settleStagedExport(targets, outcome) {
  * @returns {import("./export.js").ExportScope}
  */
 function buildExportScope(commandOptions, config) {
-  const sources = Array.isArray(config.sources) ? config.sources : [];
-  if (
-    commandOptions.source !== undefined &&
-    !sources.some((source) => isConfiguredSource(source) && source.alias === commandOptions.source)
-  ) {
-    // Never echo the value back. An alias arrives from argv, and argv is exactly where someone
-    // pastes something private by accident; a rejected value must not travel into a JSON
-    // document that gets shared.
-    throw new SnackError("The requested capacity source is not configured.", {
-      code: ExitCode.unavailable,
-      reason: "source_not_configured",
-    });
-  }
+  requireConfiguredSource(commandOptions.source, config.sources);
   const since =
     commandOptions.since === undefined
       ? undefined
