@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
+
+import Database from "better-sqlite3";
 
 import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
+import { pluginPackageSpec, resolveOpenCodeConfig } from "../src/opencode-config.js";
 import { resolveUpdatePlan } from "../src/update.js";
-import { cleanupRunFixtures, makeRunFixture } from "./fixtures/run-fixture.js";
+import {
+  cleanupRunFixtures,
+  createOpenCodeDatabase,
+  makeRunFixture,
+} from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
 
@@ -243,4 +251,95 @@ test("an install that fails leaves the pair as it was, and reads as an environme
   // The install was attempted and nothing followed it -- no re-exec, so no registration rewritten.
   assert.equal(fixture.executions.length, 1);
   assert.match(fixture.stderr.value, /nothing was changed/u);
+});
+
+/**
+ * A fixture with one configured OpenCode source and the plugin registered, so `--finish` has
+ * something real to rewrite.
+ */
+async function makeFinishFixture() {
+  const fixture = await makeUpdateFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "work",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+      "--install-plugin",
+      "--yes",
+    ],
+    fixture.options,
+  );
+  fixture.stdout.value = "";
+  return fixture;
+}
+
+/** Every capacity period row, in a form a diff can show. */
+function capacityPeriods(/** @type {string} */ databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return JSON.stringify(
+      database.prepare("select * from capacity_period order by rowid").all(),
+      null,
+      2,
+    );
+  } finally {
+    database.close();
+  }
+}
+
+test("--finish rewrites the registration to this build's pin", async () => {
+  const fixture = await makeFinishFixture();
+  const configFile = resolveOpenCodeConfig({ env: fixture.options.env, home: fixture.root });
+  // Stand the registration on an older pin, which is the state an upgrade actually finds.
+  const stale = (await readFile(configFile, "utf8")).replaceAll(
+    pluginPackageSpec,
+    "@snack-ai/opencode@0.9.0",
+  );
+  await writeFile(configFile, stale, "utf8");
+
+  const code = await run(["node", "snack", "update", "--finish"], fixture.options);
+
+  assert.equal(code, ExitCode.success);
+  const written = await readFile(configFile, "utf8");
+  assert.match(written, new RegExp(pluginPackageSpec.replaceAll("/", "\\/"), "u"));
+  assert.doesNotMatch(written, /0\.9\.0/u);
+});
+
+test("--finish leaves every capacity period byte-identical", async () => {
+  // The exit criterion, asserted against the rows rather than against which function was called:
+  // an upgrade is not a change of capacity regime, and rotating one here would retire the user's
+  // accumulated evidence for doing the thing the product told them to do.
+  const fixture = await makeFinishFixture();
+  const before = capacityPeriods(fixture.paths.databaseFile);
+  assert.match(before, /"source_alias": "work"/u, "the fixture has no period to leave alone");
+
+  const code = await run(["node", "snack", "update", "--finish"], fixture.options);
+
+  // Asserted before the comparison: a command that refused to run also changes nothing, and would
+  // make this pass while proving the opposite of what it claims.
+  assert.equal(code, ExitCode.success);
+  assert.equal(capacityPeriods(fixture.paths.databaseFile), before);
+});
+
+test("--finish with nothing registered does not start registering a plugin", async () => {
+  // Someone who never asked for live capture ran an upgrade. Creating a registration here would
+  // turn on a capture path they did not choose, on the command that was meant to keep them current.
+  const fixture = await makeUpdateFixture();
+  const configFile = resolveOpenCodeConfig({ env: fixture.options.env, home: fixture.root });
+
+  const code = await run(["node", "snack", "update", "--finish"], fixture.options);
+
+  assert.equal(code, ExitCode.success);
+  await assert.rejects(readFile(configFile, "utf8"), { code: "ENOENT" });
 });
