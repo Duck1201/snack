@@ -3,13 +3,13 @@ name: snack-fuzz-a-trust-boundary
 description: >
   Write a property test that actually finds defects at one of SNACK's trust boundaries — a client
   adapter (Claude JSONL, OpenCode message/part blobs), the spool NDJSON reader, or argv. Use when
-  asked to fuzz, property-test, or harden ingestion or the CLI surface, and whenever a stage asks
-  for "fuzz/property tests". Also use before trusting a green fixture suite as evidence that a
-  parser fails closed: fixtures only ever contain the shapes someone already thought of.
+  asked to fuzz, property-test, or harden ingestion or the CLI surface, whenever a stage asks for
+  "fuzz/property tests", and before trusting a green fixture suite as evidence that a parser fails
+  closed.
 license: MIT
 metadata:
   author: Duck
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Fuzz a SNACK trust boundary
@@ -122,7 +122,8 @@ apply. The generated value shows up somewhere legitimate and the test reads like
 
 For privacy canaries specifically: plant them only in fields that must **not** survive. A spool
 event's `source_code` is a provider error code and is stored on purpose; a canary there fails the
-test for a reason that is not a leak.
+test for a reason that is not a leak. Testing a policy where it does not apply is how a privacy test
+starts getting edited until it passes.
 
 ## Compare the two adapters
 
@@ -155,14 +156,6 @@ boundary that passes for a reason you cannot name has not been tested; it has be
 
 ## What didn't work
 
-- **Generating records from scratch.** Every one was refused as an unrecognized shape, the property
-  passed, and nothing was tested. Degrading a real fixture is what reaches the read path.
-- **Asserting no generated value reaches the observation.** Correct-sounding and wrong: the Claude
-  adapter puts `sessionId` into `source_session_id` raw, on purpose, and storage hashes it. The
-  claim belongs to `privacy.test.js`.
-- **Planting privacy canaries in every field of a spool event.** It failed on the provider error
-  code, which is stored deliberately. Testing a policy where it does not apply is how a privacy test
-  starts getting edited until it passes.
 - **Refusing only a `timestamp` that is present and invalid.** The reasoning was right — Claude Code
   writes `ai-title` and `queue-operation` records with no timestamp and the reader ignores them —
   but the conclusion was wrong: _any_ record can root a turn. The guard belongs in `turnRoots`,

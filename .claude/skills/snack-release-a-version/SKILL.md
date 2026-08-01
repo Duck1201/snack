@@ -11,13 +11,14 @@ description: >
 license: MIT
 metadata:
   author: Duck
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Release a SNACK version
 
-Publishing here is a sequence of gates that each fail quietly. This is the order that works, and the
-specific places where a step looks done and is not.
+Publishing here is a sequence of gates, and each one fails as **success-shaped silence** rather than
+as an error: nothing refuses, nothing reports, the step simply did not happen. This is the order
+that works, and the specific places where a step looks done and is not.
 
 ## Who does what
 
@@ -70,9 +71,8 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
 4. **Choose the channel deliberately.** `dist_tag` is an input of the dispatch (`latest` | `rc` |
    `candidate`), defaulting to `latest`. The rule lives in PLAN.md's npm Channel Policy: each minor
    takes `latest`; `rc` is for release candidates; `candidate` is the temporary tag a major
-   publishes under before `latest` is moved by hand; `stable` is never set by a release; `next` does
-   not exist. Read it rather than assuming — it changed at 0.7.0, again when `next` was retired, and
-   again at 1.0.
+   publishes under before `latest` is moved by hand; `stable` is never set by a release. Read it
+   rather than assuming — it changed at 0.7.0, again when `next` was retired, and again at 1.0.
 
    **For a major, publish to `candidate`, never straight to `latest`.** Publishing to `latest`
    immediately is not faster, it just removes the only window in which a bad artifact harms nobody.
@@ -230,13 +230,9 @@ being what the tag resolves to.
   of fact; writing the intended state makes the document lie, which is the failure this repo spends
   the most effort avoiding.
 - **A `Status:` gate matched with `/^Status:.*pending/m`** while the word "pending" sat on the
-  second line of a wrapped sentence. The gate passed and checked nothing. Prove a new gate _fails_
-  before trusting that it passes.
-- **Gating a release on a version string instead of on content.** `release:check` asserted that
-  `artifacts.md` named the version being released. It does not follow that the file describes that
-  version's artifacts: a later commit can change a packaged file without changing the version. The
-  check has to compare digests, and proving it blocks the stale file _before_ regenerating is what
-  makes it worth having.
+  second line of a wrapped sentence. The gate passed and checked nothing — success-shaped silence in
+  a gate is the same failure as in a dispatch. Prove a new gate _fails_ before trusting that it
+  passes.
 - **`git add -A` while the user is editing in parallel.** It swept an unrelated in-progress edit
   into a release commit. Name the files: `git add scripts/ docs/release/`.
 - **`git checkout -- <file>` as a fallback in a `||` chain.** It restored the committed version over
@@ -263,12 +259,10 @@ recorded  sha256:ef37befdaa246d436d5e2082b9b6f0d800b7a7326ed0c4a4830c83b34eef702
 served    sha256:cc8c52392302d5c9ba044eab2914202a00fe7bed5caaeda22e87c17f3337fd6e
 ```
 
-Packing `origin/main` reproduced the served digest exactly, which said the artifact was right and
-the evidence was stale. `release:check` was widened to compare digests, verified by running it
-against the stale file — where it blocks, naming the digest and the cause — and again after
-regeneration, where it passes. `latest` still pointed at `0.9.0` throughout, so nothing installable
-was ever wrong; then `latest` and `stable` moved to `1.0.0` by hand, `candidate` was removed, and
-`npm view` was the only source consulted before writing `identity.md`.
+Packing `origin/main` reproduced the served digest exactly — the artifact was right and the evidence
+was stale, the `files` trap in Gotchas. `latest` still pointed at `0.9.0` throughout, so nothing
+installable was ever wrong; then `latest` and `stable` moved to `1.0.0` by hand, `candidate` was
+removed, and `npm view` was the only source consulted before writing `identity.md`.
 
 ## Related
 

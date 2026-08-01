@@ -11,7 +11,7 @@ description: >
 license: MIT
 metadata:
   author: Duck
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Version and compatibility-test a SNACK public contract
@@ -134,16 +134,12 @@ the change was breaking.
   `files.includes("schemas")`, not `"schemas/"`.
 - **A new schema file must be added to the packaged-files assertion** in `contracts.test.js`, or it
   ships without anyone noticing it did not.
-- No secrets are involved anywhere in this procedure. Captured documents are content-free by
-  construction (see the privacy canaries in `packages/cli/test/fixtures/privacy-canaries.json`); if
-  a captured fixture ever contains a path or prompt text, that is a **P0 privacy defect**, not a
-  fixture problem.
+- **Captured documents are content-free by construction** (see the privacy canaries in
+  `packages/cli/test/fixtures/privacy-canaries.json`). If a captured fixture ever contains a path or
+  prompt text, that is a **P0 privacy defect**, not a fixture problem.
 
 ## What didn't work
 
-- **Writing the schema first and capturing fixtures afterwards.** By then the export already emitted
-  the new required columns, so the "old" fixtures were indistinguishable from the new ones and
-  proved nothing.
 - **Expecting old exports to validate against the new export schema.** They correctly do not — the
   plan assumed they would. Making `source_bindings` required _is_ a breaking change; the honest
   encoding is a version bump plus an assertion that a version 1 document does not pass as version 2.
