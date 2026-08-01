@@ -575,6 +575,37 @@ test("both packages test against a byte-identical set of privacy canaries", asyn
   assert.equal(cli.equals(plugin), true, "the two canary sets have drifted apart");
 });
 
+test("the published support matrix names families the adapters actually read", async () => {
+  // The support matrix is a release artifact, not commentary: `check-release-readiness.mjs` already
+  // blocks a release whose matrix says its own validation is unfinished. This is the other half --
+  // a matrix that names a schema family no adapter reads is a promise about what SNACK ingests that
+  // nothing in the product keeps. Cheap to assert, and the alternative is noticing by hand at the
+  // one moment nobody is looking, which is the release.
+  // Matched by the client's own prefix rather than by which document a name appears in: the
+  // family-support policy is published once, in the OpenCode document, and names both clients'
+  // families. A first version of this test scanned each document for every prefix and failed on
+  // that shared table, which is the table doing its job.
+  for (const [prefix, adapter] of [
+    ["oc", "opencode-adapter.js"],
+    ["cc", "claude-adapter.js"],
+  ]) {
+    const source = await readFile(new URL(`../src/${adapter}`, import.meta.url), "utf8");
+    /** @type {Set<string>} */
+    const families = new Set();
+    for (const document of ["opencode-support.md", "claude-support.md", "compatibility.md"]) {
+      const matrix = await readFile(new URL(`../../../docs/${document}`, import.meta.url), "utf8");
+      for (const quoted of matrix.match(new RegExp(`\`${prefix}-[a-z0-9-]+-v\\d+\``, "gu")) ?? []) {
+        families.add(quoted.replaceAll("`", ""));
+      }
+    }
+
+    assert.ok(families.size > 0, `the published documents name no ${prefix} schema family at all`);
+    for (const family of families) {
+      assert.ok(source.includes(family), `the docs promise ${family}, ${adapter} never reads it`);
+    }
+  }
+});
+
 test("the packaged files carry every published schema", async () => {
   // A schema that does not ship is a contract nobody downstream can check against.
   const packageJson = JSON.parse(

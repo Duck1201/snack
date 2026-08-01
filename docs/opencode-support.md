@@ -1,7 +1,9 @@
 # OpenCode Support Matrix
 
-SNACK `0.8.x` supports the OpenCode SQLite family `oc-sqlite-msgpart-v1` through read-only
-backfill and accepts live `spool-event-v1` metadata from `@snack-ai/opencode@0.1.x`.
+SNACK `1.0` supports the OpenCode SQLite family `oc-sqlite-msgpart-v1` through read-only backfill
+and accepts live `spool-event-v1` metadata from `@snack-ai/opencode@1.0.x`. The plugin's version
+moved to `1.0.0` with the CLI's; the spool event contract it speaks is still `schema_version` 1,
+and a `0.1.x` plugin still writes a spool this CLI reads.
 
 | OpenCode version | Schema family | Backfill | Live capture |
 | --- | --- | --- | --- |
