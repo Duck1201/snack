@@ -602,15 +602,31 @@ function readRecords(sessionFile, rejected = undefined) {
   const lines = content.split("\n");
   for (const [index, line] of lines.entries()) {
     if (line === "") continue;
+    /** @type {Record<string, unknown>} */
+    let record;
     try {
-      records.push(JSON.parse(line));
+      record = JSON.parse(line);
     } catch {
       // The last line of a file that does not end in a newline is a session Claude Code is
       // writing right now. Any other unparseable line is damage the file has already moved past,
       // and dropping it without a word would make a history quietly incomplete.
       if (index === lines.length - 1) continue;
       rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
+      continue;
     }
+    // A line that parses as JSON is not yet a record this reader can use. `timestamp` becomes
+    // `started_at` and `completed_at` verbatim, so a value that is not a time was stored as one:
+    // `sync` reported it inserted, and every window, freshness and horizon computed over that row
+    // was then computed over a string. Whatever the field holds also travelled out of the source
+    // file and into the database unread, which is the shape a content leak would take.
+    //
+    // Absence is not the failure -- Claude Code keeps adding record types, and the ones this reader
+    // never looks at need not carry a time. A value that is present and is not a time is.
+    if ("timestamp" in record && !Number.isFinite(Date.parse(String(record.timestamp)))) {
+      rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
+      continue;
+    }
+    records.push(record);
   }
   return records;
 }
