@@ -15,6 +15,7 @@ const performance = await readFile(
   new URL("../docs/release/performance.md", import.meta.url),
   "utf8",
 );
+const artifacts = await readFile(new URL("../docs/release/artifacts.md", import.meta.url), "utf8");
 
 if (!/^Trademark gate: passed$/mu.test(identity)) {
   throw new Error("Release blocked: trademark gate is not approved; review the trademark report.");
@@ -46,6 +47,21 @@ if (!/^Freeze gate: passed$/mu.test(compatibility)) {
 // has no evidence that the budgets hold at all.
 if (!/^Performance gate: passed$/mu.test(performance)) {
   throw new Error("Release blocked: record a developer-machine performance measurement.");
+}
+// A stable release ships a checksum, an SBOM, and the claim that its source packs reproducibly.
+// `release:evidence` writes that file from measurement and refuses to write it at all when the two
+// packs disagree, so its presence at the release's own version is the gate.
+if (!/^Artifact evidence gate: passed$/mu.test(artifacts)) {
+  throw new Error("Release blocked: run `npm run release:evidence`.");
+}
+const releasedVersion = JSON.parse(
+  await readFile(new URL("../packages/cli/package.json", import.meta.url), "utf8"),
+).version;
+if (!artifacts.includes(`CLI \`${releasedVersion}\``)) {
+  throw new Error(
+    `Release blocked: docs/release/artifacts.md records a different version than ${releasedVersion}; ` +
+      "rerun `npm run release:evidence`.",
+  );
 }
 
 process.stdout.write("Release identity gates passed.\n");
