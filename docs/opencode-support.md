@@ -45,10 +45,16 @@ warns instead of failing. It stores a content-free `spool-event-v1` stream in SN
 the plugin never opens SQLite or throws capture failures into OpenCode. Unknown future spool schema
 versions are rejected with sanitized diagnostics.
 
-The current plugin contract uses `chat.message`, `session.error`, and `session.idle`. Its event
-fixtures use the documented plugin hook surface and the structured `APIError.data.statusCode` form
-already validated by the supported SQLite source family. Unknown event/schema fields are rejected
-without retaining the raw payload.
+The current plugin contract uses `chat.message`, `chat.params`, `session.error`, and `session.idle`.
+Its event fixtures use the documented plugin hook surface and the structured `APIError.data.statusCode`
+form already validated by the supported SQLite source family. Unknown event/schema fields are
+rejected without retaining the raw payload.
+
+`chat.params` is read for one reason: OpenCode declares `model` **optional** on `chat.message` and
+does not send it on `1.18.10`. Routing a spool segment needs the provider, and a segment written to
+`_pending` is never attributed and never revisited — so a prompt whose provider is not yet known is
+held until `chat.params`, which carries it on the same turn and is not optional. A prompt whose
+provider never arrives is released to `_pending` at its terminal event.
 
 `snack setup opencode` is guided from `0.6.0`. It discovers the database path, its schema
 fingerprint, and the provider identifiers already present in it, then asks only for what OpenCode
