@@ -49,6 +49,10 @@ severity, not a trade-off:
   `packages/cli/migrations/NNN_name.sql` instead.
 - **Version every interpretable contract.** Envelope `schema_version`, spool event `schema_version`,
   and the parser, classifier, and analyzer versions stored on rows.
+- **Documentation ships with the change.** Behavior, flags, output documents, supported clients, and
+  upgrade paths are documented in the same pull request that changes them — in the package
+  `README.md` files npm serves, in the root `README.md` GitHub serves, and in both English and
+  Portuguese. The tarball's README is the only documentation an npm installer ever sees.
 
 ## Tests
 

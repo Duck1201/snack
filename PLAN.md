@@ -101,6 +101,13 @@ The top-level CLI command is `snack`.
 8. Treat privacy and uncertainty as observable product behavior.
 9. Advance releases through reproducible technical evidence, not assertions from an agent.
 10. Keep release stages sequential while parallelizing independent work inside a wave.
+11. **Ship the documentation with the change, in both languages and both places.** A change to
+    behavior, a flag, an output document, a supported client, or an upgrade path is not finished
+    until the package `README.md` that npm serves and the repository documentation GitHub serves
+    both say so, in English and in Portuguese. This is permanent and outlives 1.0: the tarball is
+    the only documentation an npm installer ever sees, and a package whose README describes a
+    version nobody is running teaches its users something false. A stale README is a defect against
+    the release that left it stale, not a chore for the next one.
 
 ## Release Semantics
 

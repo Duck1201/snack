@@ -79,6 +79,41 @@ OpenCode backfill 16.5 s and Claude 13.7 s against 30 s; steady-state memory pas
 MB cap. The OpenCode backfill moved from 14.1 s at `0.9.0` on a machine at load 1.23 rather than
 0.81, while the Claude backfill over the same code path did not move at all. That is the machine.
 
+## Queued into this stage by request
+
+**Documentation for the 800 npm installs, in both languages.** Requested during Wave 1 and done
+before the version cut, because the READMEs are named in each package's `files` array and would
+otherwise ship the `1.0.0` tarball describing `0.6`.
+
+Every README now has the same two-layer shape: a warm, non-technical opening that says what SNACK is
+for and reads the example output in plain words, then a technical section on the model, the evidence
+gates, the pressure percentiles and the calibration metrics — with references, so a reader can check
+the reasoning rather than take it on trust. Both `packages/cli/README.md` and
+`packages/opencode/README.md` carry English and Portuguese; the root `README.md` does too and gains
+the `0.1.0 → 1.0.0` roadmap.
+
+Three things worth recording:
+
+- **The numbers are measured, not written.** A throwaway script seeded 990 prompts across 21 days
+  with ten real restrictions, then captured what `status`, `stats` and `doctor` actually print. The
+  README shows that output verbatim: `95-100% viability`, `pressure high`,
+  `contributors prompts 100th`, Brier `0.010` over 980 replayed forecasts, 449 prompts and USD 10.06
+  across seven days. Delivery principle 9 rejects hand-written numbers, and a README is not exempt.
+- **"Percentages" needed care.** The request asked for percentages and metrics, and the invariant
+  forbids implying real capacity. The percentages shown are the ones SNACK legitimately has — the
+  viability range, pressure percentiles against the user's own history, interval coverage — and the
+  refusal to show a percentage of quota is now the loudest section in each README rather than a
+  footnote.
+- **The stale versions were the real defect.** Both package READMEs opened on `0.6`/`0.1.x` claims,
+  two and three releases out of date, and both support matrices still said `SNACK 0.8.x`. That is
+  what motivated delivery principle 11 below rather than a one-off cleanup.
+
+**Delivery principle 11, added to `PLAN.md` and restated in `AGENTS.md` and `CONTRIBUTING.md`:**
+documentation ships with the change, in both languages, in both places — the package README npm
+serves and the repository README GitHub serves. Permanent, not scoped to 1.0. The tarball's README
+is the only documentation an npm installer ever sees, and the Stage 9 lesson applies unchanged: the
+question is never whether the behavior changed, but whether anything named in `files` changed.
+
 ## Wave 2 — the release candidate (pending)
 
 Version to `1.0.0-rc.1` for both packages, `release.yml` confirmation string, `candidate` added to

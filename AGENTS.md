@@ -50,6 +50,24 @@
 - Every JSON command response goes through `createEnvelope()`; preserve its versioned envelope and
   keep JSON stdout free of incidental text.
 
+## Documentation Goes With the Change
+
+Delivery principle 11 in `PLAN.md`, restated where it gets applied. Any change to behavior, a flag,
+an output document, a supported client, or an upgrade path updates all of these in the same change,
+never in a follow-up:
+
+- `packages/cli/README.md` and `packages/opencode/README.md` — what npm serves. Both are shipped
+  inside their tarball via the `files` array, so a package republishes whenever its README changes,
+  exactly as it would for a code change. The question is never "did the behavior change?" but
+  "did anything named in `files` change?"
+- `README.md` at the repository root — what GitHub serves.
+- Both languages. Every one of the three carries an English and a Portuguese section, kept in sync;
+  updating one and not the other leaves half the readers with the old product.
+- The reference documents under `docs/` that the change touches, and `CHANGELOG.md` via a changeset.
+
+Examples in a README are captured from a real run, never invented. Numbers written by hand are
+assertions, and delivery principle 9 rejects those.
+
 ## Test Fixtures
 
 - Command tests call `run(argv, options)` with injected stdout/stderr, clock, and temporary `XDG_*`
