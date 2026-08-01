@@ -201,6 +201,10 @@ function readObservations(database, sessionIds = undefined) {
              message.time_created,
              message.time_updated,
              json_extract(message.data, '$.time.created') AS json_created,
+             -- The user row names its own provider and model. That is the only attribution a
+             -- prompt whose assistant reply never arrived will ever have.
+             json_extract(message.data, '$.model.providerID') AS user_provider,
+             json_extract(message.data, '$.model.modelID') AS user_model,
              EXISTS (
                SELECT 1 FROM part
                WHERE part.message_id = message.id
@@ -359,6 +363,38 @@ function readObservations(database, sessionIds = undefined) {
         const group = byProvider.get(provider);
         if (group) group.push(child);
         else byProvider.set(provider, [child]);
+      }
+      // A prompt with no assistant message at all: sent, and nothing came back that OpenCode
+      // recorded. Grouping by the children of an empty set yields nothing, so until `1.0.2` the
+      // prompt was not emitted, not counted, and not reconcilable against the source -- eleven of
+      // 194 on a real history. The spec already names this state: completion `unknown`, outcome
+      // `excluded`, which contributes descriptive dimensions without touching the outcome model.
+      if (byProvider.size === 0) {
+        const revision = userRevisions.at(-1);
+        return [
+          {
+            source_prompt_id: user.id,
+            source_session_id: user.session_id,
+            revision: `${revision?.timeUpdated ?? user.time_updated}:${revision?.messageId ?? user.id}`,
+            revision_domain: "opencode-message-v1",
+            parser_version: "opencode-session-v1",
+            started_at: new Date(started).toISOString(),
+            completed_at: null,
+            duration_ms: null,
+            // `provisional`, not the `unknown` that docs/specification.md 4.3 names for this
+            // state: `prompt_execution.completion` is `CHECK (completion IN ('provisional',
+            // 'completed'))`, so `unknown` needs a table rebuild. `provisional` is true here --
+            // nothing recorded says this prompt finished -- and it is what an abandoned prompt
+            // already gets. The vocabulary gap is real and belongs to a release that can carry a
+            // migration.
+            completion: /** @type {const} */ ("provisional"),
+            provider: stringOrNull(user.user_provider),
+            model: stringOrNull(user.user_model),
+            outcome: /** @type {const} */ ("excluded"),
+            usage_slices: [],
+            restrictions: [],
+          },
+        ];
       }
       return [...byProvider.entries()].map(([provider, providerChildren]) => {
         const terminal = providerChildren.at(-1);
