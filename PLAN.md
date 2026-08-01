@@ -191,7 +191,7 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 
 **Exit, met:** the run is recorded, every finding is triaged, and no P0/P1 is outstanding.
 
-### 1.0.2 - the review's remaining defects
+### 1.0.2 - the review's remaining defects — **shipped**
 
 **Purpose:** close the P2/P3 findings Phase 1 left open. Compatible defect fixes, which is what a patch is for; nothing here adds a command, a flag, or a field.
 
@@ -203,7 +203,7 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 
 [Finding 08](./.scratch/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md) was scoped into this release and then **retracted**: `setup` cancels cleanly on `Ctrl+D` and refuses without a terminal, and the reported hang was the review's own harness tearing down a pty while the command was still working. The fix was written and reverted rather than shipped, because a refactor justified by a defect that does not exist is not what a patch is for. The finding is kept, marked invalid, with the analysis — a red result from a harness is not evidence until the harness is shown able to tell a wait from an exit, which is the same rule this project already applies to a failing test.
 
-**Exit:** each remaining fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
+**Exit, met:** each fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
 
 ### 1.1.0 - Interface, `snack update`, and the documentation restructure
 
