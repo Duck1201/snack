@@ -15,6 +15,54 @@ const schema = JSON.parse(await readFile(schemaPath, "utf8"));
 const ajv = new Ajv2020.default({ allErrors: true, strict: true });
 const validate = ajv.compile(schema);
 
+/**
+ * The identifier rule each configured-source field must satisfy, read out of the same schema that
+ * enforces it on write.
+ *
+ * Setup asks for these values one at a time and only finds out at the end whether the
+ * configuration will take them, which costs someone the whole questionnaire over one space in a
+ * profile name. Lifting the rules out of the schema lets a question refuse its own answer on the
+ * spot; reading them rather than restating them is what keeps the two checks from drifting apart.
+ */
+const sourceIdentifierPatterns =
+  /** @type {Readonly<Record<"alias" | "provider" | "profile" | "plan", string>>} */ (
+    Object.freeze(
+      Object.fromEntries(
+        ["alias", "provider", "profile", "plan"].map((field) => {
+          const property = schema.properties.sources.items.properties[field];
+          const reference =
+            String(property.$ref ?? "")
+              .split("/")
+              .pop() ?? "";
+          return [field, String(property.pattern ?? schema.$defs[reference].pattern)];
+        }),
+      ),
+    )
+  );
+
+/**
+ * State the rule a configured-source identifier has to match, for a question to show up front.
+ *
+ * @param {"alias" | "provider" | "profile" | "plan"} field
+ */
+export function describeSourceIdentifier(field) {
+  return `must match ${sourceIdentifierPatterns[field]}`;
+}
+
+/**
+ * Report why a configured-source identifier is unusable, or `null` when it is fine.
+ *
+ * The message names the field and the value as well as the rule: the schema error it replaces says
+ * only which path was rejected, which is of no help to someone who has just typed an answer.
+ *
+ * @param {"alias" | "provider" | "profile" | "plan"} field
+ * @param {string} value
+ */
+export function checkSourceIdentifier(field, value) {
+  if (new RegExp(sourceIdentifierPatterns[field]).test(value)) return null;
+  return `${field} "${value}" is not usable; it ${describeSourceIdentifier(field)}.`;
+}
+
 export const defaultConfig = Object.freeze({
   schema_version: 1,
   sources: [],

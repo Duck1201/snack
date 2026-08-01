@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { Command, CommanderError } from "commander";
 
 import {
+  checkSourceIdentifier,
   defaultConfig,
+  describeSourceIdentifier,
   getConfigValue,
   isConfiguredSource,
   prepareConfigValue,
@@ -1455,6 +1457,24 @@ async function resolveSetupValues(input) {
         { code: ExitCode.usage, reason: "setup_values_required" },
       );
     }
+    // The same rules the questions enforce, applied to the flags, so neither road reaches the
+    // schema with a value it will refuse. Rejecting here names the field and the value; the schema
+    // error it replaces names only the path it rejected, after the source has been assembled.
+    const invalid = /** @type {const} */ ([
+      ["source", "alias"],
+      ["provider", "provider"],
+      ["profile", "profile"],
+      ["plan", "plan"],
+    ]).flatMap(([flag, field]) => {
+      const problem = checkSourceIdentifier(field, String(commandOptions[flag]));
+      return problem === null ? [] : [problem];
+    });
+    if (invalid.length > 0) {
+      throw new SnackError(
+        `Non-interactive setup was given values it cannot use: ${invalid.join(" ")}`,
+        { code: ExitCode.usage, reason: "setup_values_invalid" },
+      );
+    }
     return {
       source: String(commandOptions.source),
       provider: String(commandOptions.provider),
@@ -1485,6 +1505,24 @@ async function resolveSetupValues(input) {
       throw error;
     }
   };
+  /**
+   * Ask until the answer is one the configuration will accept.
+   *
+   * The rule rides on the question so the shape is known before the answer is typed, and a refusal
+   * costs one answer rather than the whole questionnaire.
+   *
+   * @param {"alias" | "provider" | "profile" | "plan"} field
+   * @param {Parameters<SetupPrompt>[0]} question
+   */
+  const askIdentifier = async (field, question) => {
+    const message = `${question.message} (${describeSourceIdentifier(field)})`;
+    for (;;) {
+      const answer = await ask({ ...question, message });
+      const problem = checkSourceIdentifier(field, answer);
+      if (problem === null) return answer;
+      input.stdout.write(`${problem}\n`);
+    }
+  };
   const existing = input.existingSources[0];
 
   // Discovered rather than asked. The local account alias is deliberately not in this list:
@@ -1500,12 +1538,12 @@ async function resolveSetupValues(input) {
   ].sort();
 
   try {
-    const source = await ask({
+    const source = await askIdentifier("alias", {
       id: "alias",
       message: "Name this capacity source",
       ...(existing ? { default: existing.alias } : { default: "default" }),
     });
-    const provider = await ask({
+    const provider = await askIdentifier("provider", {
       id: "provider",
       message: "Which provider does it map to?",
       ...(providers.length > 0
@@ -1517,12 +1555,12 @@ async function resolveSetupValues(input) {
           ? { default: providers[0] }
           : {}),
     });
-    const profile = await ask({
+    const profile = await askIdentifier("profile", {
       id: "profile",
       message: "Name the local account or profile this maps to (SNACK cannot discover it)",
       default: existing?.profile ?? "default",
     });
-    const plan = await ask({
+    const plan = await askIdentifier("plan", {
       id: "plan",
       message: "What do you call your plan? This is a label SNACK records, not a lookup key",
       default: existing?.plan ?? "default",

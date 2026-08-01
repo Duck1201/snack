@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { run } from "./main.js";
+import { renderQuestion } from "./terminal-prompt.js";
 
 // A reader that stops early — `snack export --output - | head`, `| jq`, a closed pager — closes
 // the pipe under a command that is still writing. Node surfaces that as an unhandled EPIPE on
@@ -22,9 +23,9 @@ const session =
 /**
  * Ask one question on the terminal.
  *
- * Wired up only here, at the real I/O boundary, so command tests can script the answers.
- * Choices are listed and accepted either by number or by value, and an empty answer takes
- * the offered default.
+ * Wired up only here, at the real I/O boundary, so command tests can script the answers. What the
+ * question looks like and how the answer reads belong to `renderQuestion`; this keeps only the
+ * readline handle, which is the part no test can hold.
  *
  * One interface serves the whole run and is closed once at the end. Opening and closing one
  * per question pauses stdin between them, and the next question then waits forever.
@@ -36,14 +37,9 @@ async function prompt(question) {
     const { createInterface } = await import("node:readline/promises");
     session.terminal = createInterface({ input: process.stdin, output: process.stdout });
   }
-  for (const [index, choice] of (question.choices ?? []).entries()) {
-    process.stdout.write(`  ${index + 1}) ${choice.label}\n`);
-  }
-  const suffix = question.default === undefined ? "" : ` [${question.default}]`;
-  const answer = (await session.terminal.question(`${question.message}${suffix}: `)).trim();
-  if (answer === "") return question.default ?? "";
-  const picked = question.choices?.[Number(answer) - 1];
-  return picked === undefined ? answer : picked.value;
+  const rendered = renderQuestion(question);
+  for (const line of rendered.lines) process.stdout.write(`${line}\n`);
+  return rendered.parse(await session.terminal.question(rendered.prompt));
 }
 
 try {

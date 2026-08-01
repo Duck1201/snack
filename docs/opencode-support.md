@@ -16,6 +16,12 @@ checks the required `session`, `message`, and `part` tables, columns, foreign ke
 and critical JSON shapes used for prompt boundaries, finality, errors, and usage. Unknown or
 incompatible fingerprints produce no canonical writes.
 
+The tables OpenCode creates are not `STRICT`, so SQLite reports `notnull = 0` for their
+`TEXT PRIMARY KEY` columns. The fingerprint asserts a key through `pk` and requires `NOT NULL` only
+of the columns that carry one; the fixtures under `packages/cli/test/fixtures/opencode/` reproduce
+OpenCode's own DDL rather than a tidied equivalent, because a fingerprint is a claim about the
+database OpenCode writes.
+
 The adapter opens the OpenCode database with SQLite read-only and query-only modes. It does not
 select prompt text, response text, tool payloads, paths, credentials, raw errors, or arbitrary
 metadata. OpenCode WAL files remain owned by OpenCode; SNACK does not checkpoint or modify them.
