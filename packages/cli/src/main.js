@@ -558,7 +558,8 @@ export async function run(argv, options = {}) {
           planProfile,
           horizons,
           now,
-          clients: commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
+          clients:
+            commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
         });
       });
       const data = reports.length === 1 ? reports[0] : { sources: reports };

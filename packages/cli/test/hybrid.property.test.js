@@ -273,9 +273,7 @@ test("two clients behind one source converge under every interleaving", async ()
                   ORDER BY prompt_execution.source_prompt_id`,
               )
               .all();
-            const periods = database
-              .prepare("SELECT COUNT(*) AS count FROM capacity_period")
-              .get();
+            const periods = database.prepare("SELECT COUNT(*) AS count FROM capacity_period").get();
             const restrictions = database
               .prepare("SELECT COUNT(*) AS count FROM restriction_observation")
               .get();
