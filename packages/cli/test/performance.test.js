@@ -37,7 +37,17 @@ const now = new Date(origin + PROMPTS * 60_000);
  *
  * @returns {Promise<{root: string, env: NodeJS.ProcessEnv, paths: import("../src/paths.js").SnackPaths, databaseFile: string}>}
  */
-async function makeLargeHistory({ spacingMs = 60_000, endsAt = origin + PROMPTS * 60_000 } = {}) {
+/** The two installations a mixed-client history alternates between. */
+const INSTALLATIONS = Object.freeze({
+  opencode: "11111111-2222-4333-8444-555555555555",
+  claude: "99999999-2222-4333-8444-555555555555",
+});
+
+async function makeLargeHistory({
+  spacingMs = 60_000,
+  endsAt = origin + PROMPTS * 60_000,
+  clients = false,
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "snack-performance-"));
   temporaryRoots.push(root);
   const env = {
@@ -63,13 +73,32 @@ async function makeLargeHistory({ spacingMs = 60_000, endsAt = origin + PROMPTS 
          VALUES (1, 'work', 'anthropic', 'default', 'pro', ?)`,
       )
       .run(new Date(origin).toISOString());
+    // Two client installations feeding one capacity source, so a mixed history measures the shape
+    // a shared source really has rather than one client wearing two names.
+    if (clients) {
+      const insertInstallation = database.prepare(
+        `INSERT INTO client_installation (id, client_kind, local_fingerprint, created_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      );
+      const insertBinding = database.prepare(
+        `INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+         VALUES ('work', ?, ?, 'anthropic', 'default')`,
+      );
+      for (const [client, id] of Object.entries(INSTALLATIONS)) {
+        const at = new Date(origin).toISOString();
+        insertInstallation.run(id, client, `fingerprint-${client}`, at, at);
+        insertBinding.run(id, client);
+      }
+    }
     const insertPrompt = database.prepare(
       `INSERT INTO prompt_execution
-         (id, source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+         (id, source_alias, installation_id, capacity_period_id, source_prompt_id,
+          source_session_fingerprint,
           source_revision, observation_hash, revision_domain, parser_version, started_at,
           completed_at, duration_ms, completion, first_observed_at, last_observed_at,
           estimated_input_tokens)
-       VALUES (@id, 'work', 1, @source_prompt_id, 'session', '1', 'hash', 'opencode', 'p1',
+       VALUES (@id, 'work', @installation_id, 1, @source_prompt_id, 'session', '1', 'hash',
+               'opencode', 'p1',
                @started_at, @started_at, 1000, 'completed', @started_at, @started_at, @tokens)`,
     );
     const insertOutcome = database.prepare(
@@ -93,6 +122,11 @@ async function makeLargeHistory({ spacingMs = 60_000, endsAt = origin + PROMPTS 
           source_prompt_id: `prompt-${index}`,
           started_at: startedAt,
           tokens: 100 + (index % 900),
+          installation_id: clients
+            ? index % 3 === 0
+              ? INSTALLATIONS.claude
+              : INSTALLATIONS.opencode
+            : null,
         });
         insertOutcome.run(index, index % 97 === 0 ? "restricted" : "success");
         insertSlice.run({
@@ -205,25 +239,37 @@ const executeFile = promisify(execFile);
 const cliEntry = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 
 /** @param {Awaited<ReturnType<typeof makeLargeHistory>>} history */
-async function writeStatusConfig(history) {
+async function writeStatusConfig(history, { clients = false } = {}) {
+  const openCode = {
+    alias: "work",
+    installation_id: INSTALLATIONS.opencode,
+    adapter: "opencode",
+    database: join(history.root, "opencode.db"),
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    plan_profile: "generic",
+    fingerprint: "oc-sqlite-msgpart-v1",
+  };
+  // Both clients bound to the one alias, which is what makes `--by-client` have anything to
+  // compare and what a shared capacity source looks like in configuration.
+  const claude = {
+    alias: "work",
+    installation_id: INSTALLATIONS.claude,
+    adapter: "claude",
+    projects: join(history.root, "claude", "projects"),
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    plan_profile: "generic",
+    fingerprint: "cc-jsonl-turntree-v1",
+  };
   await mkdir(history.paths.configDir, { recursive: true, mode: 0o700 });
   await writeFile(
     history.paths.configFile,
     `${JSON.stringify({
       schema_version: 1,
-      sources: [
-        {
-          alias: "work",
-          installation_id: "11111111-2222-4333-8444-555555555555",
-          adapter: "opencode",
-          database: join(history.root, "opencode.db"),
-          provider: "anthropic",
-          profile: "default",
-          plan: "pro",
-          plan_profile: "generic",
-          fingerprint: "oc-sqlite-msgpart-v1",
-        },
-      ],
+      sources: clients ? [openCode, claude] : [openCode],
     })}\n`,
     { mode: 0o600 },
   );
@@ -669,4 +715,68 @@ test(`backfilling ${PROMPTS.toLocaleString("en-US")} prompts from Claude Code me
     );
     assert.notEqual(JSON.parse(result.stdout).status, "error", argv.join(" "));
   }
+});
+
+test(`\`status --no-sync\` over a two-client ${PROMPTS.toLocaleString("en-US")}-prompt history stays inside its p95 budget`, async (t) => {
+  // A shared capacity source is one lineage, so the forecast reads the same number of prompts
+  // whichever clients produced them. This is the assertion that the attribution column stayed an
+  // explanatory dimension: had it become something the forecast groups or joins by, the cost of
+  // the command people run most would move with the number of clients.
+  const history = await makeLargeHistory({ clients: true });
+  await writeStatusConfig(history, { clients: true });
+
+  const samples = [];
+  for (let index = 0; index < 20; index += 1) {
+    const startedAt = process.hrtime.bigint();
+    await runCli(["status", "--no-sync", "--json"], history);
+    samples.push(Number(process.hrtime.bigint() - startedAt) / 1e6);
+  }
+  samples.sort((a, b) => a - b);
+  const p95 = samples[Math.ceil(samples.length * 0.95) - 1] ?? Infinity;
+  const measured = `p95 ${p95.toFixed(0)}ms, p50 ${(samples[10] ?? 0).toFixed(0)}ms, min ${(samples[0] ?? 0).toFixed(0)}ms`;
+
+  // Same budget and the same reasoning as the single-client measurement above: PLAN states it for
+  // a typical supported developer machine, and a shared hosted runner is not one.
+  t.diagnostic(`status --no-sync, two clients: ${measured}`);
+  if (process.env.CI) return;
+  assert.ok(p95 < 250, measured);
+});
+
+test(`\`stats --by-client\` over ${PROMPTS.toLocaleString("en-US")} mixed-client prompts stays inside the memory budget`, async (t) => {
+  // The comparison groups prompts by client. The trap it invites is re-reading the window once per
+  // client, which stays invisible on a small history and doubles the work on a real one -- the same
+  // shape of cost that let a quadratic per-model grouping pass a budget test once before.
+  const history = await makeLargeHistory({ spacingMs: 6_000, endsAt: Date.now(), clients: true });
+  await writeStatusConfig(history, { clients: true });
+
+  const startedAt = process.hrtime.bigint();
+  const result = await runCli(["stats", "--by-client", "--verbose", "--json"], history, {
+    heapLimitMb: 150,
+  }).catch((/** @type {Error & {stderr?: string}} */ error) => error);
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+  assert.ok(
+    !(result instanceof Error),
+    `\`snack stats --by-client\` did not survive a 150MB heap: ${String(result instanceof Error ? (result.stderr ?? result) : "").slice(0, 300)}`,
+  );
+  const document = JSON.parse(result.stdout);
+  assert.notEqual(document.status, "error", result.stdout.slice(0, 300));
+
+  // The comparison really ran over the whole history, so the budget is not measuring an empty
+  // branch: both clients present, and every prompt attributed to one of them.
+  const byClient = document.data.by_client;
+  assert.equal(byClient.status, "ok");
+  assert.equal(byClient.groups.length, 2);
+  assert.equal(byClient.unattributed.prompts, 0);
+  assert.equal(
+    byClient.groups.reduce(
+      (/** @type {number} */ total, /** @type {{prompts: number}} */ group) =>
+        total + group.prompts,
+      0,
+    ),
+    PROMPTS,
+  );
+
+  t.diagnostic(`stats --by-client over one dense window took ${(elapsedMs / 1000).toFixed(1)}s`);
+  assert.ok(elapsedMs < 10_000, `stats --by-client took ${(elapsedMs / 1000).toFixed(1)}s`);
 });

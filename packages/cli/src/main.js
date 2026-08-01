@@ -2293,13 +2293,22 @@ function summarizeWindow(rows, now) {
 function buildSourceStats(input) {
   /** @type {import("./storage.js").UsageWindowRow[] | null} */
   let comparisonRows = null;
+  // The comparison reads the widest configured horizon, because separating two refusal rates needs
+  // every observation there is and the narrow horizons are the ones that will say "not comparable".
+  // It reuses the rows that horizon was read for rather than fetching per client: a per-client
+  // re-scan of the window is the shape of mistake that passes on a small history and doubles the
+  // work on a real one.
+  const widest = input.clients
+    ? input.horizons.reduce(
+        (best, horizon, index) =>
+          parseHorizon(horizon) > parseHorizon(String(input.horizons[best])) ? index : best,
+        0,
+      )
+    : -1;
   const horizons = input.horizons.map((horizon, index) => {
     const window = horizonWindow(input.now, parseHorizon(horizon));
     const rows = readUsageWindowRows(input.databaseFile, input.source.alias, window);
-    // The widest configured horizon is the one the comparison reads, and it is read once, here,
-    // rather than fetched again per client. A per-client re-scan of the window is the shape of
-    // mistake that passes a budget test on a small history and falls over on a real one.
-    if (index === 0 && input.clients) comparisonRows = rows;
+    if (index === widest) comparisonRows = rows;
     return summarizeUsageProfile(
       rows,
       readRestrictionWindowRows(input.databaseFile, input.source.alias, window),
