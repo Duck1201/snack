@@ -12,6 +12,10 @@ _Avoid_: Task, feature, session
 The estimated probability that a prompt completes without an observed restriction from the capacity source being assessed. A successful fallback through another source does not erase a restriction from the original source.
 _Avoid_: Feature viability, remaining quota, real capacity
 
+**Sequence viability**:
+The estimated probability that a stated number of consecutive prompts all complete without an observed restriction from the capacity source being assessed. The count is always supplied by the user; SNACK never derives it, because a count derived from a probability is a claim about remaining capacity.
+_Avoid_: Feature viability, prompts remaining, budget, real capacity
+
 **Observed restriction**:
 An explicit provider refusal attributed to a rate limit, usage limit, or equivalent condition. Timeouts, network failures, user cancellation, and client errors are not observed restrictions.
 _Avoid_: Error, failure, interruption

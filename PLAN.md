@@ -1108,11 +1108,14 @@ Strict SemVer applies:
   install on a version SNACK had moved past, and the alternative it protected — never surprising an
   installer with pre-1.0 contract churn — is served better by an explicit channel than by a stale
   default. `0.7.0` was the first release under this rule.
-- `stable`: points at the newest release whose surface the project is willing to hold still, which
-  is `0.6.1` until 1.0. It is the channel to pin when contract churn is unacceptable, and it moves
-  only by a deliberate decision, never by a release. Pre-1.0 minors on `latest` may evolve CLI
-  flags, JSON shapes, and config/export schemas; every release from `0.6.0` forward still preserves
-  user data through supported migrations.
+- `stable`: points at the newest release whose surface the project is willing to hold still. It held
+  `0.6.1` for the whole pre-1.0 line and **moves to `1.0.0` with the stable release**. It is the
+  channel to pin when contract churn is unacceptable, and it moves only by a deliberate decision,
+  never by a release. Before 1.0 that meant holding the MVP, because pre-1.0 minors on `latest` were
+  allowed to evolve CLI flags, JSON shapes, and config and export schemas; from 1.0 breaking any
+  frozen surface requires a major, so `latest` and `stable` name the same version until a `2.0.0`
+  exists. Every release from `0.6.0` forward still preserves user data through supported migrations,
+  and `0.6.1` stays installable by exact version.
 - `rc`: reserved and never used. Stage 10 cut `1.0.0-rc.0`, gated it locally, and published no
   release candidate at all, so no package ever carried the tag. The channel keeps its meaning for a
   future major. `next` is not a channel this project keeps: a tag that means "whatever is newest"

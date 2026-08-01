@@ -283,6 +283,12 @@ refuse rather than crash until it has.
 The full upgrade path, including the one payload that changed shape at the `0.9` freeze, is in
 [docs/compatibility.md](https://github.com/Duck1201/snack/blob/main/docs/compatibility.md).
 
+**If you pinned the `stable` tag**, this is the release you were waiting for. `stable` held `0.6.1`
+through the whole pre-1.0 line, because until now the newest release was allowed to evolve flags and
+JSON shapes and the MVP was the only surface being held still. From `1.0.0` breaking any public
+contract requires a major version, so `latest` and `stable` name the same release again. `0.6.1`
+stays installable by exact version; it just stops being what `stable` resolves to.
+
 ### More
 
 Source, roadmap, threat model, architecture, and the full specification live at
@@ -573,6 +579,12 @@ somente-leitura recusam em vez de quebrar até que isso aconteça.
 O caminho completo de atualização, incluindo o único payload que mudou de formato no congelamento da
 `0.9`, está em
 [docs/compatibility.md](https://github.com/Duck1201/snack/blob/main/docs/compatibility.md).
+
+**Se você fixou a tag `stable`**, esta é a release que você esperava. `stable` segurou a `0.6.1` por
+toda a linha pré-1.0, porque até agora a release mais nova podia evoluir flags e formatos de JSON, e
+o MVP era a única superfície mantida parada. A partir da `1.0.0`, quebrar qualquer contrato público
+exige uma major, então `latest` e `stable` voltam a apontar para a mesma release. A `0.6.1` continua
+instalável por versão exata; ela só deixa de ser o que `stable` resolve.
 
 ### Mais
 
