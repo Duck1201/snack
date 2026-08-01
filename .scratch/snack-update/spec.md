@@ -1,7 +1,7 @@
 # `snack update`
 
-Status: **specified, planned, not built.** Target `1.1.0`. Decisions below were taken before any
-code; the implementation is a separate session.
+Status: **built and verified against the real binary.** Target `1.1.0`. Decisions below were taken
+before any code; the implementation is a separate session.
 
 Governed by [ADR-0010](../../docs/adr/0010-snack-update-may-reach-the-network.md), which is the
 prerequisite and is already accepted: this is the only command in the product permitted to make a
@@ -133,10 +133,32 @@ Agreed before writing tests, per the project's rule.
 | `resolveUpdatePlan(...)` — pure              | every layout in the table, plus an unrecognized one that refuses. No filesystem, no network                                      |
 | `run(argv, options)` with `makeRunFixture()` | `--dry-run` prints the command and changes nothing; `--yes` skips the prompt; a refused confirmation writes nothing              |
 | `run(...)` with an injected installer        | `--finish` rewrites the plugin registration to the current pin, and **the capacity periods are byte-identical before and after** |
-| the real binary                              | reserved for the session that implements it; a real `npm i -g` in a temp prefix, driven once                                     |
+| the real binary                              | driven; see below                                                                                                                |
 
 The installer is injected the way `writeConfig` and `prompt` already are, so no test runs a package
 manager.
+
+### The real binary, run
+
+Packed the CLI, `npm install -g` into a temp prefix, and drove the installed `snack` through the bin
+symlink with an isolated `XDG_*` and `HOME`. The suite cannot reach any of this: it injects
+`modulePath`, and the question here is whether the _real_ one lands where the layout table says.
+
+| Checked                                         | Result                                                                                                     |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Where a global install actually puts the module | `<prefix>/lib/node_modules/@snack-ai/cli/src/update.js` — the npm row                                      |
+| Whether the bin symlink hides it                | It does not. Node resolves the symlink, so `import.meta.url` is the real path and the layout still matches |
+| `update --dry-run`                              | `Would run: npm install --global @snack-ai/cli@latest`, exit 0, nothing installed                          |
+| `update` with no TTY and no `--yes`             | Refuses, exit 2, and names the command it would have run                                                   |
+| `--finish` in `--help`                          | Absent                                                                                                     |
+| `--finish` with nothing registered              | Writes nothing; no `opencode.json` is created                                                              |
+| `--finish` over a registration stood on `0.8.2` | Rewritten to `@snack-ai/opencode@1.0.1`; `doctor` then reports `[pass] opencode_plugin`                    |
+| Capacity periods across that `--finish`         | Byte-identical                                                                                             |
+| Permissions on everything written               | All `0600`                                                                                                 |
+
+The one path deliberately not driven is a real `update --yes`, which would install the published
+`1.0.2` over the candidate from the public registry. The install itself is one `spawn` behind an
+injected port; what could only be learned here was the layout, and it was.
 
 ## The boundary gate ADR-0010 asks for
 
