@@ -1,12 +1,26 @@
 # Phase 1 — End-to-end review of the published `1.0.0`
 
-Status: **complete.** The three P1s shipped as `1.0.1`, published from `9d18263` by run
-[30711850333](https://github.com/Duck1201/snack/actions/runs/30711850333), `latest` and `stable`
-both resolving to `1.0.1`. Every fix was written test-first at an agreed seam, then re-driven
+Status: **closed.** Twelve findings, eleven real and one retracted. The three P1s shipped as `1.0.1`
+and four more as `1.0.2`, published from `45a7a95` by run
+[30715693993](https://github.com/Duck1201/snack/actions/runs/30715693993); `latest` and `stable`
+both resolve to `1.0.2`. Every fix was written test-first at an agreed seam, then re-verified
 against the **published** artifact rather than the tree — the record is in
-[docs/release/identity.md](../../docs/release/identity.md). No P0/P1 is outstanding.
+[docs/release/identity.md](../../docs/release/identity.md).
 
-The seven remaining findings are triaged into `1.1.0`–`1.5.0` and carry their reproductions.
+|           |                                                  |
+| --------- | ------------------------------------------------ |
+| P1        | 05, 09, 10 — fixed, `1.0.1`                      |
+| P2/P3     | 01, 02 (partly), 03, 06, 07, 11 — fixed, `1.0.2` |
+| P3 open   | 04, 12 — `1.1.0`                                 |
+| Retracted | 08 — not a defect; this review's own harness     |
+
+Finding 02 is closed only as far as storage allows: replaying pending backfill rows is impossible
+because `pending_mapping` keeps identifiers and no payload, so what shipped is `doctor` naming the
+providers and the command. Finding 04's rename is a break to a frozen payload and needs a major, so
+only its additive half can ever land in the 1.x line.
+
+The phase's exit criterion — "the run is recorded, every finding is triaged, and no P0/P1 is
+outstanding" — is met.
 
 The phase's own exit criterion — "the run is recorded, every finding is triaged, and no P0/P1 is
 outstanding" — is met.

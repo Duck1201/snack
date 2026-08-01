@@ -329,6 +329,49 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.0.2
+
+`@snack-ai/cli@1.0.2` was published from commit `45a7a95` by protected release run
+[30715693993](https://github.com/Duck1201/snack/actions/runs/30715693993), directly to `latest`.
+`stable` was moved by hand afterwards. Tagged `v1.0.2` on that same commit, released on GitHub as
+Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.0.2` | `1.0.2` | `1.0.2` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.1` | `1.0.1` | — | unchanged; publish step skipped |
+
+Verified against the registry rather than against the workflow's own status:
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '1.0.2', latest: '1.0.2' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.1' }`.
+
+**The plugin did not republish, and that is the correct outcome.** No changeset named it because
+nothing inside it changed — not its source, and not anything else in its `files` array. Its recorded
+digest is byte-identical to `1.0.1`'s, which is the check that says so rather than an assumption:
+
+```
+snack-ai-cli-1.0.2.tgz       sha256:be4c0dd88c4fb0926c13a1bee93d650b1eb1b11e38d02e51febc331c9ce48cf1
+snack-ai-opencode-1.0.1.tgz  sha256:96fbaa4299ad7381d60937b4f878c19af81914720a9d7b0e1d3aa0501fe61546
+```
+
+The published CLI tarball matches the recorded digest exactly.
+
+**The plugin pin gate has now been exercised in both directions.** At `1.0.1` the plugin bumped and
+the gate went red until `pluginPackageSpec` moved with it. Here the plugin did not bump, and the
+gate stayed green while the CLI moved — which is the half that would have been easy to get wrong by
+tying the constant to the CLI's own version instead of the plugin's.
+
+Verified against the **published** artifact, over the real history the fixes were found on:
+
+- `sync --full` reads 197 and accounts for all of it — 136 attributed plus 61 awaiting a mapping —
+  against 197 eligible prompts in the source (203 user messages less 3 compaction and 3
+  continuation). `1.0.1` read 183 of the same 197;
+- `doctor` names the four providers holding those 61, their counts, and the command that attributes
+  them;
+- a no-op `sync` over 222 MB of Claude transcripts costs 147 MB and 0.58 s, against 238 MB and 1.2 s
+  at `1.0.1`; `doctor` costs 136 MB against 241 MB. Both are under the 150 MB budget by peak process
+  RSS as well as by the heap cap, which is the first release where those two agree.
+
 ## 1.0.1
 
 `@snack-ai/cli@1.0.1` and `@snack-ai/opencode@1.0.1` were published from commit `9d18263` by
