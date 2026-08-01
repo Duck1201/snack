@@ -4,11 +4,13 @@ description: >
   Use this skill to take a finished SNACK stage from a green branch to a published version — cutting
   the version, getting CI evidence, publishing to npm, tagging, and setting dist-tags. Use it
   whenever the task mentions releasing, publishing, shipping, cutting a version, bumping, "put it on
-  npm", moving `latest`/`stable`/`next`, or creating a GitHub release, and also when someone asks
-  why CI did not run on a pushed branch or why `npm install` still resolves the old version. Several
+  npm", moving `latest`/`stable`/`rc`, or creating a GitHub release, and also when someone asks why
+  CI did not run on a pushed branch or why `npm install` still resolves the old version. Several
   steps in this repo fail silently rather than loudly: CI does not run on feature-branch pushes, the
-  release workflow is gated on a confirmation string that is hardcoded per release, and dist-tag
-  moves cannot be done by the workflow or by an agent at all.
+  release workflow is gated on a confirmation string that is hardcoded per release, and a dist-tag
+  call before the publish answers a bare E400 that names nothing. The workflow sets the channel tag
+  on the publish itself, so an ordinary release needs no dist-tag command by hand at all, and there
+  is no `next` channel to move.
 license: MIT
 metadata:
   author: Duck
@@ -23,14 +25,20 @@ specific places where a step looks done and is not.
 ## Who does what
 
 An agent can do everything up to and including opening the PR, plus the GitHub release and tag. **An
-agent cannot publish or move a dist-tag.** Both need a human:
+agent cannot merge, publish, or move a dist-tag.** Those need a human:
 
-- The release workflow is `workflow_dispatch` only — someone dispatches it from the Actions UI.
-- `npm dist-tag add|rm` triggers an interactive web auth flow even when `npm whoami` already answers
-  with a username. Hand the command to the user to run with a `!` prefix so the output lands in the
+- Merging the PR. Nothing downstream works before it: the release workflow is gated on
+  `refs/heads/main`.
+- The release workflow is `workflow_dispatch` only — someone dispatches it from the Actions UI. This
+  is what publishes, and it sets `latest` or `rc` through `--tag` on the publish itself.
+- `npm dist-tag add|rm`, for the tags the workflow cannot set — `stable`, a temporary tag, or a
+  repair. It triggers an interactive web auth flow even when `npm whoami` already answers with a
+  username, so hand the command to the user to run with a `!` prefix and the output lands in the
   conversation.
 
-Say this up front rather than discovering it at the end.
+Say this up front rather than discovering it at the end — and say it **in order**, because these
+steps fail confusingly out of order rather than refusing. A dist-tag before the publish answers
+`E400`, and a dispatch before the merge does nothing at all.
 
 ## Procedure
 
@@ -61,10 +69,10 @@ Say this up front rather than discovering it at the end.
    It is hardcoded to the _previous_ release. Bump it and the matching `description:` or the
    dispatch does nothing and reports success-shaped silence.
 
-4. **Choose the channel deliberately.** `dist_tag` is an input of the dispatch (`latest` | `next`),
+4. **Choose the channel deliberately.** `dist_tag` is an input of the dispatch (`latest` | `rc`),
    defaulting to `latest`. The rule lives in PLAN.md's npm Channel Policy: each minor takes
-   `latest`; `next` is for release candidates; `stable` is never set by a release. Read it rather
-   than assuming — it changed at 0.7.0.
+   `latest`; `rc` is for release candidates; `stable` is never set by a release; `next` does not
+   exist. Read it rather than assuming — it changed at 0.7.0 and again when `next` was retired.
 
 5. **Clear `npm run release:check`.** It blocks on gate lines in `docs/release/*.md` and on a
    `Status:` line in each client support matrix. Record the evidence when you clear one — the CI run
@@ -88,16 +96,31 @@ Say this up front rather than discovering it at the end.
    exception. A GitHub release defaults to Latest — if the version is not the newest supported
    product, pass `--latest=false`.
 
-8. **Move the hand tags.** Give these to the user:
+8. **Check the channel tag rather than setting it.** `latest` and `rc` are set by the publish itself
+   — `release.yml` passes `--tag "${DIST_TAG}"` and then verifies the result, failing the run if the
+   tag does not resolve to the version it just published. For an ordinary minor there is nothing to
+   move by hand.
 
+   ```bash
+   npm view @snack-ai/cli dist-tags
    ```
-   ! npm dist-tag add @snack-ai/cli@<version> latest
-   ! npm dist-tag rm @snack-ai/cli next        # if no release candidate is outstanding
-   ```
+
+   Hand tags are for the three cases the workflow cannot reach, and only those:
+
+   - **`stable`**, which no release ever moves. It points at the newest version whose surface the
+     project is willing to hold still, and it moves by decision. Give it to the user:
+     `! npm dist-tag add @snack-ai/cli@<version> stable`
+   - **a temporary tag**, such as the `candidate` tag the 1.0 flow publishes under before promotion.
+   - **repairing a failed verification**, when the publish succeeded but the tag did not land.
+
+   **There is no `next`.** It was retired after `0.7.0` and does not come back: a tag meaning
+   "whatever is newest" duplicates `latest` while it agrees with it and traps whoever installed it
+   the moment it does not. Release candidates publish to `rc`, which the workflow sets through
+   `--tag` like any other channel, and which is absent whenever no candidate is outstanding.
 
 9. **Verify the registry against the docs.** `npm view @snack-ai/cli dist-tags` must match what
-   `docs/release/identity.md` claims. Update the doc to what is true, and only after the tag
-   actually moved.
+   `docs/release/identity.md` claims. Update the doc to what is true, and only after the registry
+   actually says so.
 
 ## Gotchas
 
@@ -105,6 +128,19 @@ Say this up front rather than discovering it at the end.
   request and not a dist-tag call — even for the package just published, in the same step. `--tag`
   on the publish itself is the only tag the workflow can set. Three releases learned this; the
   comments in `release.yml` record two of them.
+- **`npm dist-tag add` against a version that was never published answers `E400 Bad Request`**, and
+  says nothing about why:
+
+  ```
+  npm error 400 Bad Request - PUT https://registry.npmjs.org/-/package/@snack-ai%2fcli/dist-tags/latest
+  ```
+
+  It reads like an npm fault or a permissions problem. It is neither: it means the version is not in
+  the registry, which on this repo almost always means the PR was not merged or the release workflow
+  was never dispatched. `npm view @snack-ai/cli versions` settles it in one command. This is the
+  failure an earlier version of step 8 caused by handing over the tag commands as routine, before
+  anything had published.
+
 - **The publish verification asserts the tag this run set, for packages this run published.** A
   skipped package carries the previous release's tags; reasserting them makes the run claim
   something it did not do. If you change the channel, check this step too.

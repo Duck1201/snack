@@ -10,15 +10,16 @@ on:
       dist_tag:
         description: >
           npm dist-tag to publish under. Each minor takes latest, so a plain `npm install` gets the
-          newest supported product; next is for release candidates, which are not that. `stable` is
-          never set here — it moves by hand, by decision, and not by a release. See the npm Channel
-          Policy in PLAN.md.
+          newest supported product; rc is for release candidates, which are not that. There is no
+          `next`: a tag meaning "whatever is newest" either shadows latest or contradicts it, and it
+          was retired after 0.7.0. `stable` is never set here — it moves by hand, by decision, and
+          not by a release. See the npm Channel Policy in PLAN.md.
         required: true
         type: choice
         default: latest
         options:
           - latest
-          - next
+          - rc
 
 permissions:
   actions: read

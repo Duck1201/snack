@@ -235,18 +235,46 @@ release, so a default install resolves the newest supported product rather than 
 project has moved past. `0.6.1` keeps the MVP surface under a new `stable` tag, for installs that
 cannot absorb pre-1.0 contract churn.
 
-| Package | Version | `latest` | `stable` | `next` | Attestations |
-| --- | --- | --- | --- | --- | --- |
-| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | — | publish + SLSA provenance |
-| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | — | publish + SLSA provenance |
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | publish + SLSA provenance |
 
 `latest` and `stable` were both moved with `npm dist-tag add` from an authenticated session, and
-`next` was removed from both packages with `npm dist-tag rm` in the same session. Under the new
-policy `next` carries release candidates, and there is no candidate: leaving it pointing at the
-current release would have made `@next` and `@latest` the same install while implying they are
-different channels. It stays absent until the first `1.0.0-rc.N` publish recreates it.
+`next` was removed from both packages with `npm dist-tag rm` in the same session. Leaving it
+pointing at the current release would have made `@next` and `@latest` the same install while
+implying they are different channels.
+
+**`next` is retired and does not come back.** The name promises "whatever is newest", and there is
+no version of this project where that is a useful separate answer: while it agreed with `latest` it
+was a duplicate, and the moment it disagreed it was a trap for anyone who installed it expecting the
+newest supported product. Release candidates publish to `rc` instead, which says what it holds and
+is absent whenever no candidate is outstanding. The channel columns above are `latest` and `stable`
+because those are the two a released version can occupy.
 
 None of that came from the workflow. Trusted publishing authorizes a publish request and not a
 `dist-tag` call, which answers `E401` even for the package just published — the workflow sets a tag
 only through `--tag` on the publish itself, and it is now an input of the dispatch rather than
 hardcoded. `stable` is never set by a release: it moves by decision.
+
+## 0.8.0
+
+`@snack-ai/cli@0.8.0` was published from commit `ade53a4` by protected release run
+[30681725922](https://github.com/Duck1201/snack/actions/runs/30681725922). The plugin step skipped
+again: Stage 8 changed nothing in `@snack-ai/opencode`, which stays at `0.1.2`.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.8.0` | `0.8.0` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | publish + SLSA provenance |
+
+This is the first release where no tag was moved by hand. `latest` was set by `--tag latest` on the
+publish and asserted by the workflow's own verification step; `stable` did not move, because it
+moves by decision and no decision was taken. The registry confirms it: `npm view @snack-ai/cli
+dist-tags` answers `{ stable: '0.6.1', latest: '0.8.0' }`.
+
+An `npm dist-tag add @snack-ai/cli@0.8.0 latest` was attempted before the dispatch and answered
+`400 Bad Request`. The cause was ordering, not permissions: `0.8.0` was not yet in the registry, and
+npm reports a tag pointed at a missing version with a bare status code and no explanation. The
+release skill that suggested the command as a routine step has been corrected, and the same release
+then completed without it.

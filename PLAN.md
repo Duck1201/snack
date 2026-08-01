@@ -123,7 +123,7 @@ stage names explicitly, which so far is Stage 6's **SNACK MVP**.
 | `0.7.0` | Claude Code parity | `latest` | Post-MVP development |
 | `0.8.0` | Multi-client convergence | `latest` | Candidate public contracts |
 | `0.9.0` | Feature freeze and public beta | `latest` | 1.0 contract candidate |
-| `1.0.0-rc.N` | Required stable candidate | `next` | No feature changes |
+| `1.0.0-rc.N` | Required stable candidate | `rc` | No feature changes |
 | `1.0.0` | First stable release | `latest` | Strict SemVer public contracts |
 
 External pilots and beta feedback are encouraged but are consultative. No release, including MVP and 1.0, depends on an external-user count.
@@ -670,7 +670,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
   independent two-axis review found four defects — reads that did not fail closed on a drifted
   fingerprint, `status` ingesting only one client of a shared source, one history bindable to two
   capacity sources, and unparseable records dropped in silence — all fixed and covered by tests.
-  Linux, macOS and WSL2/Debian 13 passed on Node `24.18.1`. Publishing `0.7.0` to `next` is the
+  Linux, macOS and WSL2/Debian 13 passed on Node `24.18.1`. Publishing `0.7.0` to `latest` is the
   only step left.
 - **Effort:** 5 AI-assisted waves
 **Purpose:** Validate the client-neutral architecture with a second real client and revalidate the Node 24 runtime across both clients.
@@ -727,7 +727,7 @@ no owner:
 
 - revalidate Node 24 across CI, native SQLite, package smoke tests, and both clients;
 - run independent architecture/privacy review;
-- publish `0.7.0` on `next` while `0.6.0` remains `latest`.
+- publish `0.7.0` on `latest`, superseding `0.6.0` there.
 
 **Deliverables**
 
@@ -836,7 +836,7 @@ no owner:
 
 ### Stage 9 - Feature Freeze and Public Beta
 
-- **Release:** `0.9.0` on npm `next`
+- **Release:** `0.9.0` on npm `latest`
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Freeze scope and exercise the complete 1.0 candidate without adding modules.
 
@@ -859,7 +859,7 @@ no owner:
 
 **Wave 3: Public beta release**
 
-- publish `0.9.0` to `next` with upgrade instructions from `0.6+`;
+- publish `0.9.0` to `latest` with upgrade instructions from `0.6+`;
 - collect external beta feedback as consultative evidence, not a release gate;
 - permit only fixes, diagnostics, tests, documentation, and backward-compatible implementation/support-matrix changes after freeze;
 - require any public schema or semantic contract change to reset the Stage 9 freeze, publish a new `0.9.x`, and rerun every Stage 9 gate.
@@ -898,7 +898,7 @@ no owner:
 
 ### Stage 10 - First Stable Release
 
-- **Release:** `1.0.0-rc.N` on npm `next`, then `1.0.0` on npm `latest`
+- **Release:** `1.0.0-rc.N` on npm `rc`, then `1.0.0` on npm `latest`
 - **Effort:** 3 AI-assisted waves plus a 7-day RC soak
 **Purpose:** Freeze supported public behavior and publish the first stable OpenCode + Claude Code release.
 
@@ -919,7 +919,7 @@ no owner:
 
 **Wave 2: Required release candidate**
 
-- publish `@snack-ai/cli@1.0.0-rc.1` and compatible plugin RC to `next`;
+- publish `@snack-ai/cli@1.0.0-rc.1` and compatible plugin RC to `rc`;
 - run installation/upgrade/live smoke suites against the published artifacts rather than workspace builds;
 - allow only blocker fixes followed by a new `rc.N` and restarted seven-day soak;
 - require seven days with no P0/P1 before promotion.
@@ -930,7 +930,7 @@ no owner:
 - build final CLI/plugin tarballs once, record checksums/SBOM, and prove reproducible equivalence except required version metadata;
 - publish those exact `1.0.0` tarballs to an isolated staging registry and run direct `0.6.0 -> 1.0.0`, install, smoke, and integrity tests;
 - if staging fails, discard the unpublished final tarballs, fix through a new `rc.N`, and restart the seven-day soak;
-- only after staging passes, publish the same checksum-verified tarballs to official npm under temporary `candidate`, verify registry integrity, move both packages' `latest` and `next` tags to final `1.0.0`, remove temporary tags, tag releases, and archive milestone evidence;
+- only after staging passes, publish the same checksum-verified tarballs to official npm under temporary `candidate`, verify registry integrity, move both packages' `latest` tag to final `1.0.0`, remove the `rc` and temporary tags, tag releases, and archive milestone evidence;
 - keep `0.6.0` installable by exact version but no longer the default.
 
 **Deliverables**
@@ -1035,12 +1035,15 @@ Strict SemVer applies:
   only by a deliberate decision, never by a release. Pre-1.0 minors on `latest` may evolve CLI
   flags, JSON shapes, and config/export schemas; every release from `0.6.0` forward still preserves
   user data through supported migrations.
-- `1.0.0-rc.N`: publishes to `next`. A release candidate is not the newest supported product.
+- `1.0.0-rc.N`: publishes to `rc`. A release candidate is not the newest supported product, and
+  `next` is not a channel this project keeps: a tag that means "whatever is newest" either shadows
+  `latest` or contradicts it, and it was removed from both packages after `0.7.0` rather than left
+  pointing at the current release. `rc` says what it holds.
 - `1.0.0`: is tested in an isolated staging registry first; the approved tarball then publishes under temporary npm `candidate` and takes `latest` from the last pre-1.0 minor after checksum verification.
 - `@snack-ai/opencode` first published its own `0.1.0` to `next` in Stage 4 rather than Stage 3, and `latest` resolved to that first `0.1.0` for the same npm first-publication behavior described for the CLI until Stage 6 moved it.
-- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries no `next` while there is no release candidate for it.
-- CLI/plugin RCs publish to each package's `next`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then both `latest` and `next` move to it and temporary tags are removed after checksum verification. `stable` moves to `1.0.0` at that point, because from 1.0 the newest release is also the one whose contracts are held.
-- Only `latest` and `next` are set by the release workflow, on the publish itself. `stable` and any temporary tag are moved by hand with an authenticated npm session: trusted publishing authorizes a publish request and not a `dist-tag` call, which answers `E401` even for the package just published. See [docs/release/identity.md](./docs/release/identity.md).
+- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries an `rc` tag only while a release candidate is outstanding.
+- CLI/plugin RCs publish to each package's `rc`; final `1.0.0` tarballs pass isolated-registry gates before official npm publication under temporary `candidate`, then `latest` moves to it and both `rc` and the temporary tag are removed after checksum verification. `stable` moves to `1.0.0` at that point, because from 1.0 the newest release is also the one whose contracts are held.
+- Only `latest` and `rc` are set by the release workflow, on the publish itself. `stable` and any temporary tag are moved by hand with an authenticated npm session: trusted publishing authorizes a publish request and not a `dist-tag` call, which answers `E401` even for the package just published. See [docs/release/identity.md](./docs/release/identity.md).
 
 ## Quality Budgets
 
