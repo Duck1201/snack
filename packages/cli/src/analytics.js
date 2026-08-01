@@ -1,3 +1,4 @@
+import { betaQuantile } from "./beta.js";
 import { ExitCode, SnackError } from "./errors.js";
 
 const HORIZON_PATTERN = /^P(?!$)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
@@ -606,4 +607,144 @@ export function assignPressureBands(rows, options) {
   }
 
   return rows.map((row) => ({ ...row, pressure_band: bands.get(windowOf(row)) ?? "unknown" }));
+}
+
+/**
+ * Versioned policy for comparing groups of observations against each other.
+ *
+ * `minimum_eligible` is the point below which a share is not worth reading as a rate. Under it the
+ * answer is that the groups cannot be compared, which is a different statement from finding no
+ * difference and has to stay tellable apart from it.
+ */
+export const COMPARISON_POLICY = Object.freeze({
+  version: "stage8-comparison-v1",
+  coverage_target: 0.8,
+  minimum_eligible: 30,
+});
+
+/**
+ * Compare the refusal rate of each group of observations against the other groups.
+ *
+ * The question this answers is whether one group is systematically refused more than the rest --
+ * on a shared capacity source, whether one client fares worse than the others against the same real
+ * capacity. It knows nothing about what a group is: a group is a key and its observations, so the
+ * same comparison serves a third client without a line changing here.
+ *
+ * The whole test is whether two credible intervals are disjoint. There is no model, no p-value and
+ * nothing fitted: each group's refusal share gets a Beta interval, the same construction and the
+ * same coverage language the forecast already speaks, and a difference is reported only when the
+ * group's interval and the interval of everything else do not overlap. Overlapping intervals are
+ * reported as no difference detected, never as no difference.
+ *
+ * Each group is compared against the complement rather than against the pooled rate. The pool
+ * contains the group being tested, so comparing to it drags every answer toward "no difference" --
+ * and does so hardest exactly where one group dominates the data, which is where a real difference
+ * matters most.
+ *
+ * @param {{key: string, outcomes: import("./prediction.js").OutcomeRow[]}[]} groups
+ * @param {{policy?: typeof COMPARISON_POLICY}} [options]
+ */
+export function compareOutcomeGroups(groups, options = {}) {
+  const policy = options.policy ?? COMPARISON_POLICY;
+  const counted = groups.map((group) => ({ key: group.key, ...countEligible(group.outcomes) }));
+  const comparable = counted.filter((group) => group.eligible >= policy.minimum_eligible);
+
+  if (counted.length < 2) {
+    return {
+      policy_version: policy.version,
+      status: /** @type {"ok" | "not_comparable"} */ ("not_comparable"),
+      reason: /** @type {string | null} */ ("single_group"),
+      groups: counted.map((group) => describeGroup(group, null, policy)),
+    };
+  }
+  if (comparable.length < 2) {
+    return {
+      policy_version: policy.version,
+      status: /** @type {"ok" | "not_comparable"} */ ("not_comparable"),
+      reason: /** @type {string | null} */ ("insufficient_evidence"),
+      groups: counted.map((group) => describeGroup(group, null, policy)),
+    };
+  }
+
+  return {
+    policy_version: policy.version,
+    status: /** @type {"ok" | "not_comparable"} */ ("ok"),
+    reason: /** @type {string | null} */ (null),
+    groups: counted.map((group) => {
+      if (group.eligible < policy.minimum_eligible) return describeGroup(group, null, policy);
+      const others = comparable.filter((candidate) => candidate.key !== group.key);
+      const complement = {
+        eligible: others.reduce((total, candidate) => total + candidate.eligible, 0),
+        restricted: others.reduce((total, candidate) => total + candidate.restricted, 0),
+      };
+      return describeGroup(group, complement, policy);
+    }),
+  };
+}
+
+/**
+ * @param {{key: string, eligible: number, restricted: number, prompts: number}} group
+ * @param {{eligible: number, restricted: number} | null} complement
+ * @param {typeof COMPARISON_POLICY} policy
+ */
+function describeGroup(group, complement, policy) {
+  const share = restrictionShare(group.restricted, group.eligible, policy);
+  let difference = /** @type {string} */ ("not_comparable");
+  if (complement !== null) {
+    const other = restrictionShare(complement.restricted, complement.eligible, policy);
+    difference =
+      share.lower > other.upper
+        ? "higher_than_others"
+        : share.upper < other.lower
+          ? "lower_than_others"
+          : "not_detected";
+  }
+  return {
+    key: group.key,
+    prompts: group.prompts,
+    eligible: group.eligible,
+    restricted: group.restricted,
+    restriction_share: share,
+    difference,
+  };
+}
+
+/**
+ * A refusal share with the interval that says how firmly it is known.
+ *
+ * The prior is Beta(1, 1) -- uniform, and the weakest thing that still produces an interval at all.
+ * A share reported without one would read as a measurement of a real refusal rate, when at thirty
+ * observations it is an estimate wide enough to overlap almost anything.
+ *
+ * @param {number} restricted
+ * @param {number} eligible
+ * @param {typeof COMPARISON_POLICY} policy
+ */
+function restrictionShare(restricted, eligible, policy) {
+  const tail = (1 - policy.coverage_target) / 2;
+  const alpha = 1 + restricted;
+  const beta = 1 + (eligible - restricted);
+  return {
+    value: eligible === 0 ? null : restricted / eligible,
+    lower: betaQuantile(tail, alpha, beta),
+    upper: betaQuantile(1 - tail, alpha, beta),
+    coverage_target: policy.coverage_target,
+  };
+}
+
+/**
+ * Excluded observations are not evidence either way, so they count toward what was seen and not
+ * toward what was refused.
+ *
+ * @param {import("./prediction.js").OutcomeRow[]} outcomes
+ */
+function countEligible(outcomes) {
+  let eligible = 0;
+  let restricted = 0;
+  for (const outcome of outcomes) {
+    if (outcome.outcome === "excluded") continue;
+    eligible += 1;
+    if (outcome.outcome === "restricted") restricted += 1;
+  }
+  return { prompts: outcomes.length, eligible, restricted };
 }

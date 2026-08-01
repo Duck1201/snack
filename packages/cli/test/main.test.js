@@ -2940,6 +2940,79 @@ test("each prompt records which client produced it without splitting the shared 
   );
 });
 
+test("stats --by-client reports each client behind a shared source and what it could not attribute", async () => {
+  const fixture = await makeRunFixture("snack-stats-by-client-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  for (const client of ["opencode", "claude"]) {
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        "work",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+      ],
+      fixture.options,
+    );
+  }
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  // The two fixture histories sit months apart, so the comparison is asked for over a window wide
+  // enough to hold both. A horizon that excluded one of them would be comparing one client against
+  // nothing, which is a different report.
+  fixture.options.now = new Date("2026-07-31T00:00:00.000Z");
+  const wide = ["--horizon", "P365D"];
+
+  // Without the flag the document is unchanged: a shared source is the uncommon case, and the
+  // single-client user should not carry a block that can only say "there is one client".
+  fixture.stdout.value = "";
+  await run(["node", "snack", "stats", ...wide, "--json"], fixture.options);
+  assert.equal("by_client" in JSON.parse(fixture.stdout.value).data, false);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "stats", ...wide, "--by-client", "--json"], fixture.options);
+  const byClient = JSON.parse(fixture.stdout.value).data.by_client;
+
+  assert.equal(byClient.policy_version, "stage8-comparison-v1");
+  // Two prompts is nowhere near enough to compare refusal rates, and the report says so rather than
+  // reporting that the clients behave alike.
+  assert.equal(byClient.status, "not_comparable");
+  assert.equal(byClient.reason, "insufficient_evidence");
+  assert.deepEqual(
+    byClient.groups.map((/** @type {{client: string}} */ group) => group.client).sort(),
+    ["claude", "opencode"],
+  );
+  assert.deepEqual(
+    byClient.groups.map((/** @type {{difference: string}} */ group) => group.difference),
+    ["not_comparable", "not_comparable"],
+  );
+  assert.equal(byClient.unattributed.prompts, 0);
+  // Every group carries the evidence behind its verdict, so the number can be read rather than
+  // trusted.
+  for (const group of byClient.groups) {
+    assert.equal(group.eligible, 1);
+    assert.ok(typeof group.installation_id === "string");
+    assert.ok(group.restriction_share.lower < group.restriction_share.upper);
+    assert.ok("calibration" in group);
+  }
+
+  // The human rendering states counts against their denominators, and never a percentage: a share
+  // printed as a percentage reads as a claim about the provider's real capacity.
+  fixture.stdout.value = "";
+  await run(["node", "snack", "stats", ...wide, "--by-client"], fixture.options);
+  assert.match(fixture.stdout.value, /by client (?:opencode|claude): restricted 0 of 1 eligible/u);
+  assert.doesNotMatch(fixture.stdout.value, /%/u);
+});
+
 test("a prompt id one client reuses from another is reported instead of overwriting", async () => {
   const fixture = await makeRunFixture("snack-prompt-id-collision-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);

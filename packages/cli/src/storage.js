@@ -1372,6 +1372,8 @@ export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
  * @property {string | null} completed_at
  * @property {number | null} duration_ms
  * @property {string} outcome
+ * @property {string | null} installation_id Null for a prompt stored before attribution existed,
+ *   or one on a source two clients already shared when the column arrived.
  * @property {UsageSliceRow[]} slices
  */
 
@@ -1397,6 +1399,7 @@ export function readUsageWindowRows(databaseFile, sourceAlias, window) {
            prompt_execution.started_at AS started_at,
            prompt_execution.completed_at AS completed_at,
            prompt_execution.duration_ms AS duration_ms,
+           prompt_execution.installation_id AS installation_id,
            prompt_source_outcome.outcome AS outcome,
            prompt_usage_slice.source_slice_id AS source_slice_id,
            prompt_usage_slice.provider AS provider,
@@ -1436,6 +1439,7 @@ export function readUsageWindowRows(databaseFile, sourceAlias, window) {
           completed_at: row.completed_at,
           duration_ms: row.duration_ms,
           outcome: row.outcome,
+          installation_id: row.installation_id,
           slices: [],
         };
         prompts.set(row.prompt_execution_id, prompt);
@@ -2039,6 +2043,8 @@ export function linkPrimaryEvaluations(databaseFile, sourceAlias, policyVersion)
  * @property {"success" | "restricted" | "excluded"} outcome
  * @property {string} evidence_level
  * @property {string} model_policy_version
+ * @property {string | null} installation_id Which client produced the prompt the forecast was
+ *   scored against, where that is known.
  */
 
 /**
@@ -2060,10 +2066,13 @@ export function readCalibrationPairs(databaseFile, sourceAlias) {
            prediction_attempt.upper AS upper,
            prediction_attempt.evidence_level AS evidence_level,
            prediction_attempt.model_policy_version AS model_policy_version,
+           prompt_execution.installation_id AS installation_id,
            prompt_source_outcome.outcome AS outcome
          FROM prediction_evaluation
          JOIN prediction_attempt
            ON prediction_attempt.id = prediction_evaluation.prediction_attempt_id
+         JOIN prompt_execution
+           ON prompt_execution.id = prediction_evaluation.prompt_execution_id
          JOIN prompt_source_outcome
            ON prompt_source_outcome.prompt_execution_id = prediction_evaluation.prompt_execution_id
          WHERE prediction_attempt.source_alias = ?
