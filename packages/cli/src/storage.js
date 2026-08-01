@@ -460,6 +460,17 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
       // Loaded once per batch. Enforcing the tombstone here rather than through the ingestion
       // cursor is what makes it survive `--full`, which re-reads everything by definition.
       const tombstones = readPurgeTombstones(database, source.alias);
+      // Whether more than one client feeds this capacity source. Read once per batch rather than
+      // per observation: it decides how an unattributed prompt may be treated, and on a hundred
+      // thousand observations the difference is a constant against a hundred thousand scans.
+      const bindings = database
+        .prepare("SELECT COUNT(*) AS count FROM source_binding WHERE source_alias = ?")
+        .get(source.alias);
+      const sharedSource =
+        typeof bindings === "object" &&
+        bindings !== null &&
+        "count" in bindings &&
+        Number(bindings.count) > 1;
       for (const observation of batch.observations) {
         if (
           tombstones.length > 0 &&
@@ -544,6 +555,73 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           counts.pending_mapping += 1;
           continue;
         }
+        if (!isValidObservation(observation)) {
+          counts.rejected_invalid += 1;
+          continue;
+        }
+        const observationHash = hashObservation(observation);
+        const existing = database
+          .prepare(
+            `SELECT id, source_revision, observation_hash, completion, revision_domain,
+                    installation_id
+              FROM prompt_execution
+             WHERE source_alias = ? AND source_prompt_id = ?`,
+          )
+          .get(source.alias, observation.source_prompt_id);
+        const storedRow =
+          typeof existing === "object" && existing !== null
+            ? /** @type {Record<string, unknown>} */ (existing)
+            : null;
+        // An attribution that is recorded and belongs to somebody else.
+        const claimedByAnother =
+          typeof storedRow?.installation_id === "string" &&
+          storedRow.installation_id !== source.installation_id;
+        // An attribution the upgrade could not determine, on a source where it genuinely could not:
+        // two clients already shared it, so a stored prompt could have come from either. Here a
+        // differing revision domain is the whole signal there is, and it says these are not the
+        // same prompt -- one client's identifier namespace has collided with another's.
+        //
+        // Where the source has a single binding this does not apply: the domains differ there when
+        // one installation reports the same prompt through the spool and through the backfill,
+        // which is by design and must keep merging.
+        const unattributedOnSharedSource =
+          storedRow !== null &&
+          storedRow.installation_id === null &&
+          sharedSource &&
+          typeof storedRow.revision_domain === "string" &&
+          storedRow.revision_domain !== observation.revision_domain;
+        if (claimedByAnother || unattributedOnSharedSource) {
+          // Two clients feeding one capacity source identify their prompts in their own namespaces,
+          // so a prompt id is unique per client and not per source. Where two of them agree, this
+          // is not one prompt observed twice; it is two prompts that cannot both be stored under
+          // the key they share.
+          //
+          // Refusing is the only correct answer. Merging would attribute one client's work to the
+          // other, and overwriting silently destroys a prompt -- which is what happened before this
+          // guard whenever both had succeeded, because two agreeing outcomes read as a compatible
+          // backfill. The prompt already stored is kept, because it is the one whose evidence is
+          // already in the forecast, and the collision is reported so a person can see that a real
+          // observation was dropped rather than absorbed.
+          //
+          // This has to come before anything else in this iteration, and before the pending-mapping
+          // and pending-spool deletions below in particular. Those are scoped by prompt id and
+          // provider, not by installation, so running them first would clear the other client's
+          // pending state for a prompt this observation is about to be refused for -- the refusal
+          // would be correct and the side effect would already have happened.
+          //
+          // One row per occurrence rather than an incrementing counter: the unique index treats
+          // NULL segment and line offset as distinct, so `ON CONFLICT` would never match. The count
+          // `doctor` reports is a sum over occurrences either way.
+          database
+            .prepare(
+              `INSERT INTO ingestion_issue
+                 (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+               VALUES (?, ?, 'cross_client_prompt_id_collision', NULL, NULL, ?, ?, 1)`,
+            )
+            .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
+          counts.rejected_invalid += 1;
+          continue;
+        }
         database
           .prepare(
             `DELETE FROM ambiguous_profile_mapping
@@ -566,55 +644,6 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
                WHERE installation_id = ? AND source_prompt_id = ? AND provider = ?`,
             )
             .run(source.installation_id, observation.source_prompt_id, observation.provider);
-        }
-        if (!isValidObservation(observation)) {
-          counts.rejected_invalid += 1;
-          continue;
-        }
-        const observationHash = hashObservation(observation);
-        const existing = database
-          .prepare(
-            `SELECT id, source_revision, observation_hash, completion, revision_domain,
-                    installation_id
-              FROM prompt_execution
-             WHERE source_alias = ? AND source_prompt_id = ?`,
-          )
-          .get(source.alias, observation.source_prompt_id);
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          "installation_id" in existing &&
-          typeof existing.installation_id === "string" &&
-          existing.installation_id !== source.installation_id
-        ) {
-          // Two clients feeding one capacity source identify their prompts in their own namespaces,
-          // so a prompt id is unique per client and not per source. Where two of them agree, this
-          // is not one prompt observed twice; it is two prompts that cannot both be stored under
-          // the key they share.
-          //
-          // Refusing is the only correct answer. Merging would attribute one client's work to the
-          // other, and overwriting silently destroys a prompt -- which is what happened before this
-          // guard whenever both had succeeded, because two agreeing outcomes read as a compatible
-          // backfill. The prompt already stored is kept, because it is the one whose evidence is
-          // already in the forecast, and the collision is reported so a person can see that a real
-          // observation was dropped rather than absorbed.
-          //
-          // This has to come before anything else touches the row: the paths below merge
-          // restrictions and finalize boundaries onto whatever they find under the shared key, and
-          // the whole point is that the row they found belongs to another client.
-          //
-          // Gated on the installation rather than on the revision domain. One installation
-          // legitimately reports the same prompt through two paths, the spool and the backfill, and
-          // those disagree on domain by design and must keep merging.
-          database
-            .prepare(
-              `INSERT INTO ingestion_issue
-                 (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
-               VALUES (?, ?, 'cross_client_prompt_id_collision', NULL, NULL, ?, ?, 1)`,
-            )
-            .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
-          counts.rejected_invalid += 1;
-          continue;
         }
         if (
           typeof existing === "object" &&

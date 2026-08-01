@@ -14,6 +14,7 @@ import {
   inspectDatabase,
   migrationDirectory,
   readIngestionCursor,
+  readSpoolIssueCount,
   restoreSetupDatabaseBackup,
   storeObservations,
 } from "../src/storage.js";
@@ -522,6 +523,118 @@ test("a prompt stored before the second client arrived keeps an honest unknown a
     { source_prompt_id: "prompt-2", installation_id: "99999999-2222-4333-8444-555555555555" },
   ]);
 });
+
+test("a prompt the upgrade left unattributed is not claimed by a client that reused its id", async () => {
+  // The gap the collision guard did not cover. On a source two clients already shared, migration
+  // 012 leaves the attribution unknown by design -- and an unknown attribution used to be treated
+  // as a free one: the next client to present that prompt id claimed the row and overwrote it.
+  //
+  // That is the same silent data loss the guard exists to stop, reached by the one path this stage
+  // is actually about: an upgraded shared source.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  seedSecondClientOnSharedSource(paths.databaseFile);
+  await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+  // Confirms the premise rather than assuming it: `prompt-1` is on the shared alias, so the upgrade
+  // could not attribute it and left it NULL.
+  assert.equal(readStoredPrompt(paths.databaseFile, "prompt-1").installation_id, null);
+
+  const claudeSource = {
+    alias: "work",
+    installation_id: "99999999-2222-4333-8444-555555555555",
+    adapter: "claude",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "cc-jsonl-turntree-v1",
+  };
+  const counts = storeObservations(
+    paths.databaseFile,
+    claudeSource,
+    {
+      observations: [
+        {
+          // The other client's own prompt, which merely happens to carry the same identifier.
+          source_prompt_id: "prompt-1",
+          source_session_id: "claude-session",
+          revision: "2026-01-02T05:00:00.000Z",
+          revision_domain: "claude-uuid-v1",
+          parser_version: "claude-session-v1",
+          started_at: "2026-01-02T05:00:00.000Z",
+          completed_at: "2026-01-02T05:00:09.000Z",
+          duration_ms: 9000,
+          completion: "completed",
+          provider: "anthropic",
+          model: "claude-opus-5",
+          outcome: "success",
+          usage_slices: [
+            {
+              source_slice_id: "slice-b",
+              provider: "anthropic",
+              model: "claude-opus-5",
+              input_tokens: 999,
+              output_tokens: 888,
+              reasoning_tokens: null,
+              cache_read_tokens: null,
+              cache_write_tokens: null,
+              cost_decimal: null,
+              currency: null,
+            },
+          ],
+          restrictions: [],
+        },
+      ],
+      cursor: null,
+    },
+    now,
+    {
+      mappedProviders: new Set(["anthropic"]),
+      providerMappingCounts: new Map([["anthropic", 1]]),
+      path: "backfill",
+    },
+  );
+
+  // The stored prompt is untouched: still the first client's parser, duration and usage slice.
+  const stored = readStoredPrompt(paths.databaseFile, "prompt-1");
+  assert.equal(stored.parser_version, "opencode-session-v1");
+  assert.equal(stored.duration_ms, 1000);
+  assert.equal(stored.slices, 1);
+  assert.equal(stored.source_slice_id, "slice-1");
+  // And it stays unattributed rather than being handed to whoever asked last.
+  assert.equal(stored.installation_id, null);
+  // Refused and reported, not absorbed.
+  assert.equal(counts.rejected_invalid, 1);
+  assert.equal(counts.updated, 0);
+  assert.equal(readSpoolIssueCount(paths.databaseFile, "work"), 1);
+});
+
+/** @param {string} databaseFile @param {string} sourcePromptId */
+function readStoredPrompt(databaseFile, sourcePromptId) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return /** @type {Record<string, unknown>} */ (
+      database
+        .prepare(
+          `SELECT prompt_execution.installation_id, prompt_execution.parser_version,
+                  prompt_execution.duration_ms,
+                  (SELECT COUNT(*) FROM prompt_usage_slice
+                    WHERE prompt_execution_id = prompt_execution.id) AS slices,
+                  (SELECT source_slice_id FROM prompt_usage_slice
+                    WHERE prompt_execution_id = prompt_execution.id) AS source_slice_id
+             FROM prompt_execution
+            WHERE source_prompt_id = ?`,
+        )
+        .get(sourcePromptId)
+    );
+  } finally {
+    database.close();
+  }
+}
 
 /**
  * Add a second client bound to the same capacity source, plus a source only one client feeds, so

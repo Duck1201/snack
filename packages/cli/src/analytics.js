@@ -653,7 +653,9 @@ export function compareOutcomeGroups(groups, options = {}) {
     return {
       policy_version: policy.version,
       status: /** @type {"ok" | "not_comparable"} */ ("not_comparable"),
-      reason: /** @type {string | null} */ ("single_group"),
+      // Nothing to compare and one thing to compare are different situations, and a consumer
+      // reading only the reason should not be told there was a single group when there were none.
+      reason: /** @type {string | null} */ (counted.length === 0 ? "no_groups" : "single_group"),
       groups: counted.map((group) => describeGroup(group, null, policy)),
     };
   }

@@ -54,6 +54,9 @@ test("no command calls observed usage a quota percentage or a remaining balance"
     ["sync", "--full"],
     ["status"],
     ["stats", "--verbose"],
+    // The per-client comparison renders refusal counts and intervals, which is exactly the shape of
+    // output that drifts into sounding like a share of real capacity.
+    ["stats", "--by-client"],
     ["doctor"],
     ["config", "get"],
     ["config", "path"],

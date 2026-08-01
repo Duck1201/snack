@@ -2549,10 +2549,15 @@ function describeClientComparison(comparison) {
   };
   let text = "";
   for (const group of comparison.groups) {
-    const interval = `[${group.restriction_share.lower.toFixed(3)}-${group.restriction_share.upper.toFixed(3)}]`;
+    // With nothing eligible the interval is the untouched prior, not a measurement of anything.
+    // Printing it beside "0 of 0" would dress a starting assumption up as an observation.
+    const interval =
+      group.eligible === 0
+        ? ""
+        : ` [${group.restriction_share.lower.toFixed(3)}-${group.restriction_share.upper.toFixed(3)}]`;
     text +=
       `  by client ${group.client ?? group.installation_id}:` +
-      ` restricted ${group.restricted} of ${group.eligible} eligible ${interval},` +
+      ` restricted ${group.restricted} of ${group.eligible} eligible${interval},` +
       ` ${verdicts[/** @type {keyof typeof verdicts} */ (group.difference)]}.\n`;
   }
   if (comparison.unattributed.prompts > 0) {

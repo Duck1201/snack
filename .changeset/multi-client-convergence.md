@@ -20,6 +20,10 @@ and reports it. Refused observations were only reported for sources that have a 
 so a Claude-only source could refuse silently. And a database written by a newer release was
 reported as a corrupted migration history; it now says which release to install.
 
+The `doctor` check that counts refused observations is renamed from `source_spool:<alias>` to
+`source_ingestion:<alias>`, because it counts every refusal and not only the spool's. Anything
+matching on the old id needs updating.
+
 The JSON envelope and the export document gain published JSON Schemas, shipped in the package. The
 export moves to schema version 2 for the new client columns; the envelope stays at version 1 and
 still accepts every document 0.7 produced.

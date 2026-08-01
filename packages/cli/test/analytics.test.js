@@ -1329,6 +1329,54 @@ test("a client with too few eligible prompts is reported as not comparable, not 
   assert.equal(claude?.restricted, 1);
 });
 
+test("a client is compared against the others rather than against a pool containing itself", () => {
+  // The one design claim the comparison makes, and nothing was testing it. Comparing a group to the
+  // pooled rate compares it partly to itself, which drags every answer toward "no difference" --
+  // and hardest exactly where one client dominates the data, which is where a real difference
+  // matters most.
+  //
+  // The dominant client is 98% of the observations, refused at 10% against the other's 25%. Against
+  // the complement that separates cleanly. Against a pool the dominant client would be compared
+  // with 10.3% -- a figure it sets itself -- and its own interval would swallow it, reporting no
+  // difference where there plainly is one. The numbers are chosen so the two rules disagree.
+  const comparison = compareOutcomeGroups([
+    { key: "dominant", outcomes: outcomesWith({ restricted: 1000, success: 9000 }) },
+    { key: "rare", outcomes: outcomesWith({ restricted: 50, success: 150 }) },
+  ]);
+
+  assert.equal(comparison.status, "ok");
+  assert.deepEqual(
+    comparison.groups.map((group) => [group.key, group.difference]),
+    [
+      ["dominant", "lower_than_others"],
+      ["rare", "higher_than_others"],
+    ],
+  );
+});
+
+test("a group with nothing eligible is not given a measured refusal share", () => {
+  // Every observation excluded means nothing was learned. The share has to say so rather than
+  // report the prior that produced the interval.
+  const comparison = compareOutcomeGroups([
+    { key: "silent", outcomes: outcomesWith({ restricted: 0, success: 0, excluded: 40 }) },
+    { key: "busy", outcomes: outcomesWith({ restricted: 20, success: 180 }) },
+  ]);
+
+  const silent = comparison.groups.find((group) => group.key === "silent");
+  assert.equal(silent?.eligible, 0);
+  assert.equal(silent?.prompts, 40);
+  assert.equal(silent?.restriction_share.value, null);
+  assert.equal(silent?.difference, "not_comparable");
+});
+
+test("no attributed observations at all is reported as no groups, not as one", () => {
+  const comparison = compareOutcomeGroups([]);
+
+  assert.equal(comparison.status, "not_comparable");
+  assert.equal(comparison.reason, "no_groups");
+  assert.deepEqual(comparison.groups, []);
+});
+
 test("observations that were excluded count as seen but never as refused", () => {
   // An excluded observation is one the product could not read as evidence either way. Counting it
   // as a refusal would invent restrictions the provider never issued; dropping it from the prompt
