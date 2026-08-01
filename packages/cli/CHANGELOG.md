@@ -1,5 +1,39 @@
 # @snack-ai/cli
 
+## 1.0.2
+
+### Patch Changes
+
+- 1a80acc: `doctor` now says which providers a source is waiting on, how many observations each
+  holds, and what to run:
+
+  ```
+  61 schema-valid observation(s) need an explicit mapping. Waiting on: opencode 34, ollama 19,
+  anthropic 5, haiku 3. Configure each with `snack setup` and its --provider, then run
+  `snack sync --full` to attribute what is already stored.
+  ```
+
+  A real client history is multi-provider and `setup` asks for one, so this is the state a new user
+  lands in. The count alone did not say how to leave it.
+
+- 1a80acc: Every command that synchronizes stops reading the whole Claude Code history to check its
+  shape.
+
+  The fingerprint check samples 200 records per transcript and then stops, but it stopped inside an
+  array built by reading and parsing each file in full. Over a real 222 MB history a `sync` with
+  nothing to read cost 238 MB of process memory and 1.2 s; it now costs 138 MB and 0.74 s, and
+  `doctor` drops from 241 MB to 148 MB. What the check can conclude is unchanged — it never looked
+  past 200 records — only what it reads to conclude it.
+
+- 1a80acc: An OpenCode prompt whose assistant reply never arrived is now recorded instead of
+  disappearing.
+
+  Eleven of 194 prompts on a real history vanished this way, every one with no assistant message
+  naming it as a parent — and they reached no counter either, so `sync` reported fewer observations
+  than the source held and a source could not be reconciled against its own history. They are stored
+  with the provider the user's own message names, and `excluded`, which keeps them out of the
+  outcome model while their descriptive dimensions still count.
+
 ## 1.0.1
 
 ### Patch Changes

@@ -127,18 +127,19 @@ Claude settings ([ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.
 
 Ten releases, each with a single job. Nothing shipped until the thing before it was proven.
 
-| Version | What it added                                                                                                                                                                         |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0.1.0` | Foundation: install, config, private storage, checksummed migrations, CI and a release pipeline. No forecast at all.                                                                  |
-| `0.2.0` | First useful journey. Read-only OpenCode backfill, guided setup, and a deliberately broad initial estimate declaring `very_low` evidence.                                             |
-| `0.3.0` | Live capture and the crash-safe spool, reconciled with backfill into one canonical history. Built but never published — superseded by `0.4.0`.                                        |
-| `0.4.0` | Explainable analytics. Rolling horizons, token and cost dimensions, usage pressure as percentiles against your own past, plan profiles.                                               |
-| `0.5.0` | The learned forecast. Beta-Binomial with hierarchical backoff, evidence gates, prediction snapshots, and rolling-origin backtesting.                                                  |
-| `0.6.0` | **SNACK MVP.** All eight command groups, export and purge, security and platform hardening. The guaranteed migration baseline: every later release preserves your data.               |
-| `0.7.0` | Claude Code, read through its JSONL history by a second adapter behind the same internal seam. Proof the core was not OpenCode-shaped.                                                |
-| `0.8.0` | Client neutrality made executable. No client-specific type reaches the domain, two clients converge on one capacity source, and the public contracts became schemas instead of prose. |
-| `0.9.0` | Feature freeze and public beta. Fuzzing four trust boundaries found three defects a green fixture suite never would. Six surfaces frozen and published.                               |
-| `1.0.0` | First stable release. Strict SemVer on the public contracts, migration chains rehearsed from every published release, artifacts staged on an isolated registry before npm sees them.  |
+| Version         | What it added                                                                                                                                                                                                                      |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0.1.0`         | Foundation: install, config, private storage, checksummed migrations, CI and a release pipeline. No forecast at all.                                                                                                               |
+| `0.2.0`         | First useful journey. Read-only OpenCode backfill, guided setup, and a deliberately broad initial estimate declaring `very_low` evidence.                                                                                          |
+| `0.3.0`         | Live capture and the crash-safe spool, reconciled with backfill into one canonical history. Built but never published — superseded by `0.4.0`.                                                                                     |
+| `0.4.0`         | Explainable analytics. Rolling horizons, token and cost dimensions, usage pressure as percentiles against your own past, plan profiles.                                                                                            |
+| `0.5.0`         | The learned forecast. Beta-Binomial with hierarchical backoff, evidence gates, prediction snapshots, and rolling-origin backtesting.                                                                                               |
+| `0.6.0`         | **SNACK MVP.** All eight command groups, export and purge, security and platform hardening. The guaranteed migration baseline: every later release preserves your data.                                                            |
+| `0.7.0`         | Claude Code, read through its JSONL history by a second adapter behind the same internal seam. Proof the core was not OpenCode-shaped.                                                                                             |
+| `0.8.0`         | Client neutrality made executable. No client-specific type reaches the domain, two clients converge on one capacity source, and the public contracts became schemas instead of prose.                                              |
+| `0.9.0`         | Feature freeze and public beta. Fuzzing four trust boundaries found three defects a green fixture suite never would. Six surfaces frozen and published.                                                                            |
+| `1.0.0`         | First stable release. Strict SemVer on the public contracts, migration chains rehearsed from every published release, artifacts staged on an isolated registry before npm sees them.                                               |
+| `1.0.1` `1.0.2` | The first releases driven by _using_ the product. Installing the published `1.0.0` from npm and running it against a real history found twelve defects, three of them release-blocking, every one invisible to a green test suite. |
 
 The full staged plan, with per-wave exit criteria and everything deliberately left out, is in
 [PLAN.md](./PLAN.md).
@@ -265,18 +266,19 @@ campos estruturados, e é por isso que nenhum hook é registrado nas suas config
 
 Dez releases, cada uma com um único trabalho. Nada foi adiante antes de a anterior estar provada.
 
-| Versão  | O que acrescentou                                                                                                                                                                                        |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0.1.0` | Fundação: instalação, configuração, armazenamento privado, migrações com checksum, CI e pipeline de release. Nenhuma previsão ainda.                                                                     |
-| `0.2.0` | Primeira jornada útil. Backfill somente-leitura do OpenCode, setup guiado e uma estimativa inicial propositalmente larga declarando evidência `very_low`.                                                |
-| `0.3.0` | Captura ao vivo e o spool à prova de queda, reconciliado com o backfill num histórico canônico único. Construída e nunca publicada — superada pela `0.4.0`.                                              |
-| `0.4.0` | Analítica explicável. Horizontes móveis, dimensões de token e custo, pressão de uso como percentis contra o seu próprio passado, perfis de plano.                                                        |
-| `0.5.0` | A previsão aprendida. Beta-Binomial com backoff hierárquico, portões de evidência, snapshots de previsão e backtest de origem móvel.                                                                     |
-| `0.6.0` | **SNACK MVP.** Os oito grupos de comando, export e purge, endurecimento de segurança e de plataforma. A linha de base garantida de migração: toda release posterior preserva os seus dados.              |
-| `0.7.0` | Claude Code, lido pelo histórico JSONL por um segundo adaptador atrás da mesma costura interna. Prova de que o núcleo não tinha o formato do OpenCode.                                                   |
-| `0.8.0` | Neutralidade de cliente virou executável. Nenhum tipo específico de cliente chega ao domínio, dois clientes convergem numa fonte de capacidade, e os contratos públicos viraram schemas em vez de prosa. |
-| `0.9.0` | Congelamento de escopo e beta pública. Fuzzing em quatro fronteiras de confiança achou três defeitos que uma suíte de fixtures verde jamais acharia. Seis superfícies congeladas e publicadas.           |
-| `1.0.0` | Primeira release estável. SemVer estrito nos contratos públicos, cadeias de migração ensaiadas a partir de toda release publicada, artefatos testados num registry isolado antes de o npm vê-los.        |
+| Versão          | O que acrescentou                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0.1.0`         | Fundação: instalação, configuração, armazenamento privado, migrações com checksum, CI e pipeline de release. Nenhuma previsão ainda.                                                                                      |
+| `0.2.0`         | Primeira jornada útil. Backfill somente-leitura do OpenCode, setup guiado e uma estimativa inicial propositalmente larga declarando evidência `very_low`.                                                                 |
+| `0.3.0`         | Captura ao vivo e o spool à prova de queda, reconciliado com o backfill num histórico canônico único. Construída e nunca publicada — superada pela `0.4.0`.                                                               |
+| `0.4.0`         | Analítica explicável. Horizontes móveis, dimensões de token e custo, pressão de uso como percentis contra o seu próprio passado, perfis de plano.                                                                         |
+| `0.5.0`         | A previsão aprendida. Beta-Binomial com backoff hierárquico, portões de evidência, snapshots de previsão e backtest de origem móvel.                                                                                      |
+| `0.6.0`         | **SNACK MVP.** Os oito grupos de comando, export e purge, endurecimento de segurança e de plataforma. A linha de base garantida de migração: toda release posterior preserva os seus dados.                               |
+| `0.7.0`         | Claude Code, lido pelo histórico JSONL por um segundo adaptador atrás da mesma costura interna. Prova de que o núcleo não tinha o formato do OpenCode.                                                                    |
+| `0.8.0`         | Neutralidade de cliente virou executável. Nenhum tipo específico de cliente chega ao domínio, dois clientes convergem numa fonte de capacidade, e os contratos públicos viraram schemas em vez de prosa.                  |
+| `0.9.0`         | Congelamento de escopo e beta pública. Fuzzing em quatro fronteiras de confiança achou três defeitos que uma suíte de fixtures verde jamais acharia. Seis superfícies congeladas e publicadas.                            |
+| `1.0.0`         | Primeira release estável. SemVer estrito nos contratos públicos, cadeias de migração ensaiadas a partir de toda release publicada, artefatos testados num registry isolado antes de o npm vê-los.                         |
+| `1.0.1` `1.0.2` | As primeiras releases guiadas por _usar_ o produto. Instalar a `1.0.0` publicada do npm e rodá-la contra um histórico real achou doze defeitos, três deles bloqueadores, todos invisíveis para uma suíte de testes verde. |
 
 O plano completo por estágios, com critérios de saída por onda e tudo que ficou deliberadamente de
 fora, está no [PLAN.md](./PLAN.md).
