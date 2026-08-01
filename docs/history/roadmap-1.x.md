@@ -38,7 +38,7 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 
 **Exit, met:** each fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
 
-### 1.1.0 - Interface, `snack update`, and the documentation restructure — **in progress**
+### 1.1.0 - Interface, `snack update`, and the documentation restructure — **shipped**
 
 **Purpose:** the terminal output is the product's only surface, and it is currently unreadable. And keeping the product current is currently a manual reconstruction of flags.
 
@@ -70,7 +70,11 @@ What the criterion was protecting is kept and stated more precisely: colour, lay
 the sparkline's rendering are human formatting and reach no JSON document. `pressure.trend` is the
 single exception, it is named here, and it is additive under the strict SemVer `1.0` confirmed.
 
-**What shipped, and where the plan above was wrong.** Three pull requests, one release.
+**Shipped** as `@snack-ai/cli@1.1.0` and `@snack-ai/opencode@1.0.2` on 2026-08-01, from commit
+`ba57aaa`, tagged `v1.1.0`. Four pull requests and a release cut; the published artifacts match
+the recorded evidence exactly. Full record in [docs/release/identity.md](../release/identity.md).
+
+**Where the plan above was wrong.**
 
 `snack update` landed with the layout detection, the confirmation, the failure path and the
 re-exec, plus the network gate ADR-0010 asked for. Two things in this entry turned out to be wrong
