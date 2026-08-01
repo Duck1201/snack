@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/config-set.schema.json",
+  "title": "snack config set payload",
+  "description": "The `data` of a `snack config set --json` document. Version 2 of the envelope renamed the `storage` keys to the snake_case every other payload uses. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["key", "value", "storage"],
+  "properties": {
+    "key": {
+      "type": "string"
+    },
+    "value": {
+      "description": "The value as it was stored, read back from the written configuration."
+    },
+    "storage": {
+      "description": "What opening storage had to do, since `config set` is also the command that migrates a database.",
+      "type": "object",
+      "required": ["applied", "backup_created", "backup_file", "migration_count"],
+      "properties": {
+        "applied": {
+          "description": "Migration numbers applied by this run, in order.",
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "backup_created": {
+          "type": "boolean"
+        },
+        "backup_file": {
+          "type": ["string", "null"]
+        },
+        "migration_count": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

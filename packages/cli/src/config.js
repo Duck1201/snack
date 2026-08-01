@@ -112,6 +112,29 @@ export function isConfiguredSource(value) {
 }
 
 /**
+ * Refuse an alias no configured capacity source answers to.
+ *
+ * Every command that narrows to one source owes the same answer to a typo, so the guard lives here
+ * rather than being restated per command — `doctor` restated it by omission and reported a healthy
+ * installation for an alias that did not exist.
+ *
+ * @param {string | undefined} alias
+ * @param {unknown} sources the `sources` array as it came out of the configuration
+ */
+export function requireConfiguredSource(alias, sources) {
+  if (alias === undefined) return;
+  const configured = Array.isArray(sources) ? sources : [];
+  if (configured.some((source) => isConfiguredSource(source) && source.alias === alias)) return;
+  // Never echo the value back. An alias arrives from argv, and argv is exactly where someone pastes
+  // something private by accident; a rejected value must not travel into a JSON document that gets
+  // shared.
+  throw new SnackError("The requested capacity source is not configured.", {
+    code: ExitCode.unavailable,
+    reason: "source_not_configured",
+  });
+}
+
+/**
  * @param {string} text
  * @returns {Record<string, unknown>}
  */
@@ -128,14 +151,73 @@ export function parseAndValidateConfig(text) {
     });
   }
   if (!isRecord(value) || !validate(value)) {
-    const issue = validate.errors?.[0];
-    const location = issue?.instancePath || "configuration root";
-    throw new SnackError(`Configuration schema rejected ${location}.`, {
-      code: ExitCode.config,
-      reason: "config_schema_error",
-    });
+    throw describeSchemaRejection(validate.errors);
   }
   return value;
+}
+
+/**
+ * Turn Ajv's error list into one diagnostic that says which rule refused the configuration.
+ *
+ * Reporting only the location answered a missing field, a mistyped value and an unsupported client
+ * with the same sentence, and gave a `--json` consumer nothing the human line did not already have.
+ * The rejected value never appears: a configuration is exactly where a private path would sit, so
+ * the diagnostic names the rule and the location and stops there.
+ *
+ * @param {import("ajv").ErrorObject[] | null | undefined} errors
+ */
+function describeSchemaRejection(errors) {
+  // Two rules, in order. A field's own declaration beats a `oneOf` branch: an unsupported adapter
+  // fails every branch, so the branch errors accuse whichever field that branch happened to pin --
+  // reporting the fingerprint for a mistyped client name. Then the deepest path wins, because the
+  // composite error reported against the parent is the one that says least.
+  const insideBranch = (/** @type {import("ajv").ErrorObject} */ error) =>
+    error.schemaPath.includes("/oneOf/") || error.keyword === "oneOf";
+  const issue = [...(errors ?? [])].sort(
+    (left, right) =>
+      Number(insideBranch(left)) - Number(insideBranch(right)) ||
+      right.instancePath.length - left.instancePath.length,
+  )[0];
+  const location = issue?.instancePath || "configuration root";
+  // Named here rather than derived from Ajv's keyword: these codes are a public contract, and
+  // `enum` and `const` are two spellings of the same answer to the reader -- an unsupported value.
+  const explained =
+    issue?.keyword === "required"
+      ? // A schema-declared name, not anything the user typed.
+        {
+          reason: "config_schema_required",
+          detail: `it is missing ${String(issue.params.missingProperty)}`,
+        }
+      : issue?.keyword === "pattern"
+        ? {
+            reason: "config_schema_pattern",
+            detail: "the value is not in the form this field accepts",
+          }
+        : issue?.keyword === "enum" || issue?.keyword === "const"
+          ? {
+              reason: "config_schema_unsupported_value",
+              detail: "the value is not one SNACK supports",
+            }
+          : issue?.keyword === "type"
+            ? {
+                reason: "config_schema_type",
+                detail: `the value is not ${String(issue.params.type)}`,
+              }
+            : issue?.keyword === "additionalProperties"
+              ? {
+                  reason: "config_schema_unknown_property",
+                  detail: "it carries a property SNACK does not recognize",
+                }
+              : undefined;
+  return new SnackError(
+    explained === undefined
+      ? `Configuration schema rejected ${location}.`
+      : `Configuration schema rejected ${location}: ${explained.detail}.`,
+    {
+      code: ExitCode.config,
+      reason: explained?.reason ?? "config_schema_error",
+    },
+  );
 }
 
 /**

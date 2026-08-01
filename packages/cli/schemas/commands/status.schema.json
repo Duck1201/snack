@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/status.schema.json",
+  "title": "snack status payload",
+  "description": "The `data` of a `snack status --json` document. One report when the installation has a single capacity source, otherwise one report per source under `sources`. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "oneOf": [
+    { "$ref": "#/$defs/report" },
+    {
+      "type": "object",
+      "required": ["sources"],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/report" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "report": {
+      "type": "object",
+      "required": [
+        "source",
+        "viability",
+        "risk",
+        "evidence",
+        "method",
+        "model_policy_version",
+        "contributors",
+        "pressure",
+        "expected_prompt_category",
+        "prospective",
+        "observed",
+        "freshness",
+        "completeness",
+        "synchronization",
+        "caveats"
+      ],
+      "properties": {
+        "source": {
+          "description": "The capacity source the estimate is about. Never a project path or a title.",
+          "type": "object",
+          "required": ["alias", "provider", "profile", "plan", "plan_profile"],
+          "properties": {
+            "alias": { "type": "string" },
+            "provider": { "type": "string" },
+            "profile": { "type": "string" },
+            "plan": { "type": "string" },
+            "active_period": { "type": ["object", "null"] },
+            "plan_profile": { "$ref": "#/$defs/planProfile" }
+          }
+        },
+        "viability": {
+          "description": "Next-prompt viability as an interval, never a share of a provider's real capacity.",
+          "type": "object",
+          "required": ["lower", "point", "upper", "coverage_target"],
+          "properties": {
+            "lower": { "type": "number" },
+            "point": { "type": "number" },
+            "upper": { "type": "number" },
+            "coverage_target": { "type": "number" }
+          }
+        },
+        "risk": {
+          "type": "object",
+          "required": ["label", "policy_version"],
+          "properties": {
+            "label": { "type": "string" },
+            "policy_version": { "type": "string" }
+          }
+        },
+        "evidence": {
+          "description": "How much the estimate can be leaned on, and which gate is holding it down.",
+          "type": "object",
+          "required": ["level", "policy_version", "gates"],
+          "properties": {
+            "level": { "type": "string" },
+            "policy_version": { "type": "string" },
+            "gates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "level", "limiting"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "level": { "type": "string" },
+                  "limiting": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "method": {
+          "description": "The named method behind the estimate, so a consumer can tell two releases apart.",
+          "type": "object",
+          "required": ["id", "version"],
+          "properties": {
+            "id": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        },
+        "model_policy_version": { "type": "string" },
+        "contributors": { "type": "object" },
+        "pressure": { "$ref": "#/$defs/pressure" },
+        "expected_prompt_category": { "type": ["string", "null"] },
+        "prospective": { "type": ["object", "null"] },
+        "observed": {
+          "type": "object",
+          "required": ["prompts", "successes", "restrictions", "excluded"],
+          "properties": {
+            "prompts": { "type": "integer" },
+            "successes": { "type": "integer" },
+            "restrictions": { "type": "integer" },
+            "excluded": { "type": "integer" }
+          }
+        },
+        "freshness": { "$ref": "#/$defs/freshness" },
+        "completeness": {
+          "type": "object",
+          "required": ["level", "reasons", "policy_version"],
+          "properties": {
+            "level": { "type": "string" },
+            "reasons": { "type": "array", "items": { "type": "string" } },
+            "policy_version": { "type": "string" }
+          }
+        },
+        "synchronization": {
+          "type": "object",
+          "required": ["performed", "status"],
+          "properties": {
+            "performed": { "type": "boolean" },
+            "status": { "type": "string" }
+          }
+        },
+        "caveats": {
+          "description": "What the estimate does not claim. Present and possibly empty, never absent.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "planProfile": {
+      "type": "object",
+      "required": ["id", "version", "provenance", "as_of"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "provenance": { "type": "string" },
+        "as_of": { "type": "string" }
+      }
+    },
+    "pressure": {
+      "description": "Usage pressure against local history, never a share of provider capacity.",
+      "type": "object",
+      "required": [
+        "horizon",
+        "score",
+        "band",
+        "policy_version",
+        "baseline_kind",
+        "completeness",
+        "contributors",
+        "baseline_windows"
+      ],
+      "properties": {
+        "horizon": { "type": "string" },
+        "score": { "type": ["number", "null"] },
+        "band": { "type": "string" },
+        "policy_version": { "type": "string" },
+        "baseline_kind": { "type": "string" },
+        "completeness": { "type": "string" },
+        "contributors": { "type": "array" },
+        "baseline_windows": { "type": "integer" },
+        "trend": { "type": ["object", "null"] }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "required": ["as_of", "age_seconds"],
+      "properties": {
+        "as_of": { "type": ["string", "null"] },
+        "age_seconds": { "type": ["number", "null"] }
+      }
+    }
+  }
+}

@@ -711,7 +711,7 @@ The following become public stable contracts:
 
 SQLite layout, migrations, internal `SourceAdapter`, module layout, and human formatting are not public APIs. They may evolve while preserving documented behavior and supported data.
 
-Public contracts freeze in Stage 9. After that freeze, only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation may proceed. Any public schema or semantic change resets Stage 9, requires a new `0.9.x`, and reruns every freeze gate; Stage 10 confirms rather than redefines the frozen contract.
+Public contracts freeze in Stage 9, and [docs/compatibility.md](./compatibility.md) records what was frozen, which versions the contracts carry, and what changed on the way in. After that freeze, only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation may proceed. Any public schema or semantic change resets Stage 9, requires a new `0.9.x`, and reruns every freeze gate; Stage 10 confirms rather than redefines the frozen contract.
 
 Strict SemVer applies after 1.0:
 

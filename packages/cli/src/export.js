@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
 
+import { ENVELOPE_SCHEMA_VERSION } from "./output.js";
+
 /**
  * The export contract, versioned independently of the output envelope because it freezes as a
  * public contract at 1.0 on its own timeline.
@@ -339,7 +341,7 @@ export function* exportTable(databaseFile, scope, tableName) {
  * @returns {Generator<string, Record<string, number>, void>} row counts per table
  */
 export function* exportJsonChunks(databaseFile, scope, context) {
-  yield `{\n  "schema_version": "1",\n  "command": ${JSON.stringify(context.command)},\n`;
+  yield `{\n  "schema_version": ${JSON.stringify(ENVELOPE_SCHEMA_VERSION)},\n  "command": ${JSON.stringify(context.command)},\n`;
   yield `  "generated_at": ${JSON.stringify(context.now.toISOString())},\n`;
   yield `  "status": "ok",\n  "data": {\n`;
   yield `    "export": ${JSON.stringify({ export_schema_version: EXPORT_SCHEMA_VERSION, scope })},\n`;

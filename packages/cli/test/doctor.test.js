@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { runDoctor } from "../src/doctor.js";
+import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
 import { pluginPackageSpec } from "../src/opencode-config.js";
 import { initializeDatabase, migrationDirectory } from "../src/storage.js";
@@ -130,6 +131,46 @@ test("a Claude-only installation is not told about the OpenCode plugin", async (
   assert.ok(!ids.includes("opencode_plugin"), ids.join(", "));
   assert.ok(ids.includes("source_fingerprint:claude:claude"), ids.join(", "));
   assert.equal(document.status, "ok");
+});
+
+test("doctor refuses a capacity source that is not configured", async () => {
+  // Every other command rejects an unknown alias with exit 4. Doctor answered a typo with a clean
+  // bill of health -- the per-source checks simply selected nothing, so what remained all passed.
+  const fixture = await makeRunFixture("snack-doctor-unknown-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  const exitCode = await run(
+    ["node", "snack", "doctor", "--source", "absent", "--json"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, ExitCode.unavailable, fixture.stdout.value);
+  const document = JSON.parse(fixture.stdout.value);
+  assert.equal(document.status, "error");
+  assert.equal(document.errors[0].code, "source_not_configured");
+  // The alias arrives from argv, which is exactly where someone pastes something private by
+  // accident. A rejected value must not travel into a document that gets shared.
+  assert.doesNotMatch(fixture.stdout.value, /absent/u);
 });
 
 test("doctor names a newer-release database instead of calling storage inaccessible", async () => {

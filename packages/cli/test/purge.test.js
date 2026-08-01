@@ -14,7 +14,7 @@ import {
 afterEach(cleanupRunFixtures);
 
 /** A synchronized source carrying one prompt and one delivered forecast. */
-async function makePurgeableHistory() {
+async function makePurgeableHistory({ installPlugin = false } = {}) {
   const fixture = await makeRunFixture("snack-purge-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   await run(
@@ -32,6 +32,7 @@ async function makePurgeableHistory() {
       "default",
       "--plan",
       "pro",
+      ...(installPlugin ? ["--install-plugin", "--yes"] : []),
     ],
     fixture.options,
   );
@@ -263,7 +264,7 @@ test("purge requires exactly one of --source and --all", async () => {
 });
 
 test("--include-config drops the source but leaves capture to setup to undo", async () => {
-  const fixture = await makePurgeableHistory();
+  const fixture = await makePurgeableHistory({ installPlugin: true });
 
   const exitCode = await run(
     ["node", "snack", "data", "purge", "--source", "work", "--include-config", "--yes", "--json"],
@@ -280,6 +281,29 @@ test("--include-config drops the source but leaves capture to setup to undo", as
   assert.ok(
     /** @type {{code: string}[]} */ (document.warnings).some(
       (warning) => warning.code === "plugin_still_registered",
+    ),
+    JSON.stringify(document.warnings),
+  );
+});
+
+test("--include-config does not report a plugin that was never registered", async () => {
+  // The warning told every user to run `snack setup opencode` to stop a plugin that was not
+  // running. A warning nobody can act on teaches people to ignore the warnings that matter, and
+  // `doctor` reported the opposite of it on the same installation.
+  const fixture = await makePurgeableHistory();
+
+  const exitCode = await run(
+    ["node", "snack", "data", "purge", "--source", "work", "--include-config", "--yes", "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 0);
+  assert.ok(
+    !(
+      /** @type {{code: string}[]} */ (document.warnings ?? []).some(
+        (warning) => warning.code === "plugin_still_registered",
+      )
     ),
     JSON.stringify(document.warnings),
   );

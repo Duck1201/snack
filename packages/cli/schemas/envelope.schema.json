@@ -2,15 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://snack-ai.dev/schemas/envelope.schema.json",
   "title": "SNACK JSON output envelope",
-  "description": "The document every `--json` invocation writes to stdout. A candidate public contract: from 1.0 the named fields do not change meaning or disappear without a major release. `data` is deliberately unconstrained here -- per-command payloads freeze at the 0.9 feature freeze, not before, and constraining them now would freeze shapes that are still moving.",
+  "description": "The document every `--json` invocation writes to stdout. Frozen at 0.9: the named fields do not change meaning or disappear without a major release. Version 2 renamed the `config set` storage keys to snake_case; a version 1 document declares itself as such and does not pass here, which is what makes the break visible instead of silent.",
   "type": "object",
   "required": ["schema_version", "command", "generated_at", "status", "data", "warnings", "errors"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "description": "Version of this envelope contract. Additive fields do not bump it; a removal or a changed meaning does.",
-      "type": "string",
-      "pattern": "^[0-9]+$"
+      "description": "Version of this envelope contract. Additive fields do not bump it; a removal or a changed meaning does. Pinned rather than merely well-formed, so a document from an earlier version fails loudly here instead of validating as something it is not.",
+      "const": "2"
     },
     "command": {
       "description": "The command that produced the document, as the user would type it after `snack`.",
@@ -27,7 +26,7 @@
       "enum": ["ok", "degraded", "error"]
     },
     "data": {
-      "description": "The command's payload, or null when there is none to give."
+      "description": "The command's payload, or null when there is none to give. Constrained per command by the `allOf` below rather than here, so an error document -- whose data is always null -- is still an envelope."
     },
     "warnings": {
       "$ref": "#/$defs/diagnostics"
@@ -36,7 +35,282 @@
       "$ref": "#/$defs/diagnostics"
     }
   },
+  "allOf": [
+    {
+      "$ref": "#/$defs/payloadOf/setup-opencode"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/setup-claude"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/sync"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/stats"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/status"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/doctor"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/config-get"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/config-path"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/config-set"
+    },
+    {
+      "$ref": "#/$defs/payloadOf/data-purge"
+    }
+  ],
   "$defs": {
+    "payloadOf": {
+      "setup-opencode": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "setup opencode"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/setup-opencode.schema.json"
+            }
+          }
+        }
+      },
+      "setup-claude": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "setup claude"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/setup-claude.schema.json"
+            }
+          }
+        }
+      },
+      "sync": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "sync"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/sync.schema.json"
+            }
+          }
+        }
+      },
+      "stats": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "stats"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/stats.schema.json"
+            }
+          }
+        }
+      },
+      "status": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "status"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/status.schema.json"
+            }
+          }
+        }
+      },
+      "doctor": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "doctor"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/doctor.schema.json"
+            }
+          }
+        }
+      },
+      "config-get": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "config get"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/config-get.schema.json"
+            }
+          }
+        }
+      },
+      "config-path": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "config path"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/config-path.schema.json"
+            }
+          }
+        }
+      },
+      "config-set": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "config set"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/config-set.schema.json"
+            }
+          }
+        }
+      },
+      "data-purge": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "data purge"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/data-purge.schema.json"
+            }
+          }
+        }
+      },
+      "description": "Route each command to the schema of the payload it publishes. Gated on `status` being anything but `error`, because a failed command answers with a null payload whatever command it was."
+    },
     "diagnostics": {
       "description": "Always present, empty when there is nothing to report, so a consumer never has to distinguish absent from empty.",
       "type": "array",

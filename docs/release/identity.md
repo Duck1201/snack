@@ -302,3 +302,29 @@ see: the OpenCode fingerprint required primary keys to report `NOT NULL`, which 
 questionnaire; and guided setup printed the choices before the question they answered. The
 fingerprint family stays `oc-sqlite-msgpart-v1` — the change widens what is accepted and refuses
 nothing that was accepted before, so no configuration written by an earlier version needs to change.
+
+## 0.8.2
+
+`@snack-ai/cli@0.8.2` was published from commit `a522224` by protected release run
+[30686491259](https://github.com/Duck1201/snack/actions/runs/30686491259). The plugin step skipped
+again: this release changed nothing in `@snack-ai/opencode`, which stays at `0.1.2`.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.8.2` | `0.8.2` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | publish + SLSA provenance |
+
+No tag was moved by hand, and none was attempted. `latest` was set by `--tag latest` on the publish
+and asserted by the workflow's own verification step, which skipped the plugin rather than
+reasserting a tag this run did not set. `stable` did not move. The registry confirms it:
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '0.6.1', latest: '0.8.2' }`.
+
+This release takes the identifier rule off the guided-setup questions and leaves it on the refusal.
+`0.8.1` had put the pattern on every question so the shape would be known before the answer was
+typed; in use that reads as a regex in front of everyone who was going to type something ordinary
+anyway. Nothing `0.8.1` fixed is given back: a refused answer still costs one answer rather than the
+whole questionnaire, and the non-interactive flags are still checked before anything is written.
+
+The version was cut on the same branch as the change it releases, rather than in a follow-up. `0.8.1`
+was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
+cost an extra PR — the failure the release skill warns about, reproduced once more.

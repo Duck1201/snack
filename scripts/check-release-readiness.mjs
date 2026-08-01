@@ -10,6 +10,7 @@ const opencodeSupport = await readFile(
   "utf8",
 );
 const claudeSupport = await readFile(new URL("../docs/claude-support.md", import.meta.url), "utf8");
+const compatibility = await readFile(new URL("../docs/compatibility.md", import.meta.url), "utf8");
 
 if (!/^Trademark gate: passed$/mu.test(identity)) {
   throw new Error("Release blocked: trademark gate is not approved; review the trademark report.");
@@ -30,6 +31,11 @@ if (/Status: in progress\./u.test(opencodeSupport)) {
 // and shipping one that still says its own validation is unfinished publishes the claim anyway.
 if (/^Status:(?![^\n]*\bcomplete\b)/mu.test(claudeSupport)) {
   throw new Error("Release blocked: Claude Code support validation is incomplete.");
+}
+// From 0.9 the frozen contract is a release artifact of its own. A release that publishes schemas
+// without publishing what they promise is a freeze nobody outside the repository can rely on.
+if (!/^Freeze gate: passed$/mu.test(compatibility)) {
+  throw new Error("Release blocked: the 0.9 contract freeze is not recorded as passed.");
 }
 
 process.stdout.write("Release identity gates passed.\n");

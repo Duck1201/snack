@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { getConfigValue, readConfig } from "../src/config.js";
 import { ExitCode, SnackError } from "../src/errors.js";
 import { run } from "../src/main.js";
+import { ENVELOPE_SCHEMA_VERSION } from "../src/output.js";
 import { classifyRisk } from "../src/prediction.js";
 import { initializeDatabase, inspectDatabase } from "../src/storage.js";
 import {
@@ -34,11 +35,20 @@ test("config set initializes storage before returning a stable JSON envelope", a
   const document = JSON.parse(fixture.stdout.value);
 
   assert.equal(exitCode, 0);
-  assert.equal(document.schema_version, "1");
+  assert.equal(document.schema_version, ENVELOPE_SCHEMA_VERSION);
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
   assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  // Every other payload SNACK publishes is snake_case. This one carried the storage layer's own
+  // JavaScript names straight into the document, so a consumer had to know which command it was
+  // reading to know which convention applied.
+  assert.deepEqual(Object.keys(document.data.storage).sort(), [
+    "applied",
+    "backup_created",
+    "backup_file",
+    "migration_count",
+  ]);
   assert.equal(fixture.stderr.value, "");
 });
 
@@ -2810,7 +2820,7 @@ test("every command group answers for a Claude-only capacity source", async () =
     );
     const document = JSON.parse(fixture.stdout.value);
     assert.notEqual(document.status, "error", `snack ${argv.join(" ")} reported an error`);
-    assert.equal(document.schema_version, "1", name);
+    assert.equal(document.schema_version, ENVELOPE_SCHEMA_VERSION, name);
   }
 
   // Export is the document that has to actually carry the observations, not merely succeed.

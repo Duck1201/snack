@@ -1,6 +1,6 @@
 # 03 — Guided setup prints the choices before the question
 
-Status: ready-for-agent Severity: P3
+Status: done Severity: P3
 
 ## Report
 
@@ -40,3 +40,7 @@ plan profile [generic]:
 ```
 
 Questions without choices keep the single-line form they have today.
+
+## Comments
+
+Fixed and released in `@snack-ai/cli@0.8.1`.
