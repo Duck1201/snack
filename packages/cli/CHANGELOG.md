@@ -1,5 +1,26 @@
 # @snack-ai/cli
 
+## 0.8.1
+
+### Patch Changes
+
+- a90b64f: Ask each guided-setup question before offering its choices. The numbered list was printed
+  first, so every question with choices read back to front. The rendering is now a pure function
+  with its own tests, leaving the executable only the readline handle.
+- a90b64f: Accept the OpenCode databases OpenCode actually writes. The structural fingerprint
+  required every key column to report `NOT NULL`, which only holds inside a `STRICT` table;
+  OpenCode's own DDL is not `STRICT`, so `snack setup opencode` refused every real installation with
+  `source_schema_unsupported` while the test fixture — hand-written as `STRICT` — kept passing. A
+  primary key is now asserted through `pk` alone, and the fixture is OpenCode's real DDL. The
+  fingerprint family stays `oc-sqlite-msgpart-v1`: nothing that was accepted before is refused now.
+- a90b64f: Check setup's identifiers where they are given rather than after the questionnaire. A
+  profile named with a space passed every question and then failed with
+  `Configuration schema rejected /sources/0/profile.`, losing every other answer and naming neither
+  the value nor the rule. Setup now states the rule on the question, refuses an unusable answer on
+  the spot and asks again, and rejects a malformed `--source`, `--provider`, `--profile` or `--plan`
+  up front with `setup_values_invalid`. The rules are read from the configuration schema, so the two
+  checks cannot drift apart.
+
 ## 0.8.0
 
 ### Minor Changes
