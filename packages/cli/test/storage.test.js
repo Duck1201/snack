@@ -419,7 +419,50 @@ test("a 0.6 database reaches 0.8 through 0.7 without a reset", async () => {
   // The cursor is what makes it an upgrade rather than a reset: a database that forgot where its
   // reader stopped would re-ingest a whole history and describe usage that never happened.
   assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
+  // Row counts alone cannot tell a preserved forecast from a rewritten one, and a forecast the user
+  // was actually shown is the one row the product may never restate. Compared field by field.
+  assert.deepEqual(readDeliveredForecast(paths.databaseFile), {
+    prediction_attempt_id: 1,
+    lower: 0.4,
+    point: 0.6,
+    upper: 0.8,
+    risk_label: "elevated",
+    evidence_level: "low",
+    model_policy_version: "stage5-prediction-v2",
+    delivered_at: now.toISOString(),
+    channel: "stdout",
+    is_primary: 1,
+    prompt_execution_id: 1,
+  });
 });
+
+/**
+ * Read the one forecast the user was shown, with the delivery and evaluation that reference it.
+ *
+ * @param {string} databaseFile
+ */
+function readDeliveredForecast(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT prediction_attempt.id AS prediction_attempt_id,
+                prediction_attempt.lower, prediction_attempt.point, prediction_attempt.upper,
+                prediction_attempt.risk_label, prediction_attempt.evidence_level,
+                prediction_attempt.model_policy_version,
+                prediction_delivery.delivered_at, prediction_delivery.channel,
+                prediction_evaluation.is_primary, prediction_evaluation.prompt_execution_id
+           FROM prediction_attempt
+           JOIN prediction_delivery
+             ON prediction_delivery.prediction_attempt_id = prediction_attempt.id
+           JOIN prediction_evaluation
+             ON prediction_evaluation.prediction_attempt_id = prediction_attempt.id`,
+      )
+      .get();
+  } finally {
+    database.close();
+  }
+}
 
 test("a database written by a newer release says so instead of blaming the migration history", async () => {
   // Running an older binary against a database a newer one already upgraded is a thing people do
@@ -576,6 +619,29 @@ function seedZeroSixDatabase(databaseFile) {
       INSERT INTO ingestion_cursor
           (source_alias, fingerprint, time_updated, message_id, committed_at)
         VALUES ('work', 'oc-sqlite-msgpart-v1', 2000, 'message-2000', '${now.toISOString()}');
+      -- A forecast the user was actually shown, the record that it was shown, and the outcome it
+      -- was later scored against. These are the snapshots the migration baseline promises to
+      -- preserve, and they are the rows an upgrade can least afford to lose: they are immutable by
+      -- trigger precisely because a forecast the user saw cannot be rewritten afterwards, so a
+      -- migration that dropped them would destroy the only record of what was promised.
+      INSERT INTO prediction_attempt
+          (id, source_alias, capacity_period_id, generated_at, method_id, method_version,
+           model_policy_version, risk_policy_version, evidence_policy_version, weight_policy_version,
+           analytics_policy_version, category_policy_version, lower, point, upper, coverage_target,
+           risk_label, evidence_level, expected_size_category, backoff_level, pressure_band,
+           pressure_score, pressure_contributors_json, plan_profile_id, plan_profile_version,
+           data_as_of, completeness)
+        VALUES (1, 'work', 1, '${now.toISOString()}', 'bayesian-pressure-band', '1',
+                'stage5-prediction-v2', 'stage5-risk-v1', 'stage5-evidence-v1', 'stage5-weight-v1',
+                'stage4-analytics-v1', 'stage6-category-v1', 0.4, 0.6, 0.8, 0.8, 'elevated', 'low',
+                'typical', 'band', 'moderate', 0.5, NULL, 'generic', '1.0.0',
+                '${now.toISOString()}', 'complete');
+      INSERT INTO prediction_delivery
+          (prediction_attempt_id, delivered_at, channel, format, invocation_id)
+        VALUES (1, '${now.toISOString()}', 'stdout', 'human', 'invocation-1');
+      INSERT INTO prediction_evaluation
+          (prediction_attempt_id, prompt_execution_id, linked_at, is_primary, policy_version)
+        VALUES (1, 1, '${now.toISOString()}', 1, 'stage5-evaluation-v1');
     `);
   } finally {
     database.close();

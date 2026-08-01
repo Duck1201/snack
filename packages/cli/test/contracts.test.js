@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { afterEach, test } from "node:test";
 
 import Ajv2020 from "ajv/dist/2020.js";
@@ -195,6 +196,49 @@ test("the export changed shape under a new version rather than under the old one
   assert.equal(current({ ...captured }), false, "a version 1 export must not pass as version 2");
   // The envelope around it is unchanged, which is the point of versioning the two separately.
   assert.equal(captured.schema_version, "1");
+});
+
+test("a configuration written by 0.7 is still accepted", async () => {
+  // Configuration is one of the surfaces PLAN.md freezes at 1.0, and it is the one whose breakage
+  // is worst: a rejected configuration is not a degraded answer, it is a CLI that will not run at
+  // all until the user edits a file by hand. The document is lifted from what 0.7 itself reported
+  // through `config get`, so it is the real shape that release wrote rather than one reconstructed
+  // from today's assumptions.
+  const captured = JSON.parse(
+    await readFile(new URL("./fixtures/contracts/0.7/config-get.json", import.meta.url), "utf8"),
+  );
+  const fixture = await makeConfiguredFixture();
+  const asWritten = JSON.stringify(captured.data.value).replaceAll("{{root}}", fixture.root);
+  await mkdir(dirname(fixture.paths.configFile), { recursive: true, mode: 0o700 });
+  await writeFile(fixture.paths.configFile, `${asWritten}\n`, { mode: 0o600 });
+
+  fixture.stdout.value = "";
+  const exitCode = await run(["node", "snack", "config", "get", "--json"], fixture.options);
+
+  assert.equal(exitCode, 0, fixture.stderr.value);
+  // Accepted and unchanged: a configuration silently rewritten on read is its own kind of break.
+  assert.deepEqual(JSON.parse(fixture.stdout.value).data.value, JSON.parse(asWritten));
+});
+
+test("a configuration naming a client SNACK does not know is refused", async () => {
+  // Guards the test above against passing for the wrong reason. If configuration validation were
+  // off, or the schema had been loosened to make the 0.7 document fit, this would be accepted too
+  // -- and an unknown adapter is exactly what must fail closed rather than be guessed at.
+  const captured = JSON.parse(
+    await readFile(new URL("./fixtures/contracts/0.7/config-get.json", import.meta.url), "utf8"),
+  );
+  const fixture = await makeConfiguredFixture();
+  const tampered = JSON.stringify(captured.data.value)
+    .replaceAll("{{root}}", fixture.root)
+    .replace('"adapter": "opencode"', '"adapter": "sardine-cli"')
+    .replace('"adapter":"opencode"', '"adapter":"sardine-cli"');
+  await mkdir(dirname(fixture.paths.configFile), { recursive: true, mode: 0o700 });
+  await writeFile(fixture.paths.configFile, `${tampered}\n`, { mode: 0o600 });
+
+  fixture.stdout.value = "";
+  const exitCode = await run(["node", "snack", "config", "get", "--json"], fixture.options);
+
+  assert.equal(exitCode, ExitCode.config);
 });
 
 test("the published exit codes have not changed", () => {
