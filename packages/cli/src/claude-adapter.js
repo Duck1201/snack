@@ -474,6 +474,11 @@ function numberOrNull(value) {
 function turnRoots(records, children) {
   const present = new Set(records.map((record) => String(record.uuid)));
   return records.filter((record) => {
+    // A root becomes an observation, and its `timestamp` becomes `started_at` verbatim. A record
+    // with no time is not a submission whatever else it looks like -- Claude Code writes several
+    // record types without one, and any of them could otherwise root a turn and publish a prompt
+    // that started at `undefined`.
+    if (!Number.isFinite(Date.parse(String(record.timestamp)))) return false;
     if (isPromptRecord(record)) return true;
     if (typeof record.uuid !== "string") return false;
     if (typeof record.parentUuid === "string" && present.has(record.parentUuid)) return false;
@@ -620,9 +625,14 @@ function readRecords(sessionFile, rejected = undefined) {
     // was then computed over a string. Whatever the field holds also travelled out of the source
     // file and into the database unread, which is the shape a content leak would take.
     //
-    // Absence is not the failure -- Claude Code keeps adding record types, and the ones this reader
-    // never looks at need not carry a time. A value that is present and is not a time is.
-    if ("timestamp" in record && !Number.isFinite(Date.parse(String(record.timestamp)))) {
+    // Only the two record types the turn tree is built from are held to this. Claude Code keeps
+    // adding record types -- session titles, agent names, queue operations -- and the ones this
+    // reader never looks at need not carry a time; refusing them would break SNACK on a client
+    // release that changed nothing SNACK reads.
+    if (
+      (record.type === "user" || record.type === "assistant") &&
+      !Number.isFinite(Date.parse(String(record.timestamp)))
+    ) {
       rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
       continue;
     }

@@ -90,16 +90,7 @@ async function readGenerated(mutations) {
   } finally {
     database.close();
   }
-  return createSourceAdapter({
-    alias: "work",
-    installation_id: "11111111-2222-4333-8444-555555555555",
-    adapter: "opencode",
-    database: databaseFile,
-    provider: "anthropic",
-    profile: "default",
-    plan: "pro",
-    fingerprint: "oc-sqlite-msgpart-v1",
-  }).readAll();
+  return createSourceAdapter({ adapter: "opencode", database: databaseFile }).readAll();
 }
 
 test("no OpenCode database, however broken, makes the adapter throw or invent an observation", async () => {

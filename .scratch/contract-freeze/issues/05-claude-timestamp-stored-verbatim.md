@@ -31,15 +31,25 @@ checked — never that the value is a time.
 
 ## Fix
 
-`readRecords` now rejects a line whose `timestamp` is present and does not parse as a date, through
-the same `rejected` channel an unparseable line already used. `sync` reports it as
-`rejected_invalid`, so the history is visibly incomplete instead of quietly wrong.
+Two guards, because the first was not enough and the fuzz said so.
 
-Absence is deliberately not a failure: Claude Code keeps adding record types, and the ones this
-reader never looks at need not carry a time. Refusing them would break SNACK on a client release
-that changed nothing SNACK reads.
+`readRecords` rejects a line whose record is a `user` or `assistant` and whose `timestamp` does not
+parse as a date, through the same `rejected` channel an unparseable line already used. `sync`
+reports it as `rejected_invalid`, so the history is visibly incomplete instead of quietly wrong.
 
-After the fix, the same input reports `rejected_invalid: 1` and the stored row carries a real time.
+The first attempt refused only a `timestamp` that was present and invalid, on the reasoning that
+Claude Code keeps adding record types and the ones this reader never looks at need not carry a time.
+That reasoning is right — `ai-title` and `queue-operation` records really do arrive without one —
+but the conclusion was wrong: any record can root a turn, so a record of an unknown type with no
+timestamp still published a prompt that started at `undefined`. The property found it on the 137th
+case, after the first fix.
+
+So `turnRoots` now refuses to root a turn at a record without a parseable time. A record with no
+time is not a submission, whatever else it looks like. Records the reader ignores keep arriving
+without one and stay ignored.
+
+After the fix, the original input reports `rejected_invalid: 1` and the stored row carries a real
+time.
 
 ## Comments
 
