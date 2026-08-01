@@ -1,7 +1,7 @@
 # Stage 8 — Multi-client Convergence
 
-Status: implemented and independently reviewed, pending publication. Release: `@snack-ai/cli@0.8.0`
-on npm `latest`.
+Status: done. Released as `@snack-ai/cli@0.8.0`, `0.8.1` and `0.8.2` on npm `latest`, with CI
+evidence under `docs/release/`. The three P3s below were carried into Stage 9 and fixed there.
 
 Product contracts live in `docs/specification.md` and `docs/architecture.md`; this file records what
 was decided while building it and what remains.
@@ -145,10 +145,7 @@ pre-existing test with comfortable headroom. Both halves were wrong: the tester 
 sample against a 250 ms budget — nine per cent of headroom, not twenty — and the second flaking test
 is the two-client one this stage added.
 
-## Remaining before release
-
-- CI evidence on Linux, macOS and WSL2/Debian 13, recorded under `docs/release/`;
-- a changeset and the publication itself, through the `snack-release-a-version` skill.
+## Release
 
 The independent architecture/privacy review and the independent tester pass are done, and both
 reported zero P0/P1 after the fixes above. The tester drove all eight commands against the built

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/config-get.schema.json",
+  "title": "snack config get payload",
+  "description": "The `data` of a `snack config get --json` document. `key` is null when the whole configuration was asked for. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["key", "value"],
+  "properties": {
+    "key": {
+      "type": ["string", "null"]
+    },
+    "value": {
+      "description": "The configuration, or the value at `key`. Its own schema is published as config.schema.json."
+    }
+  }
+}

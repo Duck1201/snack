@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/doctor.schema.json",
+  "title": "snack doctor payload",
+  "description": "The `data` of a `snack doctor --json` document. Every check is also reported in the envelope: a `warn` as a warning, a `fail` as an error, both keyed by the check id. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["checks"],
+  "properties": {
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "message"],
+        "properties": {
+          "id": {
+            "description": "Stable identifier a script can key on, unlike the message.",
+            "type": "string"
+          },
+          "status": {
+            "enum": ["pass", "warn", "fail"]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

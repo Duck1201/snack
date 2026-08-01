@@ -1,0 +1,137 @@
+{
+  "schema_version": "1",
+  "command": "doctor",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "degraded",
+  "data": {
+    "checks": [
+      {
+        "id": "runtime",
+        "status": "pass",
+        "message": "Node.js 24.18.1 is supported."
+      },
+      {
+        "id": "platform",
+        "status": "pass",
+        "message": "linux is supported."
+      },
+      {
+        "id": "config",
+        "status": "pass",
+        "message": "Configuration is valid."
+      },
+      {
+        "id": "config_directory",
+        "status": "pass",
+        "message": "Permissions are 700."
+      },
+      {
+        "id": "config_file",
+        "status": "pass",
+        "message": "Permissions are 600."
+      },
+      {
+        "id": "config_backup",
+        "status": "pass",
+        "message": "Permissions are 600."
+      },
+      {
+        "id": "setup_recovery",
+        "status": "pass",
+        "message": "No interrupted setup recovery is pending."
+      },
+      {
+        "id": "storage_integrity",
+        "status": "pass",
+        "message": "SQLite integrity check passed."
+      },
+      {
+        "id": "storage_migrations",
+        "status": "pass",
+        "message": "Storage migrations are current."
+      },
+      {
+        "id": "data_directory",
+        "status": "pass",
+        "message": "Permissions are 700."
+      },
+      {
+        "id": "backup_directory",
+        "status": "pass",
+        "message": "Permissions are 700."
+      },
+      {
+        "id": "database_file",
+        "status": "pass",
+        "message": "Permissions are 600."
+      },
+      {
+        "id": "backup_files",
+        "status": "pass",
+        "message": "Database backup permissions are private."
+      },
+      {
+        "id": "opencode_plugin",
+        "status": "warn",
+        "message": "OpenCode live-capture plugin is not registered."
+      },
+      {
+        "id": "source_fingerprint:work:opencode",
+        "status": "pass",
+        "message": "OpenCode schema fingerprint is supported."
+      },
+      {
+        "id": "source_fingerprint:personal:claude",
+        "status": "pass",
+        "message": "Claude Code schema fingerprint is supported."
+      },
+      {
+        "id": "plan_profile:work",
+        "status": "pass",
+        "message": "Plan profile generic@1.0.0 (bundled, as of 2026-01-01)."
+      },
+      {
+        "id": "source_mapping:work",
+        "status": "pass",
+        "message": "Provider and local profile mapping are explicit."
+      },
+      {
+        "id": "source_freshness:work",
+        "status": "pass",
+        "message": "Synchronized usage is available."
+      },
+      {
+        "id": "source_ingestion:work",
+        "status": "pass",
+        "message": "No observations were refused on ingestion."
+      },
+      {
+        "id": "plan_profile:personal",
+        "status": "pass",
+        "message": "Plan profile generic@1.0.0 (bundled, as of 2026-01-01)."
+      },
+      {
+        "id": "source_mapping:personal",
+        "status": "pass",
+        "message": "Provider and local profile mapping are explicit."
+      },
+      {
+        "id": "source_freshness:personal",
+        "status": "pass",
+        "message": "Synchronized usage is available."
+      },
+      {
+        "id": "source_ingestion:personal",
+        "status": "pass",
+        "message": "No observations were refused on ingestion."
+      }
+    ]
+  },
+  "warnings": [
+    {
+      "code": "opencode_plugin",
+      "message": "OpenCode live-capture plugin is not registered."
+    }
+  ],
+  "errors": []
+}

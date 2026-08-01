@@ -826,19 +826,26 @@ From `0.8.0` those contracts are candidates rather than prose: `schemas/envelope
 describes the document every `--json` invocation writes, and `schemas/export.schema.json` declares
 each exported table's columns. Both ship in the package so a downstream consumer can check against
 them, and both are validated in `packages/cli/test/contracts.test.js` against every command, against
-documents captured from the released `0.7.0`, and against the exporter's own column lists so the
-hand-written schema cannot drift from what is exported. Exit codes and the documented flag surface
+documents captured from the released `0.7.0` and `0.8.2`, and against the exporter's own column
+lists so the hand-written schema cannot drift from what is exported. Exit codes and the documented flag surface
 are asserted as literals in the same file; the flag surface is read from the help text, because the
 help is what a user is promised.
 
-`data` in the envelope is deliberately unconstrained. Per-command payloads freeze at the Stage 9
-feature freeze, and pinning them earlier would freeze shapes still in motion.
+`data` was deliberately unconstrained through `0.8`, because pinning a payload still in motion
+freezes the wrong shape. At the Stage 9 freeze each one is declared in
+`packages/cli/schemas/commands/<command>.schema.json`, and the envelope routes to it on the command
+name -- gated on the document not being an error, since a failed command answers with a null payload
+whatever command it was. Those schemas stay permissive about fields they do not declare: a consumer
+pinned to `0.9.0` has to survive a field a later minor adds, so the guard against an undeclared
+field entering the contract is a test rather than a rejection in the consumer's validator.
 
 The envelope and the export version independently, and `0.8.0` shows why: the envelope stayed at
-version 1 and still accepts every `0.7.0` document, while the export moved to version 2 because it
+version 1 and still accepted every `0.7.0` document, while the export moved to version 2 because it
 gained required columns. An old export announces itself as version 1 and does not pass as version 2,
 which is the compatibility statement the tests enforce -- adding a required table or column without
-bumping the version is the failure being guarded against.
+bumping the version is the failure being guarded against. `0.9.0` moved the envelope to version 2 on
+the same rule, for the one payload rename the freeze took; the tests name that single break, so an
+unintended one cannot hide behind it. See [compatibility.md](./compatibility.md).
 
 A database written by a newer release is reported as such rather than as a corrupted migration
 history: `inspectDatabase` returns `migrations: "ahead"`, `doctor` names the situation, and opening
@@ -846,7 +853,7 @@ it for write fails with `storage_newer_than_application` naming both migration n
 pre-migration backup. No downgrade is offered; the diagnostic exists so the two situations stop
 being reported identically.
 
-Public contracts freeze in Stage 9. Only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation are permitted afterward. A public schema or semantic change resets Stage 9 and all of its gates; Stage 10 confirms rather than redefines the frozen contracts.
+Public contracts freeze in Stage 9, and [compatibility.md](./compatibility.md) is the record of what was frozen. Only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation are permitted afterward. A public schema or semantic change resets Stage 9 and all of its gates; Stage 10 confirms rather than redefines the frozen contracts.
 
 `1.0.0-rc.N` is mandatory. After seven days without P0/P1, final source code is unchanged; a version/changelog/release-metadata-only commit produces checksumed final tarballs. They pass direct `0.6.0 -> 1.0.0` and exact-artifact smoke/integrity gates in an isolated staging registry. A failure discards the publicly unpublished final tarballs, requires a new RC, and restarts soak. Only approved tarballs publish to official npm under temporary `candidate`; checksum verification then permits `latest` promotion and retires the `rc` tag.
 

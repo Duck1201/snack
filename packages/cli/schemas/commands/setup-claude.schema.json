@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/setup-claude.schema.json",
+  "title": "snack setup claude payload",
+  "description": "The `data` of a `snack setup claude --json` document. Claude Code is read from its own JSONL histories, so there is no plugin to register. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["source", "fingerprint", "dry_run"],
+  "properties": {
+    "source": {
+      "description": "The capacity source as it was written to configuration. Identifiers only -- never the path of a project or the title of a session.",
+      "type": "object",
+      "required": [
+        "alias",
+        "installation_id",
+        "adapter",
+        "provider",
+        "profile",
+        "plan",
+        "plan_profile"
+      ],
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "installation_id": {
+          "type": "string"
+        },
+        "adapter": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        },
+        "plan_profile": {
+          "type": "string"
+        }
+      }
+    },
+    "fingerprint": {
+      "description": "The client schema family setup recognized, and whether SNACK supports it. An unsupported family is refused rather than guessed at.",
+      "type": "object",
+      "required": ["family", "supported"],
+      "properties": {
+        "family": {
+          "type": ["string", "null"]
+        },
+        "supported": {
+          "type": "boolean"
+        }
+      }
+    },
+    "dry_run": {
+      "description": "What a dry run observed, and what a real run applied.",
+      "type": "object",
+      "required": ["observations"],
+      "properties": {
+        "observations": {
+          "type": "integer"
+        },
+        "applied": {
+          "type": "boolean"
+        }
+      }
+    },
+    "recovered_setup_journal": {
+      "description": "Present when setup completed an interrupted earlier run before doing its own work.",
+      "type": ["object", "null"]
+    }
+  }
+}

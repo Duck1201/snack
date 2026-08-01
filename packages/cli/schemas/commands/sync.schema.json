@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/commands/sync.schema.json",
+  "title": "snack sync payload",
+  "description": "The `data` of a `snack sync --json` document: one counted result per configured source. Counts only -- ingestion never reports what it read. Frozen at 0.9: a field here does not disappear or change meaning without a major release, and a consumer must tolerate fields added by a later minor.",
+  "type": "object",
+  "required": ["sources"],
+  "properties": {
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "alias",
+          "read",
+          "inserted",
+          "updated",
+          "unchanged",
+          "excluded",
+          "pending_mapping",
+          "rejected_invalid",
+          "tombstoned",
+          "failed"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Where the client keeps its own history, which the user told SNACK.",
+            "type": ["string", "null"]
+          },
+          "read": {
+            "type": "integer"
+          },
+          "inserted": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          },
+          "unchanged": {
+            "type": "integer"
+          },
+          "excluded": {
+            "type": "integer"
+          },
+          "pending_mapping": {
+            "type": "integer"
+          },
+          "rejected_invalid": {
+            "description": "Records ingestion refused rather than guessed at.",
+            "type": "integer"
+          },
+          "tombstoned": {
+            "type": "integer"
+          },
+          "failed": {
+            "description": "Whether this source failed; the run degrades rather than aborting the others.",
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

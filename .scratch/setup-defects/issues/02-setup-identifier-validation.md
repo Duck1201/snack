@@ -1,6 +1,6 @@
 # 02 — Setup validates its identifiers only after the whole questionnaire
 
-Status: ready-for-agent Severity: P2
+Status: done Severity: P2
 
 ## Report
 
@@ -44,3 +44,7 @@ prompt path route through one check:
 - `--non-interactive`: fail with `ExitCode.usage`, naming the field, the value and the rule.
 
 State the rule in the question text as well, so the shape is known before the answer is typed.
+
+## Comments
+
+Fixed and released in `@snack-ai/cli@0.8.1`.

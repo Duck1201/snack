@@ -40,6 +40,8 @@ TypeScript source. Tests are `node:test` + `node:assert/strict`; `fast-check` fo
 - `PLAN.md` — product boundaries, MVP command list, delivery principles, staged roadmap with
   per-wave exit criteria, defect severity (P0/P1 block releases).
 - `docs/specification.md` — product behavior and prediction contracts.
+- `docs/compatibility.md` — the surfaces frozen at 0.9, their versions, and the freeze-reset rule.
+  Read before touching the `--json` envelope, a payload, `export`, exit codes, or the flag surface.
 - `docs/architecture.md` — module responsibilities, ports, data flow, conceptual data model.
 - `docs/adr/000N-*.md` — accepted decisions. Surface conflicts explicitly instead of overriding
   them.

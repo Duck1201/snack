@@ -1,0 +1,37 @@
+{
+  "schema_version": "1",
+  "command": "export",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "export": {"export_schema_version":"2","scope":{}},
+    "provenance": {"cli_version":"0.8.2","export_schema_version":"2","envelope_schema_version":"1","plan_profiles":[{"source":"work","id":"generic","version":"1.0.0","provenance":"bundled","as_of":"2026-01-01"},{"source":"personal","id":"generic","version":"1.0.0","provenance":"bundled","as_of":"2026-01-01"}]},
+    "tables": {
+      "capacity_periods": [
+        {"id":1,"source_alias":"work","provider":"anthropic","profile":"default","plan":"pro","started_at":"2026-01-02T03:04:05.000Z","ended_at":null,"plan_profile_id":"generic","plan_profile_version":"1.0.0"},
+        {"id":2,"source_alias":"personal","provider":"anthropic","profile":"default","plan":"pro","started_at":"2026-01-02T03:04:05.000Z","ended_at":null,"plan_profile_id":"generic","plan_profile_version":"1.0.0"}
+      ],
+      "source_bindings": [
+        {"source_alias":"personal","installation_id":"045f809f-476f-405a-b937-c2afe048350a","adapter":"claude","provider":"anthropic","profile":"default"},
+        {"source_alias":"work","installation_id":"640832a4-b906-441d-ae14-bb8a70c825b8","adapter":"opencode","provider":"anthropic","profile":"default"}
+      ],
+      "prompts": [
+        {"id":1,"source_alias":"work","installation_id":"640832a4-b906-441d-ae14-bb8a70c825b8","capacity_period_id":1,"started_at":"2026-01-02T03:04:05.000Z","completed_at":"2026-01-02T03:04:10.000Z","duration_ms":5000,"completion":"completed","outcome":"success","outcome_policy_version":"opencode-outcome-v1","size_category":"small","category_policy_version":"stage5-category-v1","category_baseline_as_of":null,"parser_version":"opencode-session-v1","revision_domain":"opencode-message-v1","seen_spool":0,"input_analyzer_version":null,"estimated_input_tokens":null,"input_line_count_bucket":null,"input_code_block_count_bucket":null,"input_attachment_count":null},
+        {"id":2,"source_alias":"personal","installation_id":"045f809f-476f-405a-b937-c2afe048350a","capacity_period_id":2,"started_at":"2026-07-30T10:00:00.000Z","completed_at":"2026-07-30T10:00:07.000Z","duration_ms":7000,"completion":"completed","outcome":"success","outcome_policy_version":"opencode-outcome-v1","size_category":"small","category_policy_version":"stage5-category-v1","category_baseline_as_of":null,"parser_version":"claude-session-v1","revision_domain":"claude-uuid-v1","seen_spool":0,"input_analyzer_version":null,"estimated_input_tokens":null,"input_line_count_bucket":null,"input_code_block_count_bucket":null,"input_attachment_count":null}
+      ],
+      "usage_slices": [
+        {"prompt_execution_id":1,"source_slice_id":"step-finish-1","provider":"anthropic","model":"claude-sonnet","input_tokens":100,"output_tokens":25,"reasoning_tokens":5,"cache_read_tokens":10,"cache_write_tokens":2,"cost_decimal":"0.003","currency":null},
+        {"prompt_execution_id":2,"source_slice_id":"22222222-2222-4222-8222-222222222222","provider":"anthropic","model":"claude-opus-5","input_tokens":12,"output_tokens":34,"reasoning_tokens":null,"cache_read_tokens":900,"cache_write_tokens":100,"cost_decimal":null,"currency":null},
+        {"prompt_execution_id":2,"source_slice_id":"44444444-4444-4444-8444-444444444444","provider":"anthropic","model":"claude-opus-5","input_tokens":8,"output_tokens":56,"reasoning_tokens":null,"cache_read_tokens":1000,"cache_write_tokens":0,"cost_decimal":null,"currency":null}
+      ],
+      "restrictions": [],
+      "predictions": [
+        {"id":1,"source_alias":"work","capacity_period_id":1,"generated_at":"2026-01-02T03:04:05.000Z","delivered":1,"delivered_at":"2026-01-02T03:04:05.000Z","delivery_channel":"stdout","delivery_format":"json","method_id":"bayesian-pressure-band","method_version":"1","model_policy_version":"stage5-prediction-v2","risk_policy_version":"stage2-risk-v2","evidence_policy_version":"stage5-evidence-v2","weight_policy_version":"stage4-analytics-v1","analytics_policy_version":"stage4-analytics-v1","category_policy_version":null,"lower":0.3513571980256277,"point":0.75,"upper":0.9938187560615737,"coverage_target":0.8,"risk_label":"high","evidence_level":"very_low","expected_size_category":"typical","backoff_level":"period","pressure_band":"unknown","pressure_score":null,"plan_profile_id":"generic","plan_profile_version":"1.0.0","data_as_of":"2026-01-02T03:04:10.000Z","completeness":"complete"},
+        {"id":2,"source_alias":"personal","capacity_period_id":2,"generated_at":"2026-01-02T03:04:05.000Z","delivered":1,"delivered_at":"2026-01-02T03:04:05.000Z","delivery_channel":"stdout","delivery_format":"json","method_id":"bayesian-pressure-band","method_version":"1","model_policy_version":"stage5-prediction-v2","risk_policy_version":"stage2-risk-v2","evidence_policy_version":"stage5-evidence-v2","weight_policy_version":"stage4-analytics-v1","analytics_policy_version":"stage4-analytics-v1","category_policy_version":null,"lower":0.3513571980256277,"point":0.75,"upper":0.9938187560615737,"coverage_target":0.8,"risk_label":"high","evidence_level":"very_low","expected_size_category":"typical","backoff_level":"period","pressure_band":"unknown","pressure_score":null,"plan_profile_id":"generic","plan_profile_version":"1.0.0","data_as_of":"2026-07-30T10:00:07.000Z","completeness":"complete"}
+      ],
+      "prediction_evaluations": []
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

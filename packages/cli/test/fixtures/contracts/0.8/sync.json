@@ -1,0 +1,38 @@
+{
+  "schema_version": "1",
+  "command": "sync",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "sources": [
+      {
+        "alias": "work",
+        "path": "backfill",
+        "read": 1,
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0,
+        "excluded": 0,
+        "pending_mapping": 0,
+        "rejected_invalid": 0,
+        "tombstoned": 0,
+        "failed": 0
+      },
+      {
+        "alias": "personal",
+        "path": "backfill",
+        "read": 1,
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0,
+        "excluded": 0,
+        "pending_mapping": 0,
+        "rejected_invalid": 0,
+        "tombstoned": 0,
+        "failed": 0
+      }
+    ]
+  },
+  "warnings": [],
+  "errors": []
+}

@@ -658,7 +658,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
 ### Stage 7 - Claude Code Parity
 
 - **Release:** `0.7.0` on npm `latest`
-- **Status:** Complete pending publication. Claude Code is read
+- **Status:** Complete. `0.7.0` published to `latest` and tagged `v0.7.0`. Claude Code is read
   through its JSONL histories by a second adapter behind the existing source-adapter contract, and
   the live-hook path is deferred by
   [ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) because the JSONL already
@@ -670,8 +670,7 @@ P0 and P1 defects block MVP, beta, RC, and 1.0. P2/P3 may ship only when documen
   independent two-axis review found four defects — reads that did not fail closed on a drifted
   fingerprint, `status` ingesting only one client of a shared source, one history bindable to two
   capacity sources, and unparseable records dropped in silence — all fixed and covered by tests.
-  Linux, macOS and WSL2/Debian 13 passed on Node `24.18.1`. Publishing `0.7.0` to `latest` is the
-  only step left.
+  Linux, macOS and WSL2/Debian 13 passed on Node `24.18.1`.
 - **Effort:** 5 AI-assisted waves
 **Purpose:** Validate the client-neutral architecture with a second real client and revalidate the Node 24 runtime across both clients.
 
@@ -766,6 +765,17 @@ no owner:
 ### Stage 8 - Multi-client Convergence
 
 - **Release:** `0.8.0` on npm `latest`
+- **Status:** Complete. `0.8.0`, `0.8.1` and `0.8.2` published to `latest` with SLSA provenance on
+  both packages and recorded in [docs/release/identity.md](./docs/release/identity.md); tagged
+  `v0.8.0`, `v0.8.1`, `v0.8.2`. No client-specific type reaches the domain or prediction modules,
+  and two clients are proven to converge on one capacity source under event permutations. Migrations
+  preserve a `0.6` database in place. The candidate public contracts became executable rather than
+  prose: `packages/cli/schemas/{envelope,export}.schema.json` ship in the package and are validated
+  in `packages/cli/test/contracts.test.js` against every command and against documents captured from
+  the released `0.7.0`, with exit codes and the flag surface asserted as literals read from the help
+  text. `0.8.1` fixed three setup defects found after release, one of them P1. Ubuntu, macOS and
+  WSL2/Debian 13 passed on Node `24.18.1`. Three P3s were documented rather than fixed and carried
+  into Stage 9, which is where the CLI surface is frozen and audited.
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Remove client leakage, stabilize candidate contracts, and prove upgrades/calibration across OpenCode and Claude Code.
 
@@ -837,6 +847,17 @@ no owner:
 ### Stage 9 - Feature Freeze and Public Beta
 
 - **Release:** `0.9.0` on npm `latest`
+- **Status:** In progress — Wave 1 complete, unreleased. The public surface is frozen and recorded
+  in [docs/compatibility.md](./docs/compatibility.md), which `release:check` now gates on. The three
+  P3s carried from Stage 8 are fixed: `doctor` refuses an unknown alias with exit 4 like every other
+  command, `data purge --include-config` no longer reports a plugin that was never registered, and a
+  rejected configuration names the rule that refused it instead of only the location. Two
+  inconsistencies on the surface were corrected before it was locked — `export --json` is documented
+  and the `config set` storage payload is snake_case — and the second of those moved the envelope to
+  `schema_version` 2. Every command payload now has a published schema under
+  `packages/cli/schemas/commands/`, routed from the envelope by command name, and the compatibility
+  tests name the single intended break so an unintended one cannot hide behind it. Waves 2 and 3
+  remain.
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Freeze scope and exercise the complete 1.0 candidate without adding modules.
 

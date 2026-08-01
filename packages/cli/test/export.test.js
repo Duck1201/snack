@@ -8,7 +8,7 @@ import { afterEach, test } from "node:test";
 import { ExitCode } from "../src/errors.js";
 import { EXPORT_TABLES } from "../src/export.js";
 import { run } from "../src/main.js";
-import { createEnvelope } from "../src/output.js";
+import { ENVELOPE_SCHEMA_VERSION, createEnvelope } from "../src/output.js";
 import {
   cleanupRunFixtures,
   createOpenCodeDatabase,
@@ -64,7 +64,7 @@ test("exports one JSON document carrying every table and the provenance to read 
   const document = JSON.parse(fixture.stdout.value);
 
   assert.equal(exitCode, 0);
-  assert.equal(document.schema_version, "1");
+  assert.equal(document.schema_version, ENVELOPE_SCHEMA_VERSION);
   assert.equal(document.command, "export");
   assert.equal(document.status, "ok");
 
@@ -91,7 +91,7 @@ test("exports one JSON document carrying every table and the provenance to read 
   assert.equal(document.data.tables.predictions[0].model_policy_version, "stage5-prediction-v2");
   // Document-level provenance names the exporting build, never re-stamping the rows.
   assert.match(document.data.provenance.cli_version, /^\d+\.\d+\.\d+$/u);
-  assert.equal(document.data.provenance.envelope_schema_version, "1");
+  assert.equal(document.data.provenance.envelope_schema_version, ENVELOPE_SCHEMA_VERSION);
   assert.deepEqual(document.data.provenance.plan_profiles, [
     { source: "work", id: "generic", version: "1.0.0", provenance: "bundled", as_of: "2026-01-01" },
   ]);
