@@ -13,8 +13,14 @@ const packageName = "@snack-ai/opencode";
  * The plugin version setup writes. SNACK fetches no package itself; OpenCode resolves this
  * specifier. Inspection deliberately does not require an exact match — see
  * `inspectPluginRegistration`.
+ *
+ * This names another package's version, so bumping that package does not move it. A test asserts
+ * it equals what `packages/opencode` publishes, because `1.0.0` shipped with it still reading
+ * `0.1.2`: every setup installed a plugin three minors old, and doctor told anyone already on
+ * `1.0.0` to re-run setup, which would have downgraded them. The constant cannot be read from the
+ * plugin's manifest at runtime — the CLI tarball does not contain it — so the gate is the test.
  */
-export const pluginPackageSpec = `${packageName}@0.1.2`;
+export const pluginPackageSpec = `${packageName}@1.0.0`;
 const packageSpec = pluginPackageSpec;
 
 /**
@@ -38,7 +44,8 @@ export function resolveOpenCodeConfig(options = {}) {
  * Classify the SNACK entry in OpenCode's global configuration.
  *
  * Compatibility is a property of the spool event contract, not of a version string: every
- * `@snack-ai/opencode@0.1.x` emits `spool-event-v1`. So a registration pinned at a version other
+ * published `@snack-ai/opencode` so far emits `spool-event-v1`. So a registration pinned at a
+ * version other
  * than the one setup writes is reported as `outdated` — an upgrade notice — while `incompatible`
  * is reserved for an entry SNACK genuinely cannot work with, namely one whose options are absent
  * or unrecognized.
