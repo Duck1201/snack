@@ -127,3 +127,22 @@ test("a source with nothing ranked says so rather than showing an empty row", ()
 
   assert.match(text, / {2}drivers {4}none ranked/u);
 });
+
+test("two sources are two panels separated by a blank line", () => {
+  // Specification 12.3 gives every configured source its own panel. Without a separator they run
+  // together and the second alias reads as another row of the first, which is the one thing a
+  // panel layout has to get right that a single dense line never had to.
+  const text = renderStatus(
+    [
+      statusFor(),
+      statusFor({ source: { alias: "personal", active_period: { started_at: null } } }),
+    ],
+    { color: false },
+  );
+
+  assert.match(text, /\n\npersonal\n/u);
+  assert.equal(text.match(/^\S/gmu)?.length, 2, "expected exactly two unindented alias lines");
+  // A source configured but never synchronized has no period to name, and says so rather than
+  // printing an empty tail after `period since`.
+  assert.match(text, /period since unknown/u);
+});
