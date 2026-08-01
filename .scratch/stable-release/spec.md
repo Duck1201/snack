@@ -1,6 +1,7 @@
 # Stage 10 — First Stable Release
 
-Status: Wave 1 complete, on `stage-10-stable-release` (PR #26). Waves 2 and 3 pending.
+Status: Wave 1 merged (PR #26). Wave 2 cut to `1.0.0-rc.0` and gated locally, awaiting merge and a
+dispatch. Wave 3 pending — its staging gate is built and passing.
 
 Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 `docs/architecture.md`; this file records what was decided while building it and what remains.
