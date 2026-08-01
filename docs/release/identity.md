@@ -278,3 +278,27 @@ An `npm dist-tag add @snack-ai/cli@0.8.0 latest` was attempted before the dispat
 npm reports a tag pointed at a missing version with a bare status code and no explanation. The
 release skill that suggested the command as a routine step has been corrected, and the same release
 then completed without it.
+
+## 0.8.1
+
+`@snack-ai/cli@0.8.1` was published from commit `9933ace` by protected release run
+[30685339807](https://github.com/Duck1201/snack/actions/runs/30685339807). The plugin step skipped
+again: this release changed nothing in `@snack-ai/opencode`, which stays at `0.1.2`.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.8.1` | `0.8.1` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | publish + SLSA provenance |
+
+No tag was moved by hand, and none was attempted. `latest` was set by `--tag latest` on the publish
+and asserted by the workflow's own verification step, which skipped the plugin rather than
+reasserting a tag this run did not set. `stable` did not move: it moves by decision, and no decision
+was taken. The registry confirms it: `npm view @snack-ai/cli dist-tags` answers
+`{ stable: '0.6.1', latest: '0.8.1' }`.
+
+This is a patch release for three setup defects, each of which a green `npm run check` could not
+see: the OpenCode fingerprint required primary keys to report `NOT NULL`, which only holds inside a
+`STRICT` table that OpenCode does not create; setup validated its identifiers only after the whole
+questionnaire; and guided setup printed the choices before the question they answered. The
+fingerprint family stays `oc-sqlite-msgpart-v1` — the change widens what is accepted and refuses
+nothing that was accepted before, so no configuration written by an earlier version needs to change.
