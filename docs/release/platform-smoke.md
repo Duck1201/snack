@@ -139,3 +139,36 @@ setup refusing an identifier where it is given, one for the guided path and one 
 `340 ms`. As in Stage 8, the second client does not move the figure. The budget caveat is unchanged:
 [PLAN.md](../../PLAN.md) states 250 ms for a typical supported developer machine and not as a
 cross-device guarantee, so CI reports the measurement rather than asserting it.
+
+## 0.8.2
+
+WSL gate: passed
+
+- Run: [CI 30686347495](https://github.com/Duck1201/snack/actions/runs/30686347495)
+- Date: 2026-08-01
+- Commit: `a52222477515d8a3ba71fa4abddce3111a32e999`
+- Toolchain on every environment: Node.js `24.18.1`, npm `11.16.0`
+
+| Environment | Runner image | Tests | Package smoke |
+| --- | --- | --- | --- |
+| Ubuntu 24.04, AMD64 | `ubuntu-24.04` | 389 passed, 0 skipped | passed |
+| macOS 26, ARM64 | `macos-26-arm64` | 389 passed, 0 skipped | passed |
+| Debian 13 on WSL2, AMD64 | `windows-2025-vs2026` host | 387 passed, 2 skipped | passed |
+
+Each environment packed and installed `snack-ai-cli-0.8.2.tgz` (47 files) alongside
+`@snack-ai/opencode`, which is unchanged at `0.1.2` in this release. The plugin workspace
+contributed 4 passing tests and 1 skip — the packed-plugin dispatch test, which needs a real
+OpenCode installation — on every environment.
+
+The two skips unique to WSL2 remain the permission-denial tests in `resilience.test.js`: that job
+runs as root, and a mode bit denies nothing to uid 0.
+
+The count is unchanged from `0.8.1`. This release moves wording, not behaviour: the guided-setup
+re-ask test now asserts both directions — the refusal carries the identifier rule, the question does
+not — instead of asserting the rule was on the question.
+
+`status --no-sync` over 100,000 prompts measured p95 `285 ms` on Ubuntu, `297 ms` on macOS, and
+`346 ms` on WSL2. Over a two-client history of the same size it measured `281 ms`, `284 ms`, and
+`350 ms`. The budget caveat is unchanged: [PLAN.md](../../PLAN.md) states 250 ms for a typical
+supported developer machine and not as a cross-device guarantee, so CI reports the measurement
+rather than asserting it.
