@@ -7,8 +7,8 @@ Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 
 ## Decisions taken before any code
 
-| Decision                  | Choice                                                                  |
-| ------------------------- | ----------------------------------------------------------------------- |
+| Decision                  | Choice                                                                    |
+| ------------------------- | ------------------------------------------------------------------------- |
 | Isolated staging registry | `npx verdaccio` on a temp port, from a script. No permanent devDependency |
 | Artifact evidence         | `npm sbom` + `shasum` + a double `npm pack` compared entry by entry       |
 | Seven-day RC soak         | **Dropped.** `rc.1` and promotion the same day                            |
@@ -21,13 +21,13 @@ remaining gates cannot reach.
 
 ## Wave 1 — stable gate audit
 
-| Slice | Outcome                                                                                              |
-| ----- | ------------------------------------------------------------------------------------------------------ |
-| 0     | The eleven documents `0.9.0` emits, captured while the tree still matched `v0.9.0`                     |
-| 1     | `upgrade:smoke` over five published floors, plus a test for `migration_history_mismatch`                |
-| 2     | `release:evidence` — checksums, SBOMs, reproducible-pack proof — and a `release:check` gate on it       |
-| 3     | The support matrix updated off `0.8.x` and given a test that ties it to the adapters                   |
-| 4     | The 1.0 freeze confirmation, the dropped soak, and remeasured budgets                                  |
+| Slice | Outcome                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------- |
+| 0     | The eleven documents `0.9.0` emits, captured while the tree still matched `v0.9.0`                |
+| 1     | `upgrade:smoke` over five published floors, plus a test for `migration_history_mismatch`          |
+| 2     | `release:evidence` — checksums, SBOMs, reproducible-pack proof — and a `release:check` gate on it |
+| 3     | The support matrix updated off `0.8.x` and given a test that ties it to the adapters              |
+| 4     | The 1.0 freeze confirmation, the dropped soak, and remeasured budgets                             |
 
 ### The corpus splits at the freeze
 
@@ -57,9 +57,9 @@ Both are recorded because the corrected versions look obvious and the wrong ones
 A released migration edited in place under its own checksum is the exact failure `upgrade:smoke`
 exists to catch, and the refusal path had never been asserted. It is cheapest in process, so it went
 to `resilience.test.js` rather than into the network script. Told apart from
-`storage_newer_than_application` deliberately — one sends the reader to a newer release, the other to
-the backup — so the reason code is asserted, not only the exit code. Confirmed non-tautological by
-removing the guard and watching the test disagree.
+`storage_newer_than_application` deliberately — one sends the reader to a newer release, the other
+to the backup — so the reason code is asserted, not only the exit code. Confirmed non-tautological
+by removing the guard and watching the test disagree.
 
 ### What the evidence script does not claim
 
@@ -75,8 +75,8 @@ rather than reporting only that two digests differ.
 ### Measured, not asserted
 
 `status --no-sync` p95 193 ms against 250; two clients 197 ms; incremental sync 410 ms against 2 s;
-OpenCode backfill 16.5 s and Claude 13.7 s against 30 s; steady-state memory passes under a hard
-150 MB cap. The OpenCode backfill moved from 14.1 s at `0.9.0` on a machine at load 1.23 rather than
+OpenCode backfill 16.5 s and Claude 13.7 s against 30 s; steady-state memory passes under a hard 150
+MB cap. The OpenCode backfill moved from 14.1 s at `0.9.0` on a machine at load 1.23 rather than
 0.81, while the Claude backfill over the same code path did not move at all. That is the machine.
 
 ## Wave 2 — the release candidate (pending)
