@@ -1,8 +1,15 @@
 # Phase 1 — End-to-end review of the published `1.0.0`
 
-Status: **all three P1s fixed on `fix/phase-1-p1s`, awaiting the `1.0.1` publish.** Every fix was
-written test-first at an agreed seam and then re-driven against the real binary; the confirmations
-are recorded under each wave below. No P0/P1 is outstanding in the tree.
+Status: **complete.** The three P1s shipped as `1.0.1`, published from `9d18263` by run
+[30711850333](https://github.com/Duck1201/snack/actions/runs/30711850333), `latest` and `stable`
+both resolving to `1.0.1`. Every fix was written test-first at an agreed seam, then re-driven
+against the **published** artifact rather than the tree — the record is in
+[docs/release/identity.md](../../docs/release/identity.md). No P0/P1 is outstanding.
+
+The seven remaining findings are triaged into `1.1.0`–`1.5.0` and carry their reproductions.
+
+The phase's own exit criterion — "the run is recorded, every finding is triaged, and no P0/P1 is
+outstanding" — is met.
 
 Date: 2026-08-01. Machine: Linux 6.12.63+deb13-amd64, Node `24.18.1`, npm `11.16.0`, load average
 0.51-0.72 across the run.
