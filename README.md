@@ -90,7 +90,8 @@ open: it never throws into OpenCode and never blocks it.
 ### Documentation
 
 [PLAN.md](./PLAN.md) for scope and boundaries · [docs/specification.md](./docs/specification.md) for
-behavior · [CONTEXT.md](./CONTEXT.md) for the domain vocabulary ·
+behavior · [docs/compatibility.md](./docs/compatibility.md) for what the published contracts promise
+· [CONTEXT.md](./CONTEXT.md) for the domain vocabulary ·
 [docs/opencode-support.md](./docs/opencode-support.md) for supported schema families.
 
 ---
@@ -170,5 +171,6 @@ reconstruídas depois. Ele falha aberto: nunca lança exceção para dentro do O
 ### Documentação
 
 [PLAN.md](./PLAN.md) para escopo e limites · [docs/specification.md](./docs/specification.md) para
-comportamento · [CONTEXT.md](./CONTEXT.md) para o vocabulário de domínio ·
+comportamento · [docs/compatibility.md](./docs/compatibility.md) para o que os contratos publicados
+prometem · [CONTEXT.md](./CONTEXT.md) para o vocabulário de domínio ·
 [docs/opencode-support.md](./docs/opencode-support.md) para as famílias de schema suportadas.
