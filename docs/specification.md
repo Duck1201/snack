@@ -445,7 +445,7 @@ All commands support:
 - `--help`;
 - `--version`;
 - `--json` when the command emits structured results;
-- `NO_COLOR` and non-TTY output without semantic reliance on color;
+- `NO_COLOR` and non-TTY output without semantic reliance on colour. Colour is drawn with `util.styleText` from the standard library and never carries meaning alone: a risk label is a printed word that happens to be coloured, so a colourblind reader, a `NO_COLOR` terminal and a captured log read the same sentence. Whether to colour is asked of the output stream through `hasColors()`, with `FORCE_COLOR` and `NO_COLOR` honoured in Node's own precedence — `hasColors()` exists only on a TTY, so leaving the question to the stream alone would drop `FORCE_COLOR` exactly where it is meant to work. There is no `--color` flag. `--json` output is never coloured;
 - stable, English command names and JSON fields.
 
 Human warnings go to stderr. Primary human output goes to stdout. JSON mode writes one valid document to stdout and structured diagnostics inside that document; incidental logs never corrupt stdout.
@@ -482,17 +482,19 @@ snack status [--source <alias>] [--no-sync]
              [--prompt-file <path|->] [--json]
 ```
 
-Default human detail includes:
+Default human output is one panel per capacity source, laid out as an aligned label column with no box drawing — a box survives neither a narrow terminal nor a pipe, and this output is read through both. Each panel includes:
 
 - source alias and active period;
 - viability interval and risk;
 - evidence and method;
-- pressure band and top contributors;
+- pressure band, top contributors, and a usage-pressure sparkline over the recent windows;
 - expected prompt category;
 - data age and synchronization status;
 - explicit uncertainty statement.
 
-With multiple sources and no selection, output is a summary table. Prospective text requires an unambiguous source.
+The sparkline is drawn from `pressure.trend.scores`, the same window scores `--json` reports, mapped to Unicode block characters on a fixed `[0, 1]` scale. The scale does not rescale to the series: a score is already a percentile against the user's own history, and rescaling would make a flat week of light usage look identical to a flat week of heavy usage. A source with no drawable series — too few windows, or no baseline to rank them against — draws nothing rather than a placeholder.
+
+With multiple sources and no selection, every configured source gets its own panel. Prospective text requires an unambiguous source.
 
 ### 12.4 `snack stats`
 

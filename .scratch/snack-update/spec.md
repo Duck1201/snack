@@ -299,6 +299,18 @@ What the criterion was protecting still holds and is stated more precisely in `P
 layout, alignment and the sparkline's own rendering are human formatting and reach no JSON document.
 `pressure.trend` is the single named exception.
 
-**Still to measure, not to decide:** `includeTrend` costs one `computeUsagePressure` call per window
-— five — per source, on a command held to a 250 ms p95. That is a budget question for
-`packages/cli/test/performance.test.js` and for the real binary, not a contract one.
+**Measured, and it costs nothing.** `includeTrend` adds one `computeUsagePressure` call per window —
+five — per source, which looked like a real risk against a 250 ms p95. Over the 100,000-prompt
+history in `performance.test.js`, spawning the real binary:
+
+| `status --no-sync` | p95    | p50    |
+| ------------------ | ------ | ------ |
+| without the trend  | 197 ms | 186 ms |
+| with the trend     | 188 ms | 184 ms |
+
+The difference is noise, and the reason is structural rather than lucky: `computeSourcePressure`
+already reads and buckets all thirty-one windows in one query, so the trend only re-ranks rows that
+are already in memory. The scan was paid before the sparkline asked for anything.
+
+Worth stating because the risk was named before it was checked: it was worth checking, and the
+answer was nil. The existing p95 test is the standing guard, and it now runs with the trend on.

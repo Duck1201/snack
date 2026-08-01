@@ -49,6 +49,7 @@ import {
 import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
+import { renderStatus } from "./render.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { executeCommand, readLockfiles, resolveUpdatePlan, updateModulePath } from "./update.js";
 import {
@@ -691,6 +692,10 @@ export async function run(argv, options = {}) {
             planProfile,
             horizon: primaryHorizon(current),
             now,
+            // The usage-pressure sparkline is drawn from these window scores. They reach the
+            // `--json` payload too, in the `pressure.trend` slot `status.schema.json` has declared
+            // since the 0.9 freeze -- see the amended 1.1.0 exit criterion in PLAN.md.
+            includeTrend: true,
           });
           /** @type {{category: string, prospective: object} | null} */
           let prospective = null;
@@ -765,12 +770,9 @@ export async function run(argv, options = {}) {
           ),
         );
       } else {
-        for (const status of statuses) {
-          stdout.write(
-            `${status.source.alias}: ${(status.viability.lower * 100).toFixed(0)}-${(status.viability.upper * 100).toFixed(0)}% viability; risk ${status.risk.label}; evidence ${status.evidence.level}; method ${status.method.id}@${status.method.version}; period ${status.source.active_period.started_at ?? "unknown"}; pressure ${status.pressure.band}; contributors ${describeContributors(status.pressure.contributors ?? [])}; category ${status.expected_prompt_category}; as_of ${status.freshness.as_of ?? "unknown"}; sync ${status.synchronization.status}.\n`,
-          );
-          for (const caveat of status.caveats) stdout.write(`Caveat: ${caveat}\n`);
-        }
+        stdout.write(
+          renderStatus(statuses, { color: supportsColor(stdout, options.env ?? process.env) }),
+        );
         reportWarnings(stderr, reportedWarnings);
       }
       // Only now, with the bytes written, is an attempt a snapshot the user actually saw.
@@ -1342,6 +1344,35 @@ async function removeConsumedPendingSegments(paths, sources) {
 }
 
 /**
+ * Whether this stream should carry colour.
+ *
+ * `hasColors()` is where Node reconciles `TERM`, `COLORTERM`, `FORCE_COLOR` and `NO_COLOR`, and it
+ * would be the whole answer except that **it exists only on a TTY**. A piped stdout is not a
+ * `tty.WriteStream` and has no `hasColors` at all -- so leaving the question to the stream drops
+ * `FORCE_COLOR` exactly where it is meant to work, which is `snack status | less -R`. Driving the
+ * real binary is what showed this; the stream alone answers "no colour" for every pipe regardless
+ * of what the user asked for.
+ *
+ * Calling `tty.WriteStream.prototype.hasColors` on the pipe instead was tried and is worse: it
+ * answers `true` for a plain pipe with no environment set at all, which would colour every
+ * redirect into a file.
+ *
+ * So the two environment variables are read here, in Node's own precedence -- `FORCE_COLOR` wins
+ * over `NO_COLOR`, and Node warns when both are set -- and everything else is still left to the
+ * stream. There is no `--color` flag. An injected sink has no `hasColors` and gets no colour,
+ * which is what keeps command tests asserting plain text.
+ *
+ * @param {{write(chunk: string): unknown, hasColors?: () => boolean}} stream
+ * @param {NodeJS.ProcessEnv} env
+ */
+function supportsColor(stream, env) {
+  const forced = env.FORCE_COLOR ?? "";
+  if (forced !== "" && forced !== "0") return true;
+  if ((env.NO_COLOR ?? "") !== "") return false;
+  return typeof stream.hasColors === "function" && stream.hasColors();
+}
+
+/**
  * @param {unknown[]} sources
  * @param {string} installationId
  * @param {import("./paths.js").SnackPaths} paths
@@ -1383,29 +1414,6 @@ function emptySyncResult(alias, path, failed) {
 /** @param {Command} command @param {boolean} configuredJson */
 function wantsJson(command, configuredJson) {
   return command.optsWithGlobals().json === true || configuredJson;
-}
-
-/**
- * Name the dimensions that put the pressure band where it is, strongest first.
- *
- * Specification §12.3 asks the default human detail for the top contributors. Only ranked
- * dimensions carry the score, so an unranked one is absent here rather than reported as a
- * contribution of zero, which would read as evidence of light usage.
- *
- * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
- */
-function describeContributors(contributors) {
-  const ranked = contributors
-    .filter((contributor) => contributor.contribution !== null)
-    .sort((left, right) => Number(right.contribution) - Number(left.contribution))
-    .slice(0, 2);
-  if (ranked.length === 0) return "none ranked";
-  return ranked
-    .map(
-      (contributor) =>
-        `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`,
-    )
-    .join(", ");
 }
 
 /**
