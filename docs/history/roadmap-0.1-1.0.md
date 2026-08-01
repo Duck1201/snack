@@ -434,8 +434,8 @@ itself.
   Independent reviewer and tester passes ran against the complete MVP diff: thirteen findings, three
   of them P1, all fixed before release with a failing test written first for each. Verified against
   the registry rather than the workflow's own status; the evidence is in
-  [docs/release/identity.md](./docs/release/identity.md) and
-  [docs/release/platform-smoke.md](./docs/release/platform-smoke.md).
+  [docs/release/identity.md](../release/identity.md) and
+  [docs/release/platform-smoke.md](../release/platform-smoke.md).
 - **Effort:** 4 AI-assisted waves
 **Purpose:** Complete, harden, document, and publish the technical MVP for OpenCode.
 
@@ -521,7 +521,7 @@ itself.
 - **Status:** Complete. `0.7.0` published to `latest` and tagged `v0.7.0`. Claude Code is read
   through its JSONL histories by a second adapter behind the existing source-adapter contract, and
   the live-hook path is deferred by
-  [ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) because the JSONL already
+  [ADR-0006](../adr/0006-claude-jsonl-backfill-without-hooks.md) because the JSONL already
   carries the structured refusal a hook would report. Migrations `010` and `011` removed the client
   leakage from the schema and let two clients share one capacity source; a `0.6` database upgrades
   in place with every row preserved. Budgets measured on Node `24.18.1`: Claude backfill of 100,000
@@ -563,7 +563,7 @@ itself.
 
 **Wave 3: Client-neutral core** (revised; superseded the planned live-capture wave)
 
-Live capture was dropped by [ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md):
+Live capture was dropped by [ADR-0006](../adr/0006-claude-jsonl-backfill-without-hooks.md):
 Claude Code appends its JSONL as the session runs and records a refusal there as a structured
 field, so hooks would deliver a second copy of a signal backfill already carries, in exchange for
 writing into a user-owned settings file. The wave was spent instead on the client leakage that had
@@ -626,7 +626,7 @@ no owner:
 
 - **Release:** `0.8.0` on npm `latest`
 - **Status:** Complete. `0.8.0`, `0.8.1` and `0.8.2` published to `latest` with SLSA provenance on
-  both packages and recorded in [docs/release/identity.md](./docs/release/identity.md); tagged
+  both packages and recorded in [docs/release/identity.md](../release/identity.md); tagged
   `v0.8.0`, `v0.8.1`, `v0.8.2`. No client-specific type reaches the domain or prediction modules,
   and two clients are proven to converge on one capacity source under event permutations. Migrations
   preserve a `0.6` database in place. The candidate public contracts became executable rather than
@@ -716,11 +716,11 @@ no owner:
   older schema, the Claude reader stored a timestamp that was not a time, the published spool schema
   did not compile under the product's own Ajv, and a rejected argument was published in the error
   envelope's `command`. All fixed, none resetting the freeze — the reasoning is recorded per defect
-  and summarized in [docs/compatibility.md](./docs/compatibility.md). The migration floor is now
+  and summarized in [docs/compatibility.md](../compatibility.md). The migration floor is now
   proven against the published `0.6.1` artifact rather than only in-tree, four trust boundaries have
   property tests, and the budgets have a recorded developer-machine measurement that `release:check`
   gates on. Wave 3 published the beta with the `0.6+` upgrade path documented in
-  [docs/compatibility.md](./docs/compatibility.md), where beta feedback is also recorded as
+  [docs/compatibility.md](../compatibility.md), where beta feedback is also recorded as
   consultative evidence that cannot itself reset the freeze. The plugin moved for the first time in
   four releases, to republish the corrected spool schema: its behaviour is unchanged since `0.1.2`,
   but the schema is named in the package's `files` and therefore ships inside the tarball, so the
@@ -728,7 +728,7 @@ no owner:
   `files` did. The published `0.1.2` artifact refuses to compile under the product's own Ajv and
   `0.1.3` compiles, checked against both tarballs rather than against the tree. The public surface is
   frozen and recorded
-  in [docs/compatibility.md](./docs/compatibility.md), which `release:check` now gates on. The three
+  in [docs/compatibility.md](../compatibility.md), which `release:check` now gates on. The three
   P3s carried from Stage 8 are fixed: `doctor` refuses an unknown alias with exit 4 like every other
   command, `data purge --include-config` no longer reports a plugin that was never registered, and a
   rejected configuration names the rule that refused it instead of only the location. Two
@@ -805,7 +805,7 @@ no owner:
   tarballs pass an isolated staging registry before npm sees them.
 - **Effort:** 3 AI-assisted waves
 - **No release candidate, and no soak.** Both were **dropped by decision**, recorded in
-  [docs/compatibility.md](./docs/compatibility.md#10-the-freeze-confirmed-not-redefined). `1.0.0-rc.0`
+  [docs/compatibility.md](../compatibility.md#10-the-freeze-confirmed-not-redefined). `1.0.0-rc.0`
   was cut, gated locally, and never published; the version went straight to `1.0.0`.
 
   What this costs is worth stating rather than burying. Every artifact-level gate stands — the

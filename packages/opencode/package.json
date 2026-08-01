@@ -17,7 +17,8 @@
     "src",
     "LICENSE",
     "NOTICE",
-    "README.md"
+    "README.md",
+    "README.pt-BR.md"
   ],
   "engines": {
     "node": ">=24 <25"
