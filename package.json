@@ -20,6 +20,7 @@
     "pack:check": "npm pack --workspace @snack-ai/cli --dry-run",
     "pack:smoke": "node scripts/package-smoke.mjs",
     "release:check": "node scripts/check-release-readiness.mjs",
+    "upgrade:smoke": "node scripts/upgrade-smoke.mjs",
     "release:publish": "changeset publish --tag next",
     "release:version": "changeset version",
     "test": "npm test --workspaces --if-present",

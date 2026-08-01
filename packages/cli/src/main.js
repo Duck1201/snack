@@ -1024,11 +1024,11 @@ export async function run(argv, options = {}) {
         stdout,
         stderr,
         json: argv.includes("--json") || configuredJson,
-        command: commandName(argv),
+        command: commandName(argv, program),
         message: "Invalid command usage.",
         reason: "invalid_usage",
         exitCode: ExitCode.usage,
-        humanDetail: commanderError,
+        humanDetail: withoutRejectedValues(commanderError),
         now,
       });
     }
@@ -1037,7 +1037,7 @@ export async function run(argv, options = {}) {
         stdout,
         stderr,
         json: argv.includes("--json") || configuredJson,
-        command: commandName(argv),
+        command: commandName(argv, program),
         message: error.message,
         reason: error.reason,
         exitCode: error.exitCode,
@@ -1055,7 +1055,7 @@ export async function run(argv, options = {}) {
       stdout,
       stderr,
       json: argv.includes("--json") || configuredJson,
-      command: commandName(argv),
+      command: commandName(argv, program),
       message: "Unexpected internal failure.",
       reason: "internal_error",
       exitCode: ExitCode.internal,
@@ -1979,18 +1979,29 @@ function doctorExitCode(checks) {
   return ExitCode.internal;
 }
 
-/** @param {string[]} argv */
-function commandName(argv) {
+/** @param {string[]} argv @param {import("commander").Command} program */
+function commandName(argv, program) {
   // Every invocation is `snack <command> [<subcommand>] [--flag [value]]...`, so scanning stops
   // at the first flag. Skipping flags but keeping what follows them put option values — a
   // source alias, a time bound, a configuration value — into the `command` field of every
   // error envelope, which is a document users share.
+  //
+  // Stopping at the first flag was not enough. A positional argument no command takes is not a
+  // flag, so `snack doctor <pasted-secret>` reported `command: "doctor <pasted-secret>"` and put it
+  // in the document. Walking the command tree answers the question the field is actually asking —
+  // which command was invoked — and a token that names no command ends the walk.
   const tokens = [];
+  let node = program;
   for (const part of argv.slice(2)) {
     if (part.startsWith("-")) break;
+    const child = node.commands.find(
+      (candidate) => candidate.name() === part || candidate.aliases().includes(part),
+    );
+    if (!child) break;
     tokens.push(part);
+    node = child;
   }
-  return tokens.slice(0, 2).join(" ") || "snack";
+  return tokens.join(" ") || "snack";
 }
 
 /**
@@ -2659,6 +2670,24 @@ function providerMappings(sources, installationId) {
     );
   }
   return { mappedProviders: new Set(providerMappingCounts.keys()), providerMappingCounts };
+}
+
+/**
+ * Strip the values Commander quotes back when it refuses a command line.
+ *
+ * SNACK never echoes a rejected value: an alias, a key or a bound arrives from argv, and argv is
+ * where someone pastes something private by accident. Commander does not share that rule -- "too
+ * many arguments ... but got 1: <value>" prints whatever was typed -- so its message is the one
+ * place on the CLI surface where the rule did not hold. The JSON document was already clean; this
+ * is the human line.
+ *
+ * Only the trailing value list is removed. Which argument count was wrong, and which unknown option
+ * was given, are what makes the message worth printing at all.
+ *
+ * @param {string} detail
+ */
+function withoutRejectedValues(detail) {
+  return detail.replace(/(arguments? but got \d+):[^\n]*/gu, "$1.");
 }
 
 /**

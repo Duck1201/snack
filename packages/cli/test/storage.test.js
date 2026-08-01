@@ -6,7 +6,8 @@ import { afterEach, test } from "node:test";
 
 import Database from "better-sqlite3";
 
-import { SnackError } from "../src/errors.js";
+import { ExitCode, SnackError } from "../src/errors.js";
+import { run } from "../src/main.js";
 import { resolvePaths } from "../src/paths.js";
 import {
   createSetupDatabaseBackup,
@@ -18,6 +19,11 @@ import {
   restoreSetupDatabaseBackup,
   storeObservations,
 } from "../src/storage.js";
+import {
+  cleanupRunFixtures,
+  createOpenCodeDatabase,
+  makeRunFixture,
+} from "./fixtures/run-fixture.js";
 
 const now = new Date("2026-01-02T03:04:05.000Z");
 
@@ -39,6 +45,7 @@ async function makeStorage() {
 const temporaryRoots = [];
 
 afterEach(async () => {
+  await cleanupRunFixtures();
   await Promise.all(
     temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
@@ -463,6 +470,176 @@ function readDeliveredForecast(databaseFile) {
   } finally {
     database.close();
   }
+}
+
+test("a database still at an older schema is refused rather than half-read", async () => {
+  // The mirror of "a database written by a newer release", and the one that was missing. A
+  // read-only path verifies that every migration the database claims is one this build ships, and
+  // never that this build's migrations have all been applied -- so a database left at an older
+  // schema passes the check and then meets a column that does not exist yet. `status --no-sync`
+  // answered exit 10, "Unexpected internal failure", which is the one answer that helps nobody.
+  //
+  // This is the state every single upgrade passes through: the pending migrations apply on the
+  // first command that opens storage for write, so a read-only command run before that one is
+  // ordinary, not exotic.
+  const fixture = await makeRunFixture("snack-unmigrated-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await initializeDatabase(fixture.paths, {
+    migrationsDir: await copyMigrationsThrough(9),
+    applicationVersion: "0.6.0",
+    now,
+  });
+  seedZeroSixDatabase(fixture.paths.databaseFile);
+  const before = tableCounts(fixture.paths.databaseFile);
+  await writeZeroSixConfig(fixture);
+
+  for (const argv of [
+    ["status", "--no-sync"],
+    ["export", "--format", "json", "--output", "-"],
+    ["data", "purge", "--source", "work", "--dry-run"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(["node", "snack", ...argv, "--json"], fixture.options);
+
+    assert.equal(exitCode, ExitCode.storage, `${argv.join(" ")}: ${fixture.stdout.value}`);
+    const document = JSON.parse(fixture.stdout.value);
+    assert.equal(document.errors[0].code, "storage_migrations_pending", argv.join(" "));
+    // Actionable, or it is no better than the crash it replaces: the message names the command
+    // that fixes it.
+    assert.match(document.errors[0].message, /snack sync/u);
+  }
+  // Refusing means refusing: nothing was read, so nothing was written either.
+  assert.deepEqual(tableCounts(fixture.paths.databaseFile), before);
+});
+
+test("a 0.6 database answers every command the frozen release publishes", async () => {
+  // The migration chain is tested; what the commands then do with those rows is not. An upgrade
+  // that preserved every row and then answered `status` with an error would pass every test above
+  // and still be worthless to the person who upgraded.
+  //
+  // 0.9 added no migration of its own -- the chain still ends at 012 -- so the 0.6 -> 0.9 promise
+  // is not another leg to apply. It is this: the rows a 0.6 binary left behind are readable by the
+  // release that froze the contracts, through the documents that contract publishes.
+  const fixture = await makeRunFixture("snack-zero-six-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await initializeDatabase(fixture.paths, {
+    migrationsDir: await copyMigrationsThrough(9),
+    applicationVersion: "0.6.0",
+    now,
+  });
+  seedZeroSixDatabase(fixture.paths.databaseFile);
+  const before = tableCounts(fixture.paths.databaseFile);
+  await writeZeroSixConfig(fixture);
+
+  /** @param {string[]} argv */
+  const document = async (...argv) => {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(["node", "snack", ...argv, "--json"], fixture.options);
+    return { exitCode, document: JSON.parse(fixture.stdout.value) };
+  };
+
+  // Before anything migrates, `doctor` is the command that says so. It diagnoses without changing,
+  // so it must not quietly upgrade the database out from under the person asking what state it is
+  // in -- and reporting a pending migration as healthy would be the worse answer.
+  const beforeUpgrade = await document("doctor");
+  assert.equal(beforeUpgrade.exitCode, ExitCode.storage);
+  assert.deepEqual(
+    beforeUpgrade.document.errors.map((/** @type {{code: string}} */ error) => error.code),
+    ["storage_migrations"],
+  );
+
+  // The upgrade itself, in the order it really happens: the first command that opens storage for
+  // write applies the pending migrations. `config set` is the smallest one that does, so what
+  // follows is measuring the upgrade rather than an upgrade plus an ingestion.
+  const upgrade = await document("config", "set", "analysis.horizons", '["PT1H"]');
+  assert.equal(upgrade.exitCode, 0, JSON.stringify(upgrade.document.errors));
+  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12]);
+  assert.equal(upgrade.document.data.storage.backup_created, true);
+
+  const status = await document("status", "--no-sync");
+  const stats = await document("stats", "--verbose");
+  const exported = await document("export", "--format", "json", "--output", "-");
+  const doctor = await document("doctor");
+
+  for (const [name, answer] of Object.entries({ status, stats, export: exported, doctor })) {
+    assert.equal(answer.exitCode, 0, `${name}: ${JSON.stringify(answer.document.errors)}`);
+    assert.equal(answer.document.schema_version, "2", name);
+    assert.notEqual(answer.document.status, "error", name);
+  }
+  // The prompt 0.6 recorded is still the prompt being described, not a history that started over.
+  assert.equal(status.document.data.observed.prompts, 1);
+  assert.equal(exported.document.data.tables.prompts.length, 1);
+  assert.ok(
+    doctor.document.data.checks.every(
+      (/** @type {{status: string}} */ check) => check.status !== "fail",
+    ),
+    JSON.stringify(doctor.document.data.checks),
+  );
+  // Nothing was dropped on the way through. `status` records the forecast it just produced, so the
+  // two prediction tables grow by exactly that one -- growing is the command working, and any other
+  // table moving at all would be the upgrade losing or inventing history.
+  const after = tableCounts(fixture.paths.databaseFile);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 3);
+  assert.equal(after.prediction_attempt, (before.prediction_attempt ?? 0) + 1);
+  assert.equal(after.prediction_delivery, (before.prediction_delivery ?? 0) + 1);
+  const unchanged = (/** @type {Record<string, number>} */ counts) => ({
+    ...counts,
+    schema_migration: 0,
+    prediction_attempt: 0,
+    prediction_delivery: 0,
+  });
+  assert.deepEqual(unchanged(after), unchanged(before));
+  // The forecast 0.6 showed the user is the one row the product may never restate, and it came
+  // through an upgrade and four commands untouched.
+  assert.deepEqual(readDeliveredForecast(fixture.paths.databaseFile), {
+    prediction_attempt_id: 1,
+    lower: 0.4,
+    point: 0.6,
+    upper: 0.8,
+    risk_label: "elevated",
+    evidence_level: "low",
+    model_policy_version: "stage5-prediction-v2",
+    delivered_at: now.toISOString(),
+    channel: "stdout",
+    is_primary: 1,
+    prompt_execution_id: 1,
+  });
+  // The cursor still says where the reader stopped, so a later synchronization resumes rather than
+  // re-ingesting a history that already happened.
+  assert.deepEqual(readIngestionCursor(fixture.paths.databaseFile, "work"), cursorAt(2000));
+});
+
+/**
+ * The configuration a 0.6 install would hold for the source `seedZeroSixDatabase` writes, so the
+ * database and the configuration describe the same capacity source rather than two.
+ *
+ * @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture
+ */
+async function writeZeroSixConfig(fixture) {
+  await mkdir(fixture.paths.configDir, { recursive: true, mode: 0o700 });
+  await writeFile(
+    fixture.paths.configFile,
+    `${JSON.stringify({
+      schema_version: 1,
+      sources: [
+        {
+          alias: "work",
+          installation_id: "11111111-2222-4333-8444-555555555555",
+          adapter: "opencode",
+          database: fixture.options.env.OPENCODE_DB,
+          provider: "anthropic",
+          profile: "default",
+          plan: "pro",
+          fingerprint: "oc-sqlite-msgpart-v1",
+        },
+      ],
+      analysis: { horizons: ["PT1H"] },
+      presentation: { json: false },
+    })}\n`,
+    { mode: 0o600 },
+  );
 }
 
 test("a database written by a newer release says so instead of blaming the migration history", async () => {

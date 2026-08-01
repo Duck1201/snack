@@ -27,6 +27,8 @@ node --test --test-name-pattern "full sync converges" packages/cli/test/main.tes
 
 npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs clean, runs the bin
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
+npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — installs the published 0.6.1, upgrades its
+                       # database with the candidate. Needs the network; not part of `check`.
 ```
 
 Node 24 only (`engines: >=24 <25`), npm 11.16.0, ESM everywhere, JavaScript with JSDoc types — no

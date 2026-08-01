@@ -847,7 +847,16 @@ no owner:
 ### Stage 9 - Feature Freeze and Public Beta
 
 - **Release:** `0.9.0` on npm `latest`
-- **Status:** In progress — Wave 1 complete, unreleased. The public surface is frozen and recorded
+- **Status:** In progress — Waves 1 and 2 complete, unreleased. Wave 2 hardening found six defects,
+  four on frozen surfaces and three of them P1, every one found by a test written for that wave and
+  none visible to the fixture suite that was already green: read-only commands crashed against an
+  older schema, the Claude reader stored a timestamp that was not a time, the published spool schema
+  did not compile under the product's own Ajv, and a rejected argument was published in the error
+  envelope's `command`. All fixed, none resetting the freeze — the reasoning is recorded per defect
+  and summarized in [docs/compatibility.md](./docs/compatibility.md). The migration floor is now
+  proven against the published `0.6.1` artifact rather than only in-tree, four trust boundaries have
+  property tests, and the budgets have a recorded developer-machine measurement that `release:check`
+  gates on. Wave 3 remains. The public surface is frozen and recorded
   in [docs/compatibility.md](./docs/compatibility.md), which `release:check` now gates on. The three
   P3s carried from Stage 8 are fixed: `doctor` refuses an unknown alias with exit 4 like every other
   command, `data purge --include-config` no longer reports a plugin that was never registered, and a

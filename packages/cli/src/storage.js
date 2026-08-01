@@ -2415,10 +2415,22 @@ export async function assertReadableStorage(databaseFile) {
         reason: "storage_not_initialized",
       });
     }
-    verifyAppliedMigrations(
-      readAppliedMigrations(database),
-      await loadMigrations(migrationDirectory),
-    );
+    const applied = readAppliedMigrations(database);
+    const available = await loadMigrations(migrationDirectory);
+    verifyAppliedMigrations(applied, available);
+    // Verifying the history answers "is everything here one of mine?", never "is all of mine
+    // here?". A database left at an older schema passes that question and then meets a column a
+    // later migration adds, which surfaced as an internal failure rather than as the upgrade it
+    // is. Every upgrade passes through this state, so the honest answer names the way out.
+    const pending = available.filter((migration) => !applied.has(migration.number));
+    if (pending.length > 0) {
+      throw new SnackError(
+        `Storage is at an older schema: ${pending.length} migration${
+          pending.length === 1 ? "" : "s"
+        } have not been applied. Run \`snack sync\` to apply them; a backup is taken first.`,
+        { code: ExitCode.storage, reason: "storage_migrations_pending" },
+      );
+    }
   } catch (error) {
     if (error instanceof SnackError) throw error;
     throw new SnackError("Storage could not be read.", {

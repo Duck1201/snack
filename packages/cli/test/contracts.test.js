@@ -201,6 +201,13 @@ test("an export validates against the published export schema", async () => {
 });
 
 /**
+ * Every released version whose documents were captured while the tree still matched its tag. `0.6`
+ * is the migration floor `docs/compatibility.md` declares, so it is the oldest corpus the freeze
+ * has to answer for.
+ */
+const CAPTURED_VERSIONS = ["0.6", "0.7", "0.8"];
+
+/**
  * Read a captured corpus, which is the record of what a released version emitted.
  *
  * @param {string} version
@@ -208,6 +215,7 @@ test("an export validates against the published export schema", async () => {
 async function capturedDocuments(version) {
   const directory = new URL(`./fixtures/contracts/${version}/`, import.meta.url);
   const names = await readdir(directory);
+  // 0.6 predates the Claude client, so its corpus is one document shorter than the ones after it.
   assert.ok(names.length >= 10, `only ${names.length} captured documents for ${version}`);
   return Promise.all(
     names.map(async (name) => ({
@@ -296,7 +304,7 @@ test("a document from before the freeze announces itself as version 1", async ()
   // quietly pass as the new version, it says which version it is and fails the new schema.
   const envelope = await compileSchema("envelope.schema.json");
 
-  for (const version of ["0.7", "0.8"]) {
+  for (const version of CAPTURED_VERSIONS) {
     for (const { name, document } of await capturedDocuments(version)) {
       assert.equal(document.schema_version, "1", `${version} ${name}`);
       assert.equal(
@@ -317,14 +325,14 @@ test("the freeze broke exactly one payload and left every other document alone",
   /** @type {string[]} */
   const broken = [];
 
-  for (const version of ["0.7", "0.8"]) {
+  for (const version of CAPTURED_VERSIONS) {
     for (const { name, document } of await capturedDocuments(version)) {
       const relabelled = { ...document, schema_version: ENVELOPE_SCHEMA_VERSION };
       if (!envelope(relabelled)) broken.push(`${version}/${name}`);
     }
   }
 
-  assert.deepEqual(broken, ["0.7/config-set.json", "0.8/config-set.json"]);
+  assert.deepEqual(broken, ["0.6/config-set.json", "0.7/config-set.json", "0.8/config-set.json"]);
 });
 
 test("the export changed shape under a new version rather than under the old one", async () => {
@@ -348,26 +356,36 @@ test("the export changed shape under a new version rather than under the old one
   assert.equal(captured.schema_version, "1");
 });
 
-test("a configuration written by 0.7 is still accepted", async () => {
+test("a configuration written by any supported release is still accepted", async () => {
   // Configuration is one of the surfaces PLAN.md freezes at 1.0, and it is the one whose breakage
   // is worst: a rejected configuration is not a degraded answer, it is a CLI that will not run at
-  // all until the user edits a file by hand. The document is lifted from what 0.7 itself reported
-  // through `config get`, so it is the real shape that release wrote rather than one reconstructed
+  // all until the user edits a file by hand. Each document is lifted from what that release itself
+  // reported through `config get`, so it is the real shape it wrote rather than one reconstructed
   // from today's assumptions.
-  const captured = JSON.parse(
-    await readFile(new URL("./fixtures/contracts/0.7/config-get.json", import.meta.url), "utf8"),
-  );
-  const fixture = await makeConfiguredFixture();
-  const asWritten = JSON.stringify(captured.data.value).replaceAll("{{root}}", fixture.root);
-  await mkdir(dirname(fixture.paths.configFile), { recursive: true, mode: 0o700 });
-  await writeFile(fixture.paths.configFile, `${asWritten}\n`, { mode: 0o600 });
+  //
+  // 0.6 is here because `docs/compatibility.md` names it the migration floor, and a floor the
+  // configuration reader cannot actually read is not a floor. As of the freeze the three documents
+  // happen to have the same shape, so this discovers nothing today; it exists for the release where
+  // they stop coinciding, which is the release nobody will notice by hand.
+  for (const version of CAPTURED_VERSIONS) {
+    const captured = JSON.parse(
+      await readFile(
+        new URL(`./fixtures/contracts/${version}/config-get.json`, import.meta.url),
+        "utf8",
+      ),
+    );
+    const fixture = await makeConfiguredFixture();
+    const asWritten = JSON.stringify(captured.data.value).replaceAll("{{root}}", fixture.root);
+    await mkdir(dirname(fixture.paths.configFile), { recursive: true, mode: 0o700 });
+    await writeFile(fixture.paths.configFile, `${asWritten}\n`, { mode: 0o600 });
 
-  fixture.stdout.value = "";
-  const exitCode = await run(["node", "snack", "config", "get", "--json"], fixture.options);
+    fixture.stdout.value = "";
+    const exitCode = await run(["node", "snack", "config", "get", "--json"], fixture.options);
 
-  assert.equal(exitCode, 0, fixture.stderr.value);
-  // Accepted and unchanged: a configuration silently rewritten on read is its own kind of break.
-  assert.deepEqual(JSON.parse(fixture.stdout.value).data.value, JSON.parse(asWritten));
+    assert.equal(exitCode, 0, `${version}: ${fixture.stderr.value}`);
+    // Accepted and unchanged: a configuration silently rewritten on read is its own kind of break.
+    assert.deepEqual(JSON.parse(fixture.stdout.value).data.value, JSON.parse(asWritten), version);
+  }
 });
 
 test("a configuration naming a client SNACK does not know is refused", async () => {
@@ -515,6 +533,18 @@ test("both packages ship a byte-identical spool event schema", async () => {
   );
 
   assert.equal(cli.equals(plugin), true, "the two spool schemas have drifted apart");
+});
+
+test("both packages test against a byte-identical set of privacy canaries", async () => {
+  // Duplicated for the same reason the spool schema is: neither package may reach into the other's
+  // tests. Duplicated on purpose still has to mean identical, or the two come to disagree about
+  // what a leak is -- and a canary the plugin stopped planting is a leak nobody is looking for.
+  const cli = await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url));
+  const plugin = await readFile(
+    new URL("../../opencode/test/privacy-canaries.json", import.meta.url),
+  );
+
+  assert.equal(cli.equals(plugin), true, "the two canary sets have drifted apart");
 });
 
 test("the packaged files carry every published schema", async () => {

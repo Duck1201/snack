@@ -1,0 +1,409 @@
+{
+  "schema_version": "1",
+  "command": "stats",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "source": {
+      "alias": "work",
+      "provider": "anthropic",
+      "profile": "default",
+      "plan": "pro",
+      "plan_profile": {
+        "id": "generic",
+        "version": "1.0.0",
+        "provenance": "bundled",
+        "as_of": "2026-01-01"
+      }
+    },
+    "horizons": [
+      {
+        "horizon": "PT1H",
+        "window": {
+          "from": "2026-01-02T02:04:05.000Z",
+          "to": "2026-01-02T03:04:05.000Z"
+        },
+        "dimensions": {
+          "input_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "output_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "reasoning_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_read_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_write_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          }
+        },
+        "cost": {
+          "by_currency": {},
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "by_model": [],
+        "duration": {
+          "status": "unknown",
+          "unit": "ms",
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "restrictions": {
+          "by_class": {},
+          "unit": "restrictions",
+          "sample_size": 0
+        },
+        "freshness": {
+          "as_of": null,
+          "age_seconds": null
+        },
+        "effective_sample_size": {
+          "value": 0,
+          "unit": "prompts",
+          "sample_size": 0,
+          "half_life_seconds": 86400
+        },
+        "policy_version": "stage4-analytics-v1",
+        "prompts": {
+          "count": 0,
+          "eligible": 0,
+          "successes": 0,
+          "restrictions": 0,
+          "excluded": 0,
+          "unit": "prompts"
+        }
+      },
+      {
+        "horizon": "PT5H",
+        "window": {
+          "from": "2026-01-01T22:04:05.000Z",
+          "to": "2026-01-02T03:04:05.000Z"
+        },
+        "dimensions": {
+          "input_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "output_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "reasoning_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_read_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_write_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          }
+        },
+        "cost": {
+          "by_currency": {},
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "by_model": [],
+        "duration": {
+          "status": "unknown",
+          "unit": "ms",
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "restrictions": {
+          "by_class": {},
+          "unit": "restrictions",
+          "sample_size": 0
+        },
+        "freshness": {
+          "as_of": null,
+          "age_seconds": null
+        },
+        "effective_sample_size": {
+          "value": 0,
+          "unit": "prompts",
+          "sample_size": 0,
+          "half_life_seconds": 86400
+        },
+        "policy_version": "stage4-analytics-v1",
+        "prompts": {
+          "count": 0,
+          "eligible": 0,
+          "successes": 0,
+          "restrictions": 0,
+          "excluded": 0,
+          "unit": "prompts"
+        }
+      },
+      {
+        "horizon": "P1D",
+        "window": {
+          "from": "2026-01-01T03:04:05.000Z",
+          "to": "2026-01-02T03:04:05.000Z"
+        },
+        "dimensions": {
+          "input_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "output_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "reasoning_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_read_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_write_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          }
+        },
+        "cost": {
+          "by_currency": {},
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "by_model": [],
+        "duration": {
+          "status": "unknown",
+          "unit": "ms",
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "restrictions": {
+          "by_class": {},
+          "unit": "restrictions",
+          "sample_size": 0
+        },
+        "freshness": {
+          "as_of": null,
+          "age_seconds": null
+        },
+        "effective_sample_size": {
+          "value": 0,
+          "unit": "prompts",
+          "sample_size": 0,
+          "half_life_seconds": 86400
+        },
+        "policy_version": "stage4-analytics-v1",
+        "prompts": {
+          "count": 0,
+          "eligible": 0,
+          "successes": 0,
+          "restrictions": 0,
+          "excluded": 0,
+          "unit": "prompts"
+        }
+      },
+      {
+        "horizon": "P7D",
+        "window": {
+          "from": "2025-12-26T03:04:05.000Z",
+          "to": "2026-01-02T03:04:05.000Z"
+        },
+        "dimensions": {
+          "input_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "output_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "reasoning_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_read_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          },
+          "cache_write_tokens": {
+            "status": "unknown",
+            "unit": "tokens",
+            "sample_size": 0,
+            "missing": 0,
+            "complete": false
+          }
+        },
+        "cost": {
+          "by_currency": {},
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "by_model": [],
+        "duration": {
+          "status": "unknown",
+          "unit": "ms",
+          "sample_size": 0,
+          "missing": 0,
+          "complete": false
+        },
+        "restrictions": {
+          "by_class": {},
+          "unit": "restrictions",
+          "sample_size": 0
+        },
+        "freshness": {
+          "as_of": null,
+          "age_seconds": null
+        },
+        "effective_sample_size": {
+          "value": 0,
+          "unit": "prompts",
+          "sample_size": 0,
+          "half_life_seconds": 86400
+        },
+        "policy_version": "stage4-analytics-v1",
+        "prompts": {
+          "count": 0,
+          "eligible": 0,
+          "successes": 0,
+          "restrictions": 0,
+          "excluded": 0,
+          "unit": "prompts"
+        }
+      }
+    ],
+    "pressure": {
+      "horizon": "PT1H",
+      "score": null,
+      "band": "unknown",
+      "policy_version": "stage4-analytics-v1",
+      "baseline_kind": "insufficient",
+      "completeness": "partial",
+      "contributors": [],
+      "baseline_windows": 0,
+      "trend": {
+        "windows_compared": 0,
+        "baseline_windows": 0,
+        "scores": [],
+        "policy_version": "stage6-trend-v1",
+        "status": "not_available",
+        "reason": "insufficient_baseline",
+        "direction": null
+      }
+    },
+    "calibration": {
+      "policy_version": "stage5-calibration-v1",
+      "snapshots": 0,
+      "undelivered_attempts": 0,
+      "live": {
+        "status": "not_available",
+        "policy_version": "stage5-calibration-v1",
+        "excluded": 0,
+        "brier": {
+          "value": null,
+          "sample_size": 0
+        },
+        "reliability": [],
+        "interval": {
+          "coverage": null,
+          "mean_width": null,
+          "sample_size": 0,
+          "buckets_evaluated": 0
+        }
+      },
+      "backtest": {
+        "status": "not_available",
+        "policy_version": "stage5-calibration-v1",
+        "excluded": 0,
+        "brier": {
+          "value": null,
+          "sample_size": 0
+        },
+        "reliability": [],
+        "interval": {
+          "coverage": null,
+          "mean_width": null,
+          "sample_size": 0,
+          "buckets_evaluated": 0
+        },
+        "forecasts": 0
+      }
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

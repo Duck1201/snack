@@ -92,6 +92,23 @@ declared. Additive; no behaviour changed.
   `config_schema_unknown_property`, with `config_schema_error` remaining for anything unmapped. The
   rejected value is never echoed.
 
+## What changed after the freeze, and why none of it reset it
+
+Beta hardening found four defects on frozen surfaces. Each is a fix, a diagnostic, or a correction
+to the form of a contract rather than to what it says, which is what the freeze permits. The
+reasoning is recorded per defect in `.scratch/contract-freeze/issues/`.
+
+| Change | Why it is not a reset |
+| --- | --- |
+| `status --no-sync`, `export` and `data purge` refuse a database at an older schema with the new reason `storage_migrations_pending` | A new value in the existing `errors[].code` field, under exit code `5`, which already existed. The previous behaviour was exit `10` and "Unexpected internal failure" — a crash, not a contract |
+| The Claude reader refuses a record whose `timestamp` is not a time, and will not root a turn at one | Ingestion refusing data it cannot interpret is the documented fail-closed rule. The refused records are counted in `sync`'s existing `rejected_invalid` |
+| `schemas/spool-event.schema.json` declares `type` on each conditional branch | The types were already implied by the root schema, so the set of accepted documents is unchanged. The file now compiles under the Ajv configuration the product itself uses; before, a conforming consumer got a compile error |
+| The error envelope's `command` no longer carries a rejected positional argument | `command` still means the command as the user would type it. The values it used to carry were never part of that meaning |
+
+A consumer written against `0.9.0` needs no change for any of these. A consumer that was relying on
+`command` echoing arbitrary argv, or on a read-only command crashing rather than refusing, was
+relying on a defect.
+
 ## Deprecation policy
 
 - A deprecated command, flag, or field warns for at least one minor release before it is removed.

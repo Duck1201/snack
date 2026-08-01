@@ -474,6 +474,11 @@ function numberOrNull(value) {
 function turnRoots(records, children) {
   const present = new Set(records.map((record) => String(record.uuid)));
   return records.filter((record) => {
+    // A root becomes an observation, and its `timestamp` becomes `started_at` verbatim. A record
+    // with no time is not a submission whatever else it looks like -- Claude Code writes several
+    // record types without one, and any of them could otherwise root a turn and publish a prompt
+    // that started at `undefined`.
+    if (!Number.isFinite(Date.parse(String(record.timestamp)))) return false;
     if (isPromptRecord(record)) return true;
     if (typeof record.uuid !== "string") return false;
     if (typeof record.parentUuid === "string" && present.has(record.parentUuid)) return false;
@@ -602,15 +607,36 @@ function readRecords(sessionFile, rejected = undefined) {
   const lines = content.split("\n");
   for (const [index, line] of lines.entries()) {
     if (line === "") continue;
+    /** @type {Record<string, unknown>} */
+    let record;
     try {
-      records.push(JSON.parse(line));
+      record = JSON.parse(line);
     } catch {
       // The last line of a file that does not end in a newline is a session Claude Code is
       // writing right now. Any other unparseable line is damage the file has already moved past,
       // and dropping it without a word would make a history quietly incomplete.
       if (index === lines.length - 1) continue;
       rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
+      continue;
     }
+    // A line that parses as JSON is not yet a record this reader can use. `timestamp` becomes
+    // `started_at` and `completed_at` verbatim, so a value that is not a time was stored as one:
+    // `sync` reported it inserted, and every window, freshness and horizon computed over that row
+    // was then computed over a string. Whatever the field holds also travelled out of the source
+    // file and into the database unread, which is the shape a content leak would take.
+    //
+    // Only the two record types the turn tree is built from are held to this. Claude Code keeps
+    // adding record types -- session titles, agent names, queue operations -- and the ones this
+    // reader never looks at need not carry a time; refusing them would break SNACK on a client
+    // release that changed nothing SNACK reads.
+    if (
+      (record.type === "user" || record.type === "assistant") &&
+      !Number.isFinite(Date.parse(String(record.timestamp)))
+    ) {
+      rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
+      continue;
+    }
+    records.push(record);
   }
   return records;
 }

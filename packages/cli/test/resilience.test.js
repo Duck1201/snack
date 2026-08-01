@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 
 import Database from "better-sqlite3";
 
 import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
+import { readIngestionCursor } from "../src/storage.js";
 import {
   cleanupRunFixtures,
+  createClaudeHistory,
   createOpenCodeDatabase,
   makeRunFixture,
 } from "./fixtures/run-fixture.js";
@@ -374,5 +378,148 @@ test("storage that was never migrated is refused as storage, not as a crash", as
       const exitCode = await run(["node", "snack", ...argv, "--json"], fixture.options);
       assert.equal(exitCode, ExitCode.storage, argv.join(" "));
     }
+  }
+});
+
+test("a source that disappears mid-history leaves the cursor where it was", async () => {
+  // Ingestion commits the cursor inside the same transaction that stores the rows, so a source
+  // that vanishes between two syncs must leave the cursor exactly where the last committed batch
+  // put it. A cursor that advanced over a read that did not happen is the worst outcome ingestion
+  // has: the records it skipped are never read again, and nothing reports them missing.
+  const install = await makeWorkingInstall("snack-source-gone-");
+  const cursorBefore = readIngestionCursor(install.resolved.databaseFile, "work");
+  const promptsBefore = countPrompts(install.resolved.databaseFile);
+  assert.ok(cursorBefore, "the fixture never committed a cursor");
+
+  await rm(String(install.options.env.OPENCODE_DB), { force: true });
+  install.stdout.value = "";
+  install.stderr.value = "";
+  const exitCode = await run(["node", "snack", "sync", "--full", "--json"], install.options);
+
+  // Degraded rather than failed: one unreadable source does not invalidate the history already
+  // stored, and the document says which source could not be read.
+  const document = JSON.parse(install.stdout.value);
+  assert.equal(exitCode, 0, JSON.stringify(document.errors));
+  assert.equal(document.status, "degraded");
+  assert.deepEqual(
+    document.warnings.map((/** @type {{code: string}} */ warning) => warning.code),
+    ["source_sync_failed"],
+  );
+  assert.deepEqual(readIngestionCursor(install.resolved.databaseFile, "work"), cursorBefore);
+  assert.equal(countPrompts(install.resolved.databaseFile), promptsBefore);
+});
+
+test("a Claude history whose shape drifted is refused rather than half-read", async () => {
+  // The OpenCode adapter has this test; the Claude one did not. A client release that moved a
+  // usage field must fail closed, because the alternative is a history stored with null tokens --
+  // partial data that looks complete and biases every horizon computed from it.
+  const fixture = await makeRunFixture("snack-claude-drift-");
+  const configDir = await createClaudeHistory(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = configDir;
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "personal",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+  const before = countPrompts(fixture.paths.databaseFile);
+
+  // Drift the history after setup accepted it, which is what a client upgrade does.
+  const projects = join(configDir, "projects", "-fixture-project");
+  const [sessionFile] = await readdir(projects);
+  const target = join(projects, String(sessionFile));
+  const drifted = (await readFile(target, "utf8"))
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const record = JSON.parse(line);
+      if (record.type === "assistant") delete record.message.usage;
+      return JSON.stringify(record);
+    })
+    .join("\n");
+  await writeFile(target, `${drifted}\n`, { mode: 0o600 });
+
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  const exitCode = await run(["node", "snack", "sync", "--full", "--json"], fixture.options);
+
+  const document = JSON.parse(fixture.stdout.value);
+  assert.equal(document.status, "degraded", JSON.stringify(document));
+  assert.deepEqual(
+    document.warnings.map((/** @type {{code: string}} */ warning) => warning.code),
+    ["source_sync_failed"],
+  );
+  assert.equal(exitCode, 0);
+  // Nothing new was stored from a history this build can no longer read.
+  assert.equal(countPrompts(fixture.paths.databaseFile), before);
+});
+
+// Not covered: a destination that answers ENOSPC mid-write. An earlier version of this file used
+// `/dev/full`, and it was wrong in both directions -- as root the export creates `/dev/full.partial`
+// and renames it over the device, exiting 0; as anyone else it fails because `/dev` is not writable,
+// which is a permission error dressed up as a full disk. The honest statement is that a real full
+// filesystem needs a loopback mount, and that "a destination that cannot be written" is already
+// covered by the CSV test above.
+
+test("two commands writing at once serialize instead of corrupting each other", async () => {
+  // The storage lock is tested in-process, where both callers share one runtime and one file
+  // handle table. Two real processes share neither, which is the arrangement a user creates by
+  // running `snack sync` in one terminal while a shell hook runs `snack status` in another.
+  const install = await makeWorkingInstall("snack-concurrent-");
+  const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
+  const environment = {
+    ...process.env,
+    HOME: install.root,
+    XDG_CONFIG_HOME: String(install.options.env.XDG_CONFIG_HOME),
+    XDG_DATA_HOME: String(install.options.env.XDG_DATA_HOME),
+    XDG_STATE_HOME: String(install.options.env.XDG_STATE_HOME),
+    XDG_CACHE_HOME: String(install.options.env.XDG_CACHE_HOME),
+    OPENCODE_DB: String(install.options.env.OPENCODE_DB),
+  };
+  /** @param {string[]} argv */
+  const spawnSnack = (argv) =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, [cli, ...argv], { env: environment });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.once("close", (code) => resolve({ code, stderr }));
+    });
+
+  const results = await Promise.all([
+    spawnSnack(["sync", "--full", "--json"]),
+    spawnSnack(["sync", "--full", "--json"]),
+    spawnSnack(["status", "--json"]),
+  ]);
+
+  for (const result of results) {
+    const { code, stderr } = /** @type {{code: number, stderr: string}} */ (result);
+    // Either answer is correct -- one may wait for the other, or report the lock is held -- but
+    // neither may be an internal failure, and neither may leave the database damaged.
+    assert.notEqual(code, ExitCode.internal, stderr);
+  }
+  const database = new Database(install.resolved.databaseFile, { readonly: true });
+  try {
+    assert.equal(
+      /** @type {{integrity_check: string}[]} */ (database.pragma("integrity_check"))[0]
+        ?.integrity_check,
+      "ok",
+    );
+  } finally {
+    database.close();
   }
 });

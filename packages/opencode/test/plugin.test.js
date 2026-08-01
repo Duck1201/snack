@@ -6,6 +6,19 @@ import { afterEach, test } from "node:test";
 
 import { SnackOpenCodePlugin } from "../src/plugin.js";
 
+/**
+ * The same canaries the CLI feeds through its own capture paths.
+ *
+ * Duplicated into this package rather than imported across the boundary, for the reason the spool
+ * schema is duplicated: these two packages version and publish independently, and neither may
+ * reach into the other's tests. Duplicated on purpose still has to mean identical, or the two
+ * packages come to disagree about what a leak is -- which is exactly the disagreement nobody would
+ * notice. `contracts.test.js` asserts the two files are byte-identical.
+ */
+const privacyCanaries = JSON.parse(
+  await readFile(new URL("./privacy-canaries.json", import.meta.url), "utf8"),
+);
+
 /** @type {string[]} */
 const temporaryRoots = [];
 
@@ -30,7 +43,7 @@ test("captures an explicit live restriction without retaining prompt or error te
       messageID: "prompt-1",
       model: { providerID: "anthropic", modelID: "claude-sonnet" },
     },
-    { message: { text: "PRIVATE_PROMPT_CANARY" }, parts: [] },
+    { message: { text: String(privacyCanaries.prompt) }, parts: [] },
   );
   await hooks.event({
     event: {
@@ -39,7 +52,7 @@ test("captures an explicit live restriction without retaining prompt or error te
         sessionID: "session-1",
         error: {
           name: "APIError",
-          data: { statusCode: 429, message: "PRIVATE_ERROR_CANARY" },
+          data: { statusCode: 429, message: String(privacyCanaries.response) },
         },
         time: "2026-01-02T03:04:10.000Z",
       },
@@ -79,7 +92,9 @@ test("captures an explicit live restriction without retaining prompt or error te
       },
     ],
   });
-  assert.doesNotMatch(content, /PRIVATE_(?:PROMPT|ERROR)_CANARY/u);
+  for (const canary of Object.values(privacyCanaries)) {
+    assert.doesNotMatch(content, new RegExp(String(canary), "u"));
+  }
 });
 
 test("spool failures do not escape an OpenCode hook", async () => {
@@ -100,7 +115,7 @@ test("spool failures do not escape an OpenCode hook", async () => {
     await assert.doesNotReject(
       hooks["chat.message"](
         { sessionID: "session-1", messageID: "prompt-1" },
-        { message: { text: "PRIVATE_PROMPT_CANARY" }, parts: [] },
+        { message: { text: String(privacyCanaries.prompt) }, parts: [] },
       ),
     );
     await assert.doesNotReject(
@@ -153,7 +168,10 @@ test("derives only allowlisted features from the official parts payload", async 
     {
       message: { id: "prompt-1" },
       parts: [
-        { type: "text", text: "PRIVATE_FEATURE_CANARY\n```js\ncode\n```" },
+        {
+          type: "text",
+          text: `${privacyCanaries.prompt}\n\u0060\u0060\u0060js\ncode\n\u0060\u0060\u0060`,
+        },
         { type: "file", url: "file:///private/path" },
       ],
     },
@@ -170,5 +188,8 @@ test("derives only allowlisted features from the official parts payload", async 
     code_block_count_bucket: "1",
     attachment_count: 1,
   });
-  assert.doesNotMatch(content, /PRIVATE_FEATURE_CANARY|private\/path/u);
+  for (const canary of Object.values(privacyCanaries)) {
+    assert.doesNotMatch(content, new RegExp(String(canary), "u"));
+  }
+  assert.doesNotMatch(content, /private\/path/u);
 });
