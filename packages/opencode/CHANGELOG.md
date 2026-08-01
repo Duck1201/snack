@@ -1,5 +1,39 @@
 # @snack-ai/opencode
 
+## 0.1.3
+
+### Patch Changes
+
+- Stage 9: feature freeze and public beta.
+
+  The 1.0 public surface is frozen and recorded in `docs/compatibility.md` — commands, flags, exit
+  codes, the `--json` envelope and every command payload, the configuration document, the `export`
+  document, and the spool event schema. `release:check` gates on that document.
+
+  Four corrections landed on the surface before it was locked. The `--json` envelope moved to
+  `schema_version` 2, because `config set` was publishing the storage layer's own JavaScript names
+  and its three `data.storage` keys are now snake_case; no other payload changed shape. Each payload
+  now has a published schema under `schemas/commands/`, routed from the envelope by command name.
+  `export --json` is documented. `doctor --source <unknown-alias>` refuses with exit 4 like every
+  other command instead of reporting a clean bill of health, `data purge --include-config` no longer
+  warns about a plugin that was never registered, and a rejected configuration names the rule that
+  refused it with a reason code per rule, never echoing the rejected value.
+
+  Beta hardening then found four defects on those frozen surfaces, each a fix or a correction to the
+  form of a contract rather than to what it says. Read-only commands refuse a database at an older
+  schema with `storage_migrations_pending` under exit 5, where they used to fail as an internal
+  error. The Claude reader refuses a record whose `timestamp` is not a time rather than storing it,
+  and will not root a turn at one. The error envelope's `command` no longer carries a rejected
+  positional argument. `schemas/spool-event.schema.json` declares `type` on each conditional branch
+  so it compiles under the Ajv configuration the product itself uses — the plugin's patch release
+  exists to republish that file; the set of accepted documents is unchanged.
+
+  Upgrading from `0.6+` is an install and a `snack sync`; the full path is in
+  `docs/compatibility.md`. The migration floor stays `0.6.0` and is now proven against the published
+  `0.6.1` artifact. Four trust boundaries gained property tests, the budgets have a recorded
+  developer-machine measurement that `release:check` gates on, and `doctor` has a documented account
+  of every check it can report.
+
 ## 0.1.2
 
 ### Patch Changes

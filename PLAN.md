@@ -856,7 +856,11 @@ no owner:
   and summarized in [docs/compatibility.md](./docs/compatibility.md). The migration floor is now
   proven against the published `0.6.1` artifact rather than only in-tree, four trust boundaries have
   property tests, and the budgets have a recorded developer-machine measurement that `release:check`
-  gates on. Wave 3 remains. The public surface is frozen and recorded
+  gates on. Wave 3 is cut and awaiting publication: `@snack-ai/cli` at `0.9.0` and
+  `@snack-ai/opencode` at `0.1.3` — the plugin moves only to republish the corrected spool schema,
+  which ships inside its tarball — with the `0.6+` upgrade path documented in
+  [docs/compatibility.md](./docs/compatibility.md) and beta feedback recorded there as consultative
+  evidence that cannot itself reset the freeze. The public surface is frozen and recorded
   in [docs/compatibility.md](./docs/compatibility.md), which `release:check` now gates on. The three
   P3s carried from Stage 8 are fixed: `doctor` refuses an unknown alias with exit 4 like every other
   command, `data purge --include-config` no longer reports a plugin that was never registered, and a
@@ -865,8 +869,7 @@ no owner:
   and the `config set` storage payload is snake_case — and the second of those moved the envelope to
   `schema_version` 2. Every command payload now has a published schema under
   `packages/cli/schemas/commands/`, routed from the envelope by command name, and the compatibility
-  tests name the single intended break so an unintended one cannot hide behind it. Waves 2 and 3
-  remain.
+  tests name the single intended break so an unintended one cannot hide behind it.
 - **Effort:** 3 AI-assisted waves
 **Purpose:** Freeze scope and exercise the complete 1.0 candidate without adding modules.
 
