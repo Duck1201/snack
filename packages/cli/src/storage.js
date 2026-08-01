@@ -1614,6 +1614,37 @@ export function readPendingMappingCount(databaseFile, source, installationIds) {
   }
 }
 
+/**
+ * Which providers a source is waiting on, and how many observations each is holding.
+ *
+ * The count alone was the whole of `doctor`'s warning, and a count does not tell anyone what to
+ * configure. A real client history is multi-provider -- one OpenCode database here carried five --
+ * so this is the state a new user lands in, and every value needed to escape it is already stored
+ * on the row.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {{provider: string, count: number}[]} most-waiting first
+ */
+export function readPendingMappingProviders(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    return /** @type {{provider: string, count: number}[]} */ (
+      database
+        .prepare(
+          `SELECT provider, COUNT(*) AS count
+             FROM pending_mapping
+            WHERE source_alias = ?
+            GROUP BY provider
+            ORDER BY count DESC, provider ASC`,
+        )
+        .all(sourceAlias)
+    ).map((row) => ({ provider: String(row.provider), count: Number(row.count) }));
+  } finally {
+    database.close();
+  }
+}
+
 /** @param {string} databaseFile @param {ConfiguredSource} source */
 export function readPendingSpoolObservations(databaseFile, source) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
