@@ -329,6 +329,61 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.0.1
+
+`@snack-ai/cli@1.0.1` and `@snack-ai/opencode@1.0.1` were published from commit `9d18263` by
+protected release run
+[30711850333](https://github.com/Duck1201/snack/actions/runs/30711850333), directly to `latest`.
+`stable` was moved by hand afterwards, as it always is. Tagged `v1.0.1` on that same commit,
+released on GitHub as Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.0.1` | `1.0.1` | `1.0.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.1` | `1.0.1` | — | publish + SLSA provenance |
+
+Verified against the registry rather than against the workflow's own status:
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '1.0.1', latest: '1.0.1' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.1' }`.
+
+**Published straight to `latest`, unlike `1.0.0`.** The `candidate` window exists so a bad artifact
+harms nobody while its digest is checked, and `1.0.0` earned it within minutes. This release is the
+opposite trade: it removes three P1s from `latest`, and PLAN.md's findings policy is that a known P1
+does not sit there for the length of a feature release. The check `candidate` exists for was still
+run, just before promoting rather than after publishing — `release:check` now compares packed
+digests against `artifacts.md`, which is the gate `1.0.0` added *because* of what `candidate`
+caught.
+
+Both published tarballs match the recorded evidence:
+
+```
+snack-ai-cli-1.0.1.tgz       sha256:cb88cac961e1be5b38cb41e540661a1f89cec6919ec2725311bf869b2ad1fb71
+snack-ai-opencode-1.0.1.tgz  sha256:96fbaa4299ad7381d60937b4f878c19af81914720a9d7b0e1d3aa0501fe61546
+```
+
+**The evidence was regenerated after the README edit, not before.** `packages/cli/README.md` gained
+the paragraph the capacity-period change needs, and it is named in the CLI's `files` array — so the
+CLI's digest moved and the plugin's did not. That is the exact asymmetry `1.0.0` discovered *after*
+publishing; here it was handled before, which is what the widened `release:check` is for.
+
+**The plugin pin gate fired on its first real bump.** `changeset version` took
+`@snack-ai/opencode` to `1.0.1` and `npm run check` went red on
+`the pinned plugin version is the one this workspace publishes`, comparing `1.0.0` against `1.0.1`.
+The gate was added in this same release cycle to stop the defect it had just caught; it then caught
+the next instance of it one version later, unprompted.
+
+Verified against the **published** artifacts in throwaway XDG roots, because Phase 1's whole finding
+is that a green suite does not reach these paths:
+
+- `snack --version` answers `1.0.1`, and `setup opencode --install-plugin` writes
+  `@snack-ai/opencode@1.0.1`, which `doctor` reports as compatible;
+- over 606 real Claude Code prompts, a plan change prints
+  `606 observed prompt(s) stop informing the estimate` and `doctor` then reports
+  `source_freshness: Synchronized usage is available` — where `1.0.0` reported none;
+- the published plugin, driven by real OpenCode `1.18.10`, writes `"provider":"opencode"` into the
+  bound source directory rather than the holding directory, and `sync` reads it with
+  `pending_mapping 0` where `1.0.0` read `2`.
+
 ## 1.0.0
 
 `@snack-ai/cli@1.0.0` and `@snack-ai/opencode@1.0.0` were published from commit `6a59791` by
