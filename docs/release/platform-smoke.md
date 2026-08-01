@@ -173,6 +173,40 @@ not — instead of asserting the rule was on the question.
 supported developer machine and not as a cross-device guarantee, so CI reports the measurement
 rather than asserting it.
 
+## 1.0 stable gate audit
+
+WSL gate: passed
+
+- Run: [CI 30696738588](https://github.com/Duck1201/snack/actions/runs/30696738588)
+- Date: 2026-08-01
+- Commit: `8ae01c0` (Stage 10 Wave 1, before the version bump)
+- Toolchain on every environment: Node `24.18.1`, npm `11.16.0`
+
+| Environment | Runner image | Tests | Package smoke |
+| --- | --- | --- | --- |
+| Ubuntu 24.04, AMD64 | `ubuntu-24.04` | 412 passed, 0 skipped | passed |
+| macOS 26, ARM64 | `macos-26-arm64` | 412 passed, 0 skipped | passed |
+| Debian 13 on WSL2, AMD64 | `windows-2025-vs2026` host | 410 passed, 2 skipped | passed |
+
+Three more tests than `0.9.0` and no new skips: the frozen-corpus check, the support-matrix check,
+and the migration-drift refusal. The root workspace contributes 4 more, which is new — `npm test`
+now runs `scripts/*.test.mjs`, and until this release nothing tested the release scripts at all. The
+plugin workspace is unchanged at 4 passing and 1 skip, the packed-plugin dispatch test that needs a
+real OpenCode installation.
+
+Each environment packed and installed `snack-ai-cli-0.9.0.tgz` (57 files) — the version the tree
+carried when the audit ran, before Wave 2 cuts it to `1.0.0-rc.1`.
+
+The two skips unique to WSL2 remain the permission-denial tests in `resilience.test.js`: that job
+runs as root, and a mode bit denies nothing to uid 0.
+
+`status --no-sync` over 100,000 prompts measured p95 `300 ms` on Ubuntu, `271 ms` on macOS, and
+`326 ms` on WSL2, two of the three after a retry. Over a two-client history it measured `287 ms` on
+Ubuntu. Every figure is over the 250 ms budget and none of them is a regression: the budget is
+stated for a typical supported developer machine and explicitly not as a cross-device guarantee, and
+the same commit measures 193 ms on one — see [performance.md](./performance.md), which holds the
+gate. CI reports; it does not assert.
+
 ## 0.9.0
 
 WSL gate: passed
