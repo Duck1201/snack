@@ -235,16 +235,22 @@ release, so a default install resolves the newest supported product rather than 
 project has moved past. `0.6.1` keeps the MVP surface under a new `stable` tag, for installs that
 cannot absorb pre-1.0 contract churn.
 
-| Package | Version | `latest` | `stable` | `next` | Attestations |
-| --- | --- | --- | --- | --- | --- |
-| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | — | publish + SLSA provenance |
-| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | — | publish + SLSA provenance |
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.7.0` | `0.7.0` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.2` | `0.1.2` | — | publish + SLSA provenance |
 
 `latest` and `stable` were both moved with `npm dist-tag add` from an authenticated session, and
-`next` was removed from both packages with `npm dist-tag rm` in the same session. Under the new
-policy `next` carries release candidates, and there is no candidate: leaving it pointing at the
-current release would have made `@next` and `@latest` the same install while implying they are
-different channels. It stays absent until the first `1.0.0-rc.N` publish recreates it.
+`next` was removed from both packages with `npm dist-tag rm` in the same session. Leaving it
+pointing at the current release would have made `@next` and `@latest` the same install while
+implying they are different channels.
+
+**`next` is retired and does not come back.** The name promises "whatever is newest", and there is
+no version of this project where that is a useful separate answer: while it agreed with `latest` it
+was a duplicate, and the moment it disagreed it was a trap for anyone who installed it expecting the
+newest supported product. Release candidates publish to `rc` instead, which says what it holds and
+is absent whenever no candidate is outstanding. The channel columns above are `latest` and `stable`
+because those are the two a released version can occupy.
 
 None of that came from the workflow. Trusted publishing authorizes a publish request and not a
 `dist-tag` call, which answers `E401` even for the package just published — the workflow sets a tag

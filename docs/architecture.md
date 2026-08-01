@@ -804,11 +804,11 @@ Release channels:
 
 - CLI `0.1-0.5` publishes to npm `next`;
 - CLI `0.6.0` is the SNACK MVP and becomes `latest`;
-- CLI `0.7-0.9` each take `latest` on release, so a plain install gets the newest supported product rather than a version development has moved past; `1.0.0-rc.N` publishes to `next`, because a release candidate is not the newest supported product;
+- CLI `0.7-0.9` each take `latest` on release, so a plain install gets the newest supported product rather than a version development has moved past; `1.0.0-rc.N` publishes to `rc`, because a release candidate is not the newest supported product and `next` is not a channel this project keeps;
 - `stable` points at the newest release whose surface the project is willing to hold still, and moves only by deliberate decision, never by a release;
 - the plugin first publishes its own `0.1.0` to `next` in Stage 3, and its MVP-compatible version becomes plugin `latest` in Stage 6;
-- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries no `next` while there is no release candidate for it;
-- final CLI/plugin `1.0.0` tarballs pass direct MVP upgrade and exact-artifact gates in an isolated staging registry before official npm publication under temporary `candidate`; checksum verification precedes moving both packages' `latest`/`next` to stable and removing temporary tags.
+- the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries an `rc` tag only while a release candidate is outstanding;
+- final CLI/plugin `1.0.0` tarballs pass direct MVP upgrade and exact-artifact gates in an isolated staging registry before official npm publication under temporary `candidate`; checksum verification precedes moving both packages' `latest` to stable and removing the `rc` and temporary tags.
 
 Compatibility policy:
 
@@ -848,7 +848,7 @@ being reported identically.
 
 Public contracts freeze in Stage 9. Only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation are permitted afterward. A public schema or semantic change resets Stage 9 and all of its gates; Stage 10 confirms rather than redefines the frozen contracts.
 
-`1.0.0-rc.N` is mandatory. After seven days without P0/P1, final source code is unchanged; a version/changelog/release-metadata-only commit produces checksumed final tarballs. They pass direct `0.6.0 -> 1.0.0` and exact-artifact smoke/integrity gates in an isolated staging registry. A failure discards the publicly unpublished final tarballs, requires a new RC, and restarts soak. Only approved tarballs publish to official npm under temporary `candidate`; checksum verification then permits `latest`/`next` promotion.
+`1.0.0-rc.N` is mandatory. After seven days without P0/P1, final source code is unchanged; a version/changelog/release-metadata-only commit produces checksumed final tarballs. They pass direct `0.6.0 -> 1.0.0` and exact-artifact smoke/integrity gates in an isolated staging registry. A failure discards the publicly unpublished final tarballs, requires a new RC, and restarts soak. Only approved tarballs publish to official npm under temporary `candidate`; checksum verification then permits `latest` promotion and retires the `rc` tag.
 
 ## 19. Evolution Boundaries
 
