@@ -11,7 +11,7 @@ Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 | ------------------------- | ------------------------------------------------------------------------- |
 | Isolated staging registry | `npx verdaccio` on a temp port, from a script. No permanent devDependency |
 | Artifact evidence         | `npm sbom` + `shasum` + a double `npm pack` compared entry by entry       |
-| Seven-day RC soak         | **Dropped.** `rc.1` and promotion the same day                            |
+| Seven-day RC soak         | **Dropped.** `rc.0` and promotion the same day                            |
 
 The soak was dropped by the user's decision, against the recommendation. What it costs is recorded
 in `docs/compatibility.md` rather than deleted from `PLAN.md`: the beta published the original
@@ -114,11 +114,57 @@ serves and the repository README GitHub serves. Permanent, not scoped to 1.0. Th
 is the only documentation an npm installer ever sees, and the Stage 9 lesson applies unchanged: the
 question is never whether the behavior changed, but whether anything named in `files` changed.
 
-## Wave 2 — the release candidate (pending)
+## Wave 2 — the release candidate
 
-Version to `1.0.0-rc.1` for both packages, `release.yml` confirmation string, `candidate` added to
-the `dist_tag` options for Wave 3, dispatch to `rc`, then the smoke suites against the **published**
-artifacts rather than workspace builds.
+Cut and gated locally. **The dispatch is the user's**; an agent cannot publish.
+
+Both packages are at `1.0.0-rc.0`, `release.yml` confirms on `publish-1.0.0-rc.0`, and `candidate`
+is now one of its `dist_tag` options because Wave 3 publishes under it before `latest` moves by
+hand.
+
+**The number is `rc.0`, not `rc.1`.** That is what Changesets produces on entering pre mode, and the
+prose was corrected to match the artifact rather than the artifact bent to match the prose. A
+version invented to fit a document is a version that drifts from it later.
+
+### The bump found a defect the whole history had hidden
+
+`export.test.js` asserted `provenance.cli_version` against `^\d+\.\d+\.\d+$`. Every release before
+this one was final, so no test had ever run against a prerelease and the assumption had never been
+challenged.
+
+Checked before touching it, because the same assertion in the **published** schema would have been a
+real defect: an RC emitting an export invalid against its own frozen contract. It is not —
+`export.schema.json` declares `cli_version` as a plain string, so `1.0.0-rc.0` is a valid document
+and only the test was wrong. It now asserts equality with the manifest's version, which is the
+stronger claim anyway: the export must name the build that produced it, where the regular expression
+only ever checked that it looked like a version.
+
+### Gates, all green against the candidate
+
+`npm run check` (412 + 4 + 4), `pack:smoke` on `snack-ai-cli-1.0.0-rc.0.tgz` (57 files),
+`release:check`, `release:evidence` re-run so the recorded version matches the release.
+
+`upgrade:smoke`: all five chains, `0.6.0` / `0.6.1` / `0.7.0` / `0.8.2` / `0.9.0` → `1.0.0-rc.0`,
+integrity `ok` on each. Three migrations from the `0.6` line, one from `0.7`, none from `0.8.2`
+onward — which is the expected shape, since Stage 10 adds no migration.
+
+`release:staging`: both tarballs published to an isolated verdaccio, the CLI installed by name and
+version over a real `0.6.0` database, `doctor` clean.
+
+```
+snack-ai-cli-1.0.0-rc.0.tgz       sha256:b751ec5aa2362dd66efdb96570313c11b7a57cb3f2d82099624a403ddf0af3c3
+snack-ai-opencode-1.0.0-rc.0.tgz  sha256:789ef7ee78e0bb67143d492a5b9a00eaccec861c9ab7da2baeb7259bc010f0fe
+```
+
+`release:evidence` and `release:staging` measured those digests independently and agree, which is
+the cross-check both exist for. Publish these exact tarballs; a different digest is a different
+artifact.
+
+### Still to do in this wave
+
+Merge, then dispatch `release.yml` with `dist_tag: rc`. Then re-run the smoke suites against the
+**published** artifacts rather than these workspace builds, and record `## 1.0.0-rc.0` in
+`docs/release/identity.md` after `npm view` agrees — never from the workflow's own status.
 
 Check `gh run list` before dispatching. Stage 9 dispatched twice, six minutes apart, because neither
 party checked whether the other had.

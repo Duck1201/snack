@@ -6,7 +6,7 @@ Written by `npm run release:evidence` from measurement, never by hand. PLAN.md d
 9 is that a release advances on reproducible technical evidence rather than on an assertion, and a
 checksum somebody typed is an assertion.
 
-CLI `0.9.0`, OpenCode plugin `0.1.3`.
+CLI `1.0.0-rc.0`, OpenCode plugin `1.0.0-rc.0`.
 
 ## Tarball checksums
 
@@ -16,8 +16,8 @@ published artifact is not the one that passed the gates, and the release restart
 
 | Package | Tarball | sha256 |
 | --- | --- | --- |
-| `@snack-ai/cli` | `snack-ai-cli-0.9.0.tgz` | `sha256:f3f686c450957ce1de2180925a5efbac4a3d3979591f26b8da26fe260ca9aa7c` |
-| `@snack-ai/opencode` | `snack-ai-opencode-0.1.3.tgz` | `sha256:0f3b20143e884a842f69bd03377b98065c9d46bdcdfc98ea76ee6e4dd2e85976` |
+| `@snack-ai/cli` | `snack-ai-cli-1.0.0-rc.0.tgz` | `sha256:b751ec5aa2362dd66efdb96570313c11b7a57cb3f2d82099624a403ddf0af3c3` |
+| `@snack-ai/opencode` | `snack-ai-opencode-1.0.0-rc.0.tgz` | `sha256:789ef7ee78e0bb67143d492a5b9a00eaccec861c9ab7da2baeb7259bc010f0fe` |
 
 ## Reproducible build
 
@@ -39,5 +39,5 @@ and would prove nothing about the dependencies it exists to pin.
 
 | Package | Components | sha256 of components |
 | --- | --- | --- |
-| `@snack-ai/cli` | 50 | `sha256:d024d33130a61bd1864420a511e56ac1d0226d58b58a1c0bb55463ea8f4e4988` |
-| `@snack-ai/opencode` | 1 | `sha256:c54155a657ccd4c454a6435240bd3ac3639d33e2da971580d835e44fe102ea2d` |
+| `@snack-ai/cli` | 50 | `sha256:707634435c79ebcc255ae0ded9600c5a8411dbbd5ed5d835e4c7f2be0da912fb` |
+| `@snack-ai/opencode` | 1 | `sha256:f3db3dcfaba1d23560ec5c8312ed394a268f846e800895d9db14879d0f20f876` |

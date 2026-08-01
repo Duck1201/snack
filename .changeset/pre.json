@@ -1,0 +1,9 @@
+{
+  "mode": "pre",
+  "tag": "rc",
+  "initialVersions": {
+    "@snack-ai/cli": "0.9.0",
+    "@snack-ai/opencode": "0.1.3"
+  },
+  "changesets": ["documentation-for-the-stable-release", "first-stable-release"]
+}

@@ -128,7 +128,7 @@ change to any public schema or semantic during the audit would have reset the fr
 new `0.9.x` rather than being folded into `1.0.0`.
 
 **No soak.** PLAN.md originally gated promotion on a seven-day release-candidate soak with no
-P0/P1. That gate was dropped by decision: `1.0.0-rc.1` and the promotion happen the same day. Every
+P0/P1. That gate was dropped by decision: `1.0.0-rc.0` and the promotion happen the same day. Every
 artifact-level gate is unchanged — the isolated staging registry, the checksums, the provenance, and
 the migration chains all still run against the published artifacts — and what is given up is calendar
 time under real use, which is the one class of defect the remaining gates cannot reach. Recorded here

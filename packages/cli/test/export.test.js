@@ -89,8 +89,16 @@ test("exports one JSON document carrying every table and the provenance to read 
   // Row-level versions come from the rows and describe how each record was produced.
   assert.equal(document.data.tables.prompts[0].parser_version, "opencode-session-v1");
   assert.equal(document.data.tables.predictions[0].model_policy_version, "stage5-prediction-v2");
-  // Document-level provenance names the exporting build, never re-stamping the rows.
-  assert.match(document.data.provenance.cli_version, /^\d+\.\d+\.\d+$/u);
+  // Document-level provenance names the exporting build, never re-stamping the rows. Asserted
+  // against the manifest rather than against a shape: the point is that the export names the build
+  // that produced it, and a regular expression only ever checked that it looked like a version.
+  //
+  // It also has to accept a prerelease. The published schema declares `cli_version` as a plain
+  // string, so `1.0.0-rc.0` is a valid document -- but a `^\d+\.\d+\.\d+$` match here failed the
+  // first release candidate this repository ever built, on an assumption nothing had tested because
+  // every release before it was final.
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(document.data.provenance.cli_version, manifest.version);
   assert.equal(document.data.provenance.envelope_schema_version, ENVELOPE_SCHEMA_VERSION);
   assert.deepEqual(document.data.provenance.plan_profiles, [
     { source: "work", id: "generic", version: "1.0.0", provenance: "bundled", as_of: "2026-01-01" },

@@ -951,7 +951,7 @@ no owner:
   candidate with integrity intact; the artifact evidence is measured rather than asserted.
 - **Effort:** 3 AI-assisted waves
 - **Soak:** the seven-day RC soak is **dropped by decision**, recorded in
-  [docs/compatibility.md](./docs/compatibility.md#10-the-freeze-confirmed-not-redefined). `rc.1` and
+  [docs/compatibility.md](./docs/compatibility.md#10-the-freeze-confirmed-not-redefined). `rc.0` and
   the promotion happen the same day. Every artifact-level gate stands; what is given up is calendar
   time under real use, which is the one class of defect the remaining gates cannot reach.
 **Purpose:** Freeze supported public behavior and publish the first stable OpenCode + Claude Code release.
@@ -973,7 +973,9 @@ no owner:
 
 **Wave 2: Required release candidate**
 
-- publish `@snack-ai/cli@1.0.0-rc.1` and compatible plugin RC to `rc`;
+- publish `@snack-ai/cli@1.0.0-rc.0` and compatible plugin RC to `rc`. The number is `rc.0` because
+  that is what Changesets produces on entering pre mode, and the version an artifact actually
+  carries governs the prose rather than the other way around;
 - run installation/upgrade/live smoke suites against the published artifacts rather than workspace builds;
 - allow only blocker fixes followed by a new `rc.N`;
 - the seven-day soak this wave originally required is dropped; see **Soak** above.
