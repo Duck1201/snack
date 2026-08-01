@@ -1,7 +1,8 @@
 # Stage 10 — First Stable Release
 
-Status: Wave 1 merged (PR #26). Waves 2 and 3 complete on `stage-10-wave2-rc`: both packages at
-`1.0.0`, every gate green, no release candidate published. Awaiting merge and the npm publish.
+Status: **complete**. `@snack-ai/cli@1.0.0` and `@snack-ai/opencode@1.0.0` published from `6a59791`,
+tagged `v1.0.0`, `latest` and `stable` both resolving to `1.0.0`. No release candidate was
+published. The record is in [docs/release/identity.md](../../docs/release/identity.md).
 
 Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 `docs/architecture.md`; this file records what was decided while building it and what remains.
@@ -220,6 +221,30 @@ publish instead of being caught after it.
 
 Nothing about the published artifacts changed, and nothing needed to: `candidate` exists so a
 mismatch is discovered while `latest` still points somewhere else.
+
+### How it finished
+
+Published under `candidate` by run 30700312799, verified against the registry, then `latest` and
+`stable` moved by hand and `candidate` removed from both packages. Tagged `v1.0.0` on `6a59791` --
+the commit the workflow packed, not the two later commits that only touched `docs/` and `scripts/`.
+
+`stable` moved for the first time since the MVP. It held `0.6.1` because before 1.0 the only surface
+being held still was the MVP's; from 1.0 the newest release is also the one whose contracts are
+held.
+
+Three defects were found after the merge, none of them in product code:
+
+1. **CI failed on macOS** on a linearity check that had been latent for releases. Not a regression
+   -- Stage 10 changed no product source, and the algorithm measures linear across a 16x range at a
+   flat 0.022-0.026 ms per prompt. The test warmed the small input and timed the large one cold, so
+   the ratio it reported was partly an artefact of the arrangement; it read 4.2-4.5 idle against a
+   threshold of 8, which is under two-fold headroom on wall-clock timing. Both sides are now warmed
+   and taken as a median.
+2. **The artifact evidence was stale**, caught by the `candidate` tag within minutes of publishing.
+   Recorded above and in `identity.md`.
+3. Two process slips of my own, recorded because they cost real time: `git add -A` swept a user's
+   in-progress edit into an unrelated commit, and a `git checkout -- <file>` fallback destroyed my
+   own uncommitted work. Stage commits since then name their files explicitly.
 
 ### The steps an agent cannot take
 

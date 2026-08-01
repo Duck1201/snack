@@ -329,6 +329,62 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.0.0
+
+`@snack-ai/cli@1.0.0` and `@snack-ai/opencode@1.0.0` were published from commit `6a59791` by
+protected release run
+[30700312799](https://github.com/Duck1201/snack/actions/runs/30700312799), under the temporary
+`candidate` tag. Tagged `v1.0.0` on that same commit, released on GitHub as Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.0.0` | `1.0.0` | `1.0.0` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.0` | `1.0.0` | — | publish + SLSA provenance |
+
+Verified against the registry rather than against the workflow's own status:
+`npm view @snack-ai/cli dist-tags` answers `{ latest: '1.0.0', stable: '1.0.0' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.0' }`. A plain
+`npm install @snack-ai/cli` resolves `1.0.0`, and `0.6.1` remains installable by exact version.
+
+**`stable` moved for the first time since the MVP**, off `0.6.1` and onto `1.0.0`. That channel
+answers one question — which version's surface will not move underneath you — and before 1.0 the
+honest answer was the MVP, because every minor after it could still evolve flags, JSON shapes, and
+config and export schemas. From 1.0 breaking any frozen surface requires a major, so `latest` and
+`stable` name the same version until a `2.0.0` exists. Moved by hand, like every tag that is not the
+one the publish sets; so was the removal of `candidate` from both packages.
+
+**No release candidate was published and there was no soak.** Both were required by `PLAN.md` and
+both were dropped by decision. `1.0.0-rc.0` was cut and fully gated and then discarded, so no package
+has ever carried the `rc` tag. What that gave up is recorded in
+[compatibility.md](../compatibility.md): calendar time under real use, and the only rehearsal of the
+npm publish path itself. This release is the first artifact to traverse that path, and it did so as
+the final release.
+
+**Publishing under `candidate` caught a defect within minutes, which is the entire reason for it.**
+Comparing the registry's tarballs against `docs/release/artifacts.md` found the plugin matching and
+the CLI not:
+
+```
+recorded  sha256:ef37befdaa246d436d5e2082b9b6f0d800b7a7326ed0c4a4830c83b34eef702a
+served    sha256:cc8c52392302d5c9ba044eab2914202a00fe7bed5caaeda22e87c17f3337fd6e
+```
+
+The artifact was correct — packing `origin/main` reproduces the served digest exactly. The
+**evidence** was stale: `release:evidence` had run at `0d534f0`, and a later commit edited
+`packages/cli/README.md`, which is named in the CLI's `files` array. The plugin matched only because
+its README did not change in that commit. `release:check` had compared the recorded version string,
+which had not changed, so it passed.
+
+That is the `0.9.0` lesson above in a new place, and the gate was widened to match it:
+`currentTarballDigests()` packs the tree and `release:check` now requires every digest it produces
+to appear in the evidence. Had that existed an hour earlier the mismatch would have blocked the
+publish rather than being found after it. Because `latest` still pointed at `0.9.0` at the time,
+nothing a user could install was ever wrong.
+
+Product behaviour is `0.9.0`'s: `git diff v0.9.0 v1.0.0 -- packages/*/src packages/cli/migrations
+packages/cli/schemas packages/opencode/schemas packages/cli/profiles` is empty. What 1.0 adds is the
+promise about that behaviour, and the evidence that it holds.
+
 ## 0.9.0
 
 `@snack-ai/cli@0.9.0` and `@snack-ai/opencode@0.1.3` were published from commit `5a5e8f1` by
