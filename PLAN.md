@@ -106,6 +106,12 @@ The top-level CLI command is `snack`.
 
 The stage version is the product and `@snack-ai/cli` version. `@snack-ai/opencode` uses independent SemVer and a compatibility matrix; it first publishes in Stage 3 and reaches `1.0.0` with Stage 10.
 
+Every release is tagged `vMAJOR.MINOR.PATCH` on the commit it was published from, and the GitHub
+release carries that tag as its title. A title that names the feature instead — "Claude Code
+parity" — reads well once and then makes a release list impossible to scan for the version someone
+is actually running; the release body is where the feature belongs. The only exception is a title a
+stage names explicitly, which so far is Stage 6's **SNACK MVP**.
+
 | Version | Meaning | npm channel | Compatibility status |
 | --- | --- | --- | --- |
 | `0.1.0` | Technical foundation preview | `next` | No end-user forecast; reset may be required |
