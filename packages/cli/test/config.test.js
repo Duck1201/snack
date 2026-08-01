@@ -79,7 +79,10 @@ test("a configured source names one client and the fingerprint family that clien
   ]) {
     assert.throws(
       () => validate([invalid]),
-      (error) => error instanceof SnackError && error.reason === "config_schema_error",
+      (error) =>
+        error instanceof SnackError &&
+        error.reason.startsWith("config_schema_") &&
+        error.exitCode === 3,
     );
   }
 });
@@ -113,10 +116,52 @@ test("rejects an invalid update before replacing valid configuration", async () 
 
   await assert.rejects(
     setConfigValue(file, "presentation.json", "chartreuse"),
-    (error) => error instanceof SnackError && error.reason === "config_schema_error",
+    (error) => error instanceof SnackError && error.reason === "config_schema_type",
   );
 
   assert.equal(await readFile(file, "utf8"), before);
+});
+
+test("a rejected configuration says which rule refused it", () => {
+  // Three different mistakes answered with one sentence -- `Configuration schema rejected
+  // /sources/0.` -- and a JSON error object that carried nothing the human line did not. The
+  // location alone does not say whether to add a field, correct a value, or stop naming a client
+  // SNACK has never heard of.
+  const valid = {
+    alias: "work",
+    installation_id: "11111111-2222-4333-8444-555555555555",
+    adapter: "opencode",
+    database: "/home/user/.local/share/opencode/opencode.db",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "oc-sqlite-msgpart-v1",
+  };
+  /** @param {unknown} source */
+  const rejectionOf = (source) => {
+    try {
+      parseAndValidateConfig(JSON.stringify({ schema_version: 1, sources: [source] }));
+    } catch (error) {
+      if (error instanceof SnackError) return error;
+    }
+    throw new Error("the configuration was accepted");
+  };
+
+  const { plan: _plan, ...missingRequired } = valid;
+  const unknownAdapter = rejectionOf({ ...valid, adapter: "sardine-cli" });
+  const missing = rejectionOf(missingRequired);
+  const malformed = rejectionOf({ ...valid, provider: "not a provider" });
+
+  assert.equal(missing.reason, "config_schema_required");
+  assert.match(missing.message, /plan/u);
+  assert.equal(malformed.reason, "config_schema_pattern");
+  assert.match(malformed.message, /\/sources\/0\/provider/u);
+  assert.equal(unknownAdapter.reason, "config_schema_unsupported_value");
+  assert.match(unknownAdapter.message, /\/sources\/0\/adapter/u);
+  // The rejected value is what someone mistyped, and a configuration is the one place a private
+  // path or token would sit. The diagnostic names the rule and the location, never the value.
+  assert.doesNotMatch(malformed.message, /not a provider/u);
+  assert.doesNotMatch(unknownAdapter.message, /sardine-cli/u);
 });
 
 test("rejects unknown fields and malformed JSONC", () => {
@@ -161,7 +206,9 @@ test("an out-of-range source index is refused without replacing the configuratio
   await assert.rejects(
     prepareConfigValues(file, [["sources.99.plan_profile", "metered-credit"]]),
     (error) =>
-      error instanceof SnackError && error.reason === "config_schema_error" && error.exitCode === 3,
+      error instanceof SnackError &&
+      error.reason === "config_schema_required" &&
+      error.exitCode === 3,
   );
   assert.equal(await readFile(file, "utf8"), before);
 });
