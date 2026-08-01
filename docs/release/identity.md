@@ -328,3 +328,49 @@ whole questionnaire, and the non-interactive flags are still checked before anyt
 The version was cut on the same branch as the change it releases, rather than in a follow-up. `0.8.1`
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
+
+## 0.9.0
+
+`@snack-ai/cli@0.9.0` and `@snack-ai/opencode@0.1.3` were published from commit `5a5e8f1` by
+protected release run
+[30694400969](https://github.com/Duck1201/snack/actions/runs/30694400969).
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `0.9.0` | `0.9.0` | `0.6.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `0.1.3` | `0.1.3` | — | publish + SLSA provenance |
+
+No tag was moved by hand, and none was attempted. `latest` was set by `--tag latest` on the publish
+and asserted by the workflow's own verification step — for both packages this time, because both
+published. `stable` did not move: it holds `0.6.1`, the newest release whose surface the project was
+willing to hold still before this freeze, and it moves by decision. The registry confirms it:
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '0.6.1', latest: '0.9.0' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '0.1.3' }`.
+
+This is the Stage 9 feature freeze and public beta. The 1.0 public surface is frozen and recorded in
+[compatibility.md](../compatibility.md), which `release:check` gates on.
+
+**The plugin published for the first time in four releases, and nearly did not.** `0.6.1` through
+`0.8.2` all skipped its publish step because nothing in `@snack-ai/opencode` had changed, and the
+handoff into this wave said the same about `0.9.0`. Its *behaviour* was indeed unchanged — but
+`schemas/spool-event.schema.json` is named in the package's `files` array, so it ships inside the
+tarball, and Wave 2 rewrote it to compile under the Ajv configuration the product itself uses. The
+question that decides whether a package republishes is not "did the behaviour change?" but "did
+anything named in `files` change?".
+
+Proven against the two published artifacts rather than against the tree. Compiling
+`schemas/spool-event.schema.json` from `npm pack @snack-ai/opencode@0.1.2` under
+`{ strict: true, allErrors: true }`:
+
+```
+strict mode: missing type "array" for keyword "maxItems" at
+"https://snack-ai.dev/schemas/spool-event/v1#/allOf/0/then/properties/restrictions" (strictTypes)
+```
+
+The same file from `0.1.3` compiles. What the schema accepts is unchanged, so the republish corrects
+the form of a contract and does not reset the freeze.
+
+Verified against the published CLI in a throwaway XDG root, because the injected-sink tests cannot
+reach process start-up: `snack --version` answers `0.9.0`; `snack doctor --json` emits
+`schema_version` `2` and exits 0 with warnings on an uninitialized root;
+`snack doctor --source nope --json` exits `4` with `source_not_configured`.
