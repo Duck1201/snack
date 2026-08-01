@@ -1,0 +1,243 @@
+{
+  "schema_version": "2",
+  "command": "status",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "degraded",
+  "data": {
+    "sources": [
+      {
+        "source": {
+          "alias": "work",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "active_period": {
+            "started_at": "2026-01-02T03:04:05.000Z"
+          },
+          "plan_profile": {
+            "id": "generic",
+            "version": "1.0.0",
+            "provenance": "bundled",
+            "as_of": "2026-01-01"
+          }
+        },
+        "viability": {
+          "lower": 0.3513571980256277,
+          "point": 0.75,
+          "upper": 0.9938187560615737,
+          "coverage_target": 0.8
+        },
+        "risk": {
+          "label": "high",
+          "policy_version": "stage2-risk-v2"
+        },
+        "evidence": {
+          "level": "very_low",
+          "policy_version": "stage5-evidence-v2",
+          "gates": [
+            {
+              "id": "sample",
+              "level": "very_low",
+              "limiting": true
+            },
+            {
+              "id": "restrictions",
+              "level": "moderate",
+              "limiting": false
+            },
+            {
+              "id": "relevance",
+              "level": "very_low",
+              "limiting": true
+            },
+            {
+              "id": "completeness",
+              "level": "high",
+              "limiting": false
+            }
+          ]
+        },
+        "method": {
+          "id": "bayesian-pressure-band",
+          "version": "1"
+        },
+        "model_policy_version": "stage5-prediction-v2",
+        "contributors": {
+          "backoff_level": "period",
+          "evidence_window": {
+            "prompts_considered": 1,
+            "limit_prompts": 2000,
+            "successes": 1,
+            "restrictions": 0,
+            "excluded": 0,
+            "weighted_successes": 1,
+            "weighted_restrictions": 0,
+            "effective_samples": 1,
+            "alpha": 1.5,
+            "beta": 0.5
+          },
+          "prior": {
+            "alpha": 0.5,
+            "beta": 0.5
+          }
+        },
+        "pressure": {
+          "horizon": "PT1H",
+          "score": null,
+          "band": "unknown",
+          "policy_version": "stage4-analytics-v1",
+          "baseline_kind": "insufficient",
+          "completeness": "partial",
+          "contributors": [],
+          "baseline_windows": 0
+        },
+        "expected_prompt_category": "typical",
+        "prospective": null,
+        "observed": {
+          "prompts": 1,
+          "successes": 1,
+          "restrictions": 0,
+          "excluded": 0
+        },
+        "freshness": {
+          "as_of": "2026-01-02T03:04:10.000Z",
+          "age_seconds": 0
+        },
+        "completeness": {
+          "level": "complete",
+          "reasons": [],
+          "policy_version": "stage5-evidence-v2"
+        },
+        "synchronization": {
+          "performed": false,
+          "status": "not_requested"
+        },
+        "caveats": [
+          "Sparse history; the weak plan-profile prior still dominates this estimate.",
+          "Real provider capacity is unknown.",
+          "Usage pressure compares this window with local history; it is not a share of capacity."
+        ]
+      },
+      {
+        "source": {
+          "alias": "personal",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "active_period": {
+            "started_at": "2026-01-02T03:04:05.000Z"
+          },
+          "plan_profile": {
+            "id": "generic",
+            "version": "1.0.0",
+            "provenance": "bundled",
+            "as_of": "2026-01-01"
+          }
+        },
+        "viability": {
+          "lower": 0.3513571980256277,
+          "point": 0.75,
+          "upper": 0.9938187560615737,
+          "coverage_target": 0.8
+        },
+        "risk": {
+          "label": "high",
+          "policy_version": "stage2-risk-v2"
+        },
+        "evidence": {
+          "level": "very_low",
+          "policy_version": "stage5-evidence-v2",
+          "gates": [
+            {
+              "id": "sample",
+              "level": "very_low",
+              "limiting": true
+            },
+            {
+              "id": "restrictions",
+              "level": "moderate",
+              "limiting": false
+            },
+            {
+              "id": "relevance",
+              "level": "very_low",
+              "limiting": true
+            },
+            {
+              "id": "completeness",
+              "level": "high",
+              "limiting": false
+            }
+          ]
+        },
+        "method": {
+          "id": "bayesian-pressure-band",
+          "version": "1"
+        },
+        "model_policy_version": "stage5-prediction-v2",
+        "contributors": {
+          "backoff_level": "period",
+          "evidence_window": {
+            "prompts_considered": 1,
+            "limit_prompts": 2000,
+            "successes": 1,
+            "restrictions": 0,
+            "excluded": 0,
+            "weighted_successes": 1,
+            "weighted_restrictions": 0,
+            "effective_samples": 1,
+            "alpha": 1.5,
+            "beta": 0.5
+          },
+          "prior": {
+            "alpha": 0.5,
+            "beta": 0.5
+          }
+        },
+        "pressure": {
+          "horizon": "PT1H",
+          "score": null,
+          "band": "unknown",
+          "policy_version": "stage4-analytics-v1",
+          "baseline_kind": "insufficient",
+          "completeness": "partial",
+          "contributors": [],
+          "baseline_windows": 0
+        },
+        "expected_prompt_category": "typical",
+        "prospective": null,
+        "observed": {
+          "prompts": 1,
+          "successes": 1,
+          "restrictions": 0,
+          "excluded": 0
+        },
+        "freshness": {
+          "as_of": "2026-07-30T10:00:07.000Z",
+          "age_seconds": 0
+        },
+        "completeness": {
+          "level": "complete",
+          "reasons": [],
+          "policy_version": "stage5-evidence-v2"
+        },
+        "synchronization": {
+          "performed": false,
+          "status": "not_requested"
+        },
+        "caveats": [
+          "Sparse history; the weak plan-profile prior still dominates this estimate.",
+          "Real provider capacity is unknown.",
+          "Usage pressure compares this window with local history; it is not a share of capacity."
+        ]
+      }
+    ]
+  },
+  "warnings": [
+    {
+      "code": "very_low_evidence",
+      "message": "The evidence gates cap this forecast at very low; it is not calibrated."
+    }
+  ],
+  "errors": []
+}

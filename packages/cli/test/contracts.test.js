@@ -204,8 +204,15 @@ test("an export validates against the published export schema", async () => {
  * Every released version whose documents were captured while the tree still matched its tag. `0.6`
  * is the migration floor `docs/compatibility.md` declares, so it is the oldest corpus the freeze
  * has to answer for.
+ *
+ * Split at the freeze, because the two halves answer different questions. A pre-freeze document
+ * declares envelope version 1 and must fail today's schema; a post-freeze one declares the current
+ * version and must still pass it, unchanged. Stage 10 confirms the freeze rather than redefining
+ * it, and this is that sentence written as a test.
  */
-const CAPTURED_VERSIONS = ["0.6", "0.7", "0.8"];
+const PRE_FREEZE_VERSIONS = ["0.6", "0.7", "0.8"];
+const FROZEN_VERSIONS = ["0.9"];
+const CAPTURED_VERSIONS = [...PRE_FREEZE_VERSIONS, ...FROZEN_VERSIONS];
 
 /**
  * Read a captured corpus, which is the record of what a released version emitted.
@@ -304,7 +311,7 @@ test("a document from before the freeze announces itself as version 1", async ()
   // quietly pass as the new version, it says which version it is and fails the new schema.
   const envelope = await compileSchema("envelope.schema.json");
 
-  for (const version of CAPTURED_VERSIONS) {
+  for (const version of PRE_FREEZE_VERSIONS) {
     for (const { name, document } of await capturedDocuments(version)) {
       assert.equal(document.schema_version, "1", `${version} ${name}`);
       assert.equal(
@@ -325,7 +332,7 @@ test("the freeze broke exactly one payload and left every other document alone",
   /** @type {string[]} */
   const broken = [];
 
-  for (const version of CAPTURED_VERSIONS) {
+  for (const version of PRE_FREEZE_VERSIONS) {
     for (const { name, document } of await capturedDocuments(version)) {
       const relabelled = { ...document, schema_version: ENVELOPE_SCHEMA_VERSION };
       if (!envelope(relabelled)) broken.push(`${version}/${name}`);
@@ -333,6 +340,27 @@ test("the freeze broke exactly one payload and left every other document alone",
   }
 
   assert.deepEqual(broken, ["0.6/config-set.json", "0.7/config-set.json", "0.8/config-set.json"]);
+});
+
+test("a document captured after the freeze still validates, unchanged", async () => {
+  // The freeze's whole claim, and the one Stage 10 exists to confirm: a consumer written against a
+  // frozen release keeps working. Not relabelled, unlike the test above -- these documents already
+  // declare the current version, so there is nothing to relabel and no intended break to name. An
+  // empty list is the assertion, and any name appearing on it resets Stage 9.
+  const envelope = await compileSchema("envelope.schema.json");
+  const exported = await compileSchema("export.schema.json");
+  /** @type {string[]} */
+  const broken = [];
+
+  for (const version of FROZEN_VERSIONS) {
+    for (const { name, document } of await capturedDocuments(version)) {
+      assert.equal(document.schema_version, ENVELOPE_SCHEMA_VERSION, `${version}/${name}`);
+      const validate = name === "export.json" ? exported : envelope;
+      if (!validate(document)) broken.push(`${version}/${name}`);
+    }
+  }
+
+  assert.deepEqual(broken, []);
 });
 
 test("the export changed shape under a new version rather than under the old one", async () => {

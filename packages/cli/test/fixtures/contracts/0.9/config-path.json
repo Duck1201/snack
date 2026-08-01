@@ -1,0 +1,11 @@
+{
+  "schema_version": "2",
+  "command": "config path",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "path": "{{root}}/config-home/snack/config.jsonc"
+  },
+  "warnings": [],
+  "errors": []
+}
