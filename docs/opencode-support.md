@@ -1,6 +1,6 @@
 # OpenCode Support Matrix
 
-SNACK `0.6.x` supports the OpenCode SQLite family `oc-sqlite-msgpart-v1` through read-only
+SNACK `0.8.x` supports the OpenCode SQLite family `oc-sqlite-msgpart-v1` through read-only
 backfill and accepts live `spool-event-v1` metadata from `@snack-ai/opencode@0.1.x`.
 
 | OpenCode version | Schema family | Backfill | Live capture |
@@ -72,3 +72,22 @@ npm `11.16.0`. Tests cover bounded fail-open writes, writer/reader lock ownershi
 payload disposal, retained unmapped observations, opt-in feature persistence, crash-safe setup
 recovery, optimistic global-config updates, and property-tested hybrid convergence. Independent
 release-blocker review found no remaining P0/P1 defects.
+
+## Client-family Support Policy
+
+From `0.8.0` the published support promise is the newest validated schema family plus one previous
+validated family, per client, and it is stated per release rather than implied by the version table
+above.
+
+| Client | Newest validated family | Previous validated family |
+| --- | --- | --- |
+| OpenCode | `oc-sqlite-msgpart-v1` | none yet |
+| Claude Code | `cc-jsonl-turntree-v1` | none yet |
+
+Neither client has produced a second family yet, so "plus one previous" currently has nothing to
+name. The row is published anyway, because the shape of the promise is what a user needs to know
+before a client updates underneath them, and an empty column is an honest answer where an absent
+table would leave the question open.
+
+A fingerprint outside this matrix fails closed with actionable `doctor` output and writes nothing.
+SNACK never promises every historical client version.

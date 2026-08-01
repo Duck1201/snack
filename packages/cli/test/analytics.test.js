@@ -9,8 +9,11 @@ import fc from "fast-check";
 
 import {
   ANALYTICS_POLICY,
+  COMPARISON_POLICY,
   TREND_POLICY,
   assignPressureBands,
+  compareOutcomeGroups,
+  countOutcomes,
   computeUsagePressure,
   computeUsageTrend,
   effectiveSampleSize,
@@ -1199,6 +1202,7 @@ test("a usage profile breaks usage down by model without losing the unknowns", (
       completed_at: "2026-01-02T01:00:05.000Z",
       duration_ms: 5000,
       outcome: "success",
+      installation_id: null,
       slices: [
         sliceOf({ model: "sonnet", input_tokens: 100, output_tokens: 20, cost_decimal: "0.003" }),
         sliceOf({ model: "haiku", input_tokens: 10, output_tokens: 5, cost_decimal: "0.0001" }),
@@ -1211,6 +1215,7 @@ test("a usage profile breaks usage down by model without losing the unknowns", (
       completed_at: "2026-01-02T02:00:05.000Z",
       duration_ms: 5000,
       outcome: "success",
+      installation_id: null,
       slices: [
         sliceOf({ model: "sonnet", input_tokens: 300, output_tokens: null, cost_decimal: null }),
         sliceOf({ model: null, input_tokens: 7, output_tokens: 1, cost_decimal: "0.5" }),
@@ -1260,6 +1265,171 @@ test("a usage profile breaks usage down by model without losing the unknowns", (
     inputTokens(profile.dimensions.input_tokens),
   );
 });
+
+test("two clients refused at the same rate on one source show no detected difference", () => {
+  // Two clients competing for one real capacity should look alike, and saying so is the useful
+  // answer most of the time. A comparison that flagged a difference here would flag one on every
+  // shared source, which is the same as reporting nothing at all.
+  const comparison = compareOutcomeGroups([
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 10, success: 90 })),
+    },
+    { key: "installation-claude", ...countOutcomes(outcomesWith({ restricted: 10, success: 90 })) },
+  ]);
+
+  assert.equal(comparison.policy_version, COMPARISON_POLICY.version);
+  assert.equal(comparison.status, "ok");
+  assert.deepEqual(
+    comparison.groups.map((group) => group.difference),
+    ["not_detected", "not_detected"],
+  );
+  assert.deepEqual(
+    comparison.groups.map((group) => ({ eligible: group.eligible, restricted: group.restricted })),
+    [
+      { eligible: 100, restricted: 10 },
+      { eligible: 100, restricted: 10 },
+    ],
+  );
+});
+
+test("a client refused far more often than the others is flagged beside its interval and sample size", () => {
+  // The reportable case: one client is refused at four times the rate of the other on the same
+  // capacity, with enough observations behind both that the intervals separate. The verdict is
+  // never delivered bare -- the count, the denominator and the interval travel with it, so a reader
+  // can see how much evidence produced it instead of taking the label on faith.
+  const comparison = compareOutcomeGroups([
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 5, success: 195 })),
+    },
+    {
+      key: "installation-claude",
+      ...countOutcomes(outcomesWith({ restricted: 40, success: 160 })),
+    },
+  ]);
+
+  assert.equal(comparison.status, "ok");
+  const claude = comparison.groups.find((group) => group.key === "installation-claude");
+  const openCode = comparison.groups.find((group) => group.key === "installation-opencode");
+  assert.equal(claude?.difference, "higher_than_others");
+  assert.equal(openCode?.difference, "lower_than_others");
+  assert.equal(claude?.restricted, 40);
+  assert.equal(claude?.eligible, 200);
+  assert.equal(claude?.restriction_share.value, 0.2);
+  // The interval brackets the observed share rather than restating it, and the two do not overlap.
+  assert.ok(claude.restriction_share.lower < 0.2 && claude.restriction_share.upper > 0.2);
+  assert.ok(claude.restriction_share.lower > openCode.restriction_share.upper);
+});
+
+test("a client with too few eligible prompts is reported as not comparable, not as no difference", () => {
+  // "No difference detected" is a finding; "not enough evidence to look" is not the same finding,
+  // and collapsing the two would let a client nobody has data about read as a client that behaves
+  // like the rest. The prompts it did contribute are still reported, because they are real.
+  const comparison = compareOutcomeGroups([
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 20, success: 180 })),
+    },
+    { key: "installation-claude", ...countOutcomes(outcomesWith({ restricted: 1, success: 3 })) },
+  ]);
+
+  assert.equal(comparison.status, "not_comparable");
+  assert.equal(comparison.reason, "insufficient_evidence");
+  const claude = comparison.groups.find((group) => group.key === "installation-claude");
+  assert.equal(claude?.difference, "not_comparable");
+  assert.equal(claude?.eligible, 4);
+  assert.equal(claude?.restricted, 1);
+});
+
+test("a client is compared against the others rather than against a pool containing itself", () => {
+  // The one design claim the comparison makes, and nothing was testing it. Comparing a group to the
+  // pooled rate compares it partly to itself, which drags every answer toward "no difference" --
+  // and hardest exactly where one client dominates the data, which is where a real difference
+  // matters most.
+  //
+  // The dominant client is 98% of the observations, refused at 10% against the other's 25%. Against
+  // the complement that separates cleanly. Against a pool the dominant client would be compared
+  // with 10.3% -- a figure it sets itself -- and its own interval would swallow it, reporting no
+  // difference where there plainly is one. The numbers are chosen so the two rules disagree.
+  const comparison = compareOutcomeGroups([
+    { key: "dominant", ...countOutcomes(outcomesWith({ restricted: 1000, success: 9000 })) },
+    { key: "rare", ...countOutcomes(outcomesWith({ restricted: 50, success: 150 })) },
+  ]);
+
+  assert.equal(comparison.status, "ok");
+  assert.deepEqual(
+    comparison.groups.map((group) => [group.key, group.difference]),
+    [
+      ["dominant", "lower_than_others"],
+      ["rare", "higher_than_others"],
+    ],
+  );
+});
+
+test("a group with nothing eligible is not given a measured refusal share", () => {
+  // Every observation excluded means nothing was learned. The share has to say so rather than
+  // report the prior that produced the interval.
+  const comparison = compareOutcomeGroups([
+    { key: "silent", ...countOutcomes(outcomesWith({ restricted: 0, success: 0, excluded: 40 })) },
+    { key: "busy", ...countOutcomes(outcomesWith({ restricted: 20, success: 180 })) },
+  ]);
+
+  const silent = comparison.groups.find((group) => group.key === "silent");
+  assert.equal(silent?.eligible, 0);
+  assert.equal(silent?.prompts, 40);
+  assert.equal(silent?.restriction_share.value, null);
+  assert.equal(silent?.difference, "not_comparable");
+});
+
+test("no attributed observations at all is reported as no groups, not as one", () => {
+  const comparison = compareOutcomeGroups([]);
+
+  assert.equal(comparison.status, "not_comparable");
+  assert.equal(comparison.reason, "no_groups");
+  assert.deepEqual(comparison.groups, []);
+});
+
+test("observations that were excluded count as seen but never as refused", () => {
+  // An excluded observation is one the product could not read as evidence either way. Counting it
+  // as a refusal would invent restrictions the provider never issued; dropping it from the prompt
+  // count would hide work the client really did.
+  const comparison = compareOutcomeGroups([
+    {
+      key: "installation-opencode",
+      ...countOutcomes(outcomesWith({ restricted: 10, success: 90, excluded: 50 })),
+    },
+    { key: "installation-claude", ...countOutcomes(outcomesWith({ restricted: 10, success: 90 })) },
+  ]);
+
+  const openCode = comparison.groups.find((group) => group.key === "installation-opencode");
+  assert.equal(openCode?.prompts, 150);
+  assert.equal(openCode?.eligible, 100);
+  assert.equal(openCode?.restricted, 10);
+  assert.equal(openCode?.difference, "not_detected");
+});
+
+/**
+ * Build outcomes in the shape the readers produce, with only the fields the comparison reads.
+ *
+ * @param {{restricted: number, success: number, excluded?: number}} counts
+ */
+function outcomesWith(counts) {
+  /** @type {import("../src/prediction.js").OutcomeRow[]} */
+  const outcomes = [];
+  let at = Date.parse("2026-01-02T00:00:00.000Z");
+  /** @param {"restricted" | "success" | "excluded"} outcome @param {number} total */
+  const push = (outcome, total) => {
+    for (let index = 0; index < total; index += 1) {
+      at += 60_000;
+      outcomes.push({ started_at: new Date(at).toISOString(), outcome });
+    }
+  };
+  push("restricted", counts.restricted);
+  push("success", counts.success);
+  push("excluded", counts.excluded ?? 0);
+  return outcomes;
+}
 
 /** @param {Partial<import("../src/storage.js").UsageSliceRow>} overrides */
 function sliceOf(overrides) {

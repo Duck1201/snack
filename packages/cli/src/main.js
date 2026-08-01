@@ -18,6 +18,7 @@ import {
 import {
   ANALYTICS_POLICY,
   TREND_POLICY,
+  compareOutcomeGroups,
   computeUsagePressure,
   computeUsageTrend,
   horizonWindow,
@@ -510,12 +511,22 @@ export async function run(argv, options = {}) {
     .option("--source <alias>", "capacity-source alias")
     .option("--horizon <duration|all>", "one configured analysis horizon, or all of them")
     .option("--verbose", "add per-dimension and per-model detail")
+    .option("--by-client", "compare the clients feeding each capacity source")
     .option("--json", "emit one versioned JSON document")
     .action(async function stats(commandOptions) {
       const current = await readConfig(paths.configFile);
-      const configuredSources = byCapacitySource(
-        Array.isArray(current.sources) ? current.sources.filter(isConfiguredSource) : [],
-      );
+      const allConfigured = Array.isArray(current.sources)
+        ? current.sources.filter(isConfiguredSource)
+        : [];
+      // Kept before the per-alias dedupe: a capacity source is one lineage however many clients
+      // feed it, and this is the only place that still knows which clients those are.
+      const clientsByAlias = new Map();
+      for (const source of allConfigured) {
+        const clients = clientsByAlias.get(source.alias) ?? [];
+        clients.push({ installation_id: source.installation_id, client: source.adapter });
+        clientsByAlias.set(source.alias, clients);
+      }
+      const configuredSources = byCapacitySource(allConfigured);
       const selected = commandOptions.source
         ? configuredSources.filter((source) => source.alias === commandOptions.source)
         : configuredSources;
@@ -547,6 +558,8 @@ export async function run(argv, options = {}) {
           planProfile,
           horizons,
           now,
+          clients:
+            commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
         });
       });
       const data = reports.length === 1 ? reports[0] : { sources: reports };
@@ -2276,13 +2289,32 @@ function summarizeWindow(rows, now) {
 /**
  * Describe observed usage for one capacity source across the requested horizons.
  *
- * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date}} input
+ * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null}} input
  */
 function buildSourceStats(input) {
-  const horizons = input.horizons.map((horizon) => {
+  /** @type {{groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number} | null} */
+  let attribution = null;
+  // The comparison reads the widest configured horizon, because separating two refusal rates needs
+  // every observation there is and the narrow horizons are the ones that will say "not comparable".
+  // It reuses the rows that horizon was read for rather than fetching per client: a per-client
+  // re-scan of the window is the shape of mistake that passes on a small history and doubles the
+  // work on a real one.
+  const widest = input.clients
+    ? input.horizons.reduce(
+        (best, horizon, index) =>
+          parseHorizon(horizon) > parseHorizon(String(input.horizons[best])) ? index : best,
+        0,
+      )
+    : -1;
+  const horizons = input.horizons.map((horizon, index) => {
     const window = horizonWindow(input.now, parseHorizon(horizon));
+    const rows = readUsageWindowRows(input.databaseFile, input.source.alias, window);
+    // Counted here and immediately, rather than by keeping the rows for later. Retaining the widest
+    // window's rows until the end of this function kept a hundred thousand objects alive across the
+    // pressure and calibration work, and under the heap cap that doubled what `stats` costs.
+    if (index === widest) attribution = countByClient(rows);
     return summarizeUsageProfile(
-      readUsageWindowRows(input.databaseFile, input.source.alias, window),
+      rows,
       readRestrictionWindowRows(input.databaseFile, input.source.alias, window),
       { horizon, window, now: input.now },
     );
@@ -2312,6 +2344,93 @@ function buildSourceStats(input) {
       }),
     },
     calibration: buildCalibrationReport(input.databaseFile, input.source.alias, input.planProfile),
+    ...(input.clients
+      ? {
+          by_client: buildClientComparison({
+            attribution: attribution ?? { groups: [], unattributed: 0 },
+            pairs: readCalibrationPairs(input.databaseFile, input.source.alias),
+            clients: input.clients,
+          }),
+        }
+      : {}),
+  };
+}
+
+/**
+ * Count one analysis window by the client each prompt was attributed to.
+ *
+ * One pass, three counters per client, nothing retained. The rows belong to the horizon that read
+ * them and are released with it; keeping them so the comparison could count them later is what made
+ * `stats --by-client` cost twice what `stats` costs on a hundred-thousand-prompt history.
+ *
+ * @param {import("./storage.js").UsageWindowRow[]} rows
+ */
+function countByClient(rows) {
+  /** @type {Map<string, {key: string, prompts: number, eligible: number, restricted: number}>} */
+  const groups = new Map();
+  let unattributed = 0;
+  for (const row of rows) {
+    // A prompt stored before attribution existed, or one on a source two clients already shared
+    // when the column arrived. It is counted and reported rather than dropped or assigned: the
+    // honest answer is that nobody knows which client produced it.
+    if (row.installation_id === null) {
+      unattributed += 1;
+      continue;
+    }
+    let group = groups.get(row.installation_id);
+    if (group === undefined) {
+      group = { key: row.installation_id, prompts: 0, eligible: 0, restricted: 0 };
+      groups.set(row.installation_id, group);
+    }
+    group.prompts += 1;
+    // Excluded observations are not evidence either way: seen, never refused. The same rule
+    // `countOutcomes` applies, applied here because here is where the rows already are.
+    if (row.outcome === "excluded") continue;
+    group.eligible += 1;
+    if (row.outcome === "restricted") group.restricted += 1;
+  }
+  return { groups: [...groups.values()], unattributed };
+}
+
+/**
+ * Compare the clients feeding one capacity source against each other.
+ *
+ * The comparison itself lives in analytics and knows nothing about clients: it is handed keys and
+ * observations. This function is what turns an installation id into the name of a client, which is
+ * a fact about configuration rather than about the data, and it does it by looking the id up rather
+ * than by testing it against any particular client's name -- so a third client needs no edit here.
+ *
+ * @param {{attribution: {groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number}, pairs: import("./storage.js").CalibrationPair[], clients: {installation_id: string, client: string}[]}} input
+ */
+function buildClientComparison(input) {
+  const names = new Map(input.clients.map((client) => [client.installation_id, client.client]));
+  const unattributed = input.attribution.unattributed;
+
+  /** @type {Map<string, import("./storage.js").CalibrationPair[]>} */
+  const pairsByClient = new Map();
+  for (const pair of input.pairs) {
+    if (pair.installation_id === null) continue;
+    const pairs = pairsByClient.get(pair.installation_id) ?? [];
+    pairs.push(pair);
+    pairsByClient.set(pair.installation_id, pairs);
+  }
+
+  const comparison = compareOutcomeGroups(input.attribution.groups);
+  return {
+    policy_version: comparison.policy_version,
+    status: comparison.status,
+    reason: comparison.reason,
+    groups: comparison.groups.map((group) => ({
+      client: names.get(group.key) ?? null,
+      installation_id: group.key,
+      prompts: group.prompts,
+      eligible: group.eligible,
+      restricted: group.restricted,
+      restriction_share: group.restriction_share,
+      difference: group.difference,
+      calibration: summarizeCalibration(pairsByClient.get(group.key) ?? []),
+    })),
+    unattributed: { prompts: unattributed },
   };
 }
 
@@ -2390,6 +2509,7 @@ function renderStats(report, verbose) {
   let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
   text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); ${describeTrend(report.pressure.trend)}.\n`;
   text += `  calibration: ${describeCalibration(report.calibration)}\n`;
+  if (report.by_client) text += describeClientComparison(report.by_client);
   for (const horizon of report.horizons) {
     const restrictions = Object.entries(horizon.restrictions.by_class);
     const tokens = Object.entries(horizon.dimensions)
@@ -2425,6 +2545,46 @@ function renderStats(report, verbose) {
       }
     }
   }
+  return text;
+}
+
+/**
+ * Render the per-client comparison as counts with their denominators.
+ *
+ * Deliberately not a percentage. A refusal share printed as "7% refused" reads as a measurement of
+ * the provider's real behavior, which is exactly the claim SNACK never makes; "87 of 1180 eligible"
+ * says the same thing while showing how much evidence is behind it.
+ *
+ * @param {ReturnType<typeof buildClientComparison>} comparison
+ */
+function describeClientComparison(comparison) {
+  if (comparison.groups.length === 0) {
+    return `  by client: no attributed prompts (policy ${comparison.policy_version}).\n`;
+  }
+  const verdicts = {
+    higher_than_others: "higher than the others",
+    lower_than_others: "lower than the others",
+    not_detected: "difference not detected",
+    not_comparable: "not enough eligible prompts to compare",
+  };
+  let text = "";
+  for (const group of comparison.groups) {
+    // With nothing eligible the interval is the untouched prior, not a measurement of anything.
+    // Printing it beside "0 of 0" would dress a starting assumption up as an observation.
+    const interval =
+      group.eligible === 0
+        ? ""
+        : ` [${group.restriction_share.lower.toFixed(3)}-${group.restriction_share.upper.toFixed(3)}]`;
+    text +=
+      `  by client ${group.client ?? group.installation_id}:` +
+      ` restricted ${group.restricted} of ${group.eligible} eligible${interval},` +
+      ` ${verdicts[/** @type {keyof typeof verdicts} */ (group.difference)]}.\n`;
+  }
+  if (comparison.unattributed.prompts > 0) {
+    text += `    ${comparison.unattributed.prompts} prompt(s) could not be attributed to a client.\n`;
+  }
+  text += `    policy ${comparison.policy_version}`;
+  text += comparison.reason === null ? ".\n" : `, ${comparison.reason}.\n`;
   return text;
 }
 

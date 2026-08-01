@@ -1,0 +1,52 @@
+{
+  "schema_version": "1",
+  "command": "config get",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "key": null,
+    "value": {
+      "schema_version": 1,
+      "sources": [
+        {
+          "alias": "work",
+          "installation_id": "33b0563c-232a-48f8-b898-76461caef6ea",
+          "adapter": "opencode",
+          "database": "{{root}}/opencode.db",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "plan_profile": "generic",
+          "fingerprint": "oc-sqlite-msgpart-v1"
+        },
+        {
+          "alias": "personal",
+          "installation_id": "40eb150d-0e4e-4c7e-8710-b589119bbfec",
+          "adapter": "claude",
+          "projects": "{{root}}/claude-home/projects",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "plan_profile": "generic",
+          "fingerprint": "cc-jsonl-turntree-v1"
+        }
+      ],
+      "analysis": {
+        "horizons": [
+          "PT1H",
+          "PT5H",
+          "P1D",
+          "P7D"
+        ]
+      },
+      "presentation": {
+        "json": false
+      },
+      "prospective_analysis": {
+        "enabled": false
+      }
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://snack-ai.dev/schemas/export.schema.json",
+  "title": "SNACK export document",
+  "description": "The document `snack export --format json` writes, and the shape the CSV manifest describes. A candidate public contract: the declared columns of each table are the contract, so a consumer can rely on every named column being present. Rows are flat and joined by key rather than nested. Column values are unconstrained -- their types belong to the row-level versions each row carries, not to this file.",
+  "type": "object",
+  "required": ["schema_version", "command", "generated_at", "status", "data"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "command": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "status": {
+      "enum": ["ok", "degraded", "error"]
+    },
+    "data": {
+      "type": "object",
+      "required": ["export", "provenance", "tables"],
+      "properties": {
+        "export": {
+          "type": "object",
+          "required": ["export_schema_version", "scope"],
+          "properties": {
+            "export_schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+$"
+            },
+            "scope": {
+              "type": "object"
+            }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "required": ["cli_version", "envelope_schema_version"],
+          "properties": {
+            "cli_version": {
+              "type": "string"
+            },
+            "envelope_schema_version": {
+              "type": "string"
+            },
+            "plan_profiles": {
+              "type": "array"
+            }
+          }
+        },
+        "tables": {
+          "type": "object",
+          "required": [
+            "capacity_periods",
+            "source_bindings",
+            "prompts",
+            "usage_slices",
+            "restrictions",
+            "predictions",
+            "prediction_evaluations"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "capacity_periods": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "source_alias",
+                  "provider",
+                  "profile",
+                  "plan",
+                  "started_at",
+                  "ended_at",
+                  "plan_profile_id",
+                  "plan_profile_version"
+                ],
+                "properties": {
+                  "id": {},
+                  "source_alias": {},
+                  "provider": {},
+                  "profile": {},
+                  "plan": {},
+                  "started_at": {},
+                  "ended_at": {},
+                  "plan_profile_id": {},
+                  "plan_profile_version": {}
+                }
+              }
+            },
+            "source_bindings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["source_alias", "installation_id", "adapter", "provider", "profile"],
+                "properties": {
+                  "source_alias": {},
+                  "installation_id": {},
+                  "adapter": {},
+                  "provider": {},
+                  "profile": {}
+                }
+              }
+            },
+            "prompts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "source_alias",
+                  "installation_id",
+                  "capacity_period_id",
+                  "started_at",
+                  "completed_at",
+                  "duration_ms",
+                  "completion",
+                  "outcome",
+                  "outcome_policy_version",
+                  "size_category",
+                  "category_policy_version",
+                  "category_baseline_as_of",
+                  "parser_version",
+                  "revision_domain",
+                  "seen_spool",
+                  "input_analyzer_version",
+                  "estimated_input_tokens",
+                  "input_line_count_bucket",
+                  "input_code_block_count_bucket",
+                  "input_attachment_count"
+                ],
+                "properties": {
+                  "id": {},
+                  "source_alias": {},
+                  "installation_id": {},
+                  "capacity_period_id": {},
+                  "started_at": {},
+                  "completed_at": {},
+                  "duration_ms": {},
+                  "completion": {},
+                  "outcome": {},
+                  "outcome_policy_version": {},
+                  "size_category": {},
+                  "category_policy_version": {},
+                  "category_baseline_as_of": {},
+                  "parser_version": {},
+                  "revision_domain": {},
+                  "seen_spool": {},
+                  "input_analyzer_version": {},
+                  "estimated_input_tokens": {},
+                  "input_line_count_bucket": {},
+                  "input_code_block_count_bucket": {},
+                  "input_attachment_count": {}
+                }
+              }
+            },
+            "usage_slices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "prompt_execution_id",
+                  "source_slice_id",
+                  "provider",
+                  "model",
+                  "input_tokens",
+                  "output_tokens",
+                  "reasoning_tokens",
+                  "cache_read_tokens",
+                  "cache_write_tokens",
+                  "cost_decimal",
+                  "currency"
+                ],
+                "properties": {
+                  "prompt_execution_id": {},
+                  "source_slice_id": {},
+                  "provider": {},
+                  "model": {},
+                  "input_tokens": {},
+                  "output_tokens": {},
+                  "reasoning_tokens": {},
+                  "cache_read_tokens": {},
+                  "cache_write_tokens": {},
+                  "cost_decimal": {},
+                  "currency": {}
+                }
+              }
+            },
+            "restrictions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "prompt_execution_id",
+                  "class",
+                  "source_code",
+                  "observed_at",
+                  "classifier_version",
+                  "provenance"
+                ],
+                "properties": {
+                  "prompt_execution_id": {},
+                  "class": {},
+                  "source_code": {},
+                  "observed_at": {},
+                  "classifier_version": {},
+                  "provenance": {}
+                }
+              }
+            },
+            "predictions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "source_alias",
+                  "capacity_period_id",
+                  "generated_at",
+                  "delivered",
+                  "delivered_at",
+                  "delivery_channel",
+                  "delivery_format",
+                  "method_id",
+                  "method_version",
+                  "model_policy_version",
+                  "risk_policy_version",
+                  "evidence_policy_version",
+                  "weight_policy_version",
+                  "analytics_policy_version",
+                  "category_policy_version",
+                  "lower",
+                  "point",
+                  "upper",
+                  "coverage_target",
+                  "risk_label",
+                  "evidence_level",
+                  "expected_size_category",
+                  "backoff_level",
+                  "pressure_band",
+                  "pressure_score",
+                  "plan_profile_id",
+                  "plan_profile_version",
+                  "data_as_of",
+                  "completeness"
+                ],
+                "properties": {
+                  "id": {},
+                  "source_alias": {},
+                  "capacity_period_id": {},
+                  "generated_at": {},
+                  "delivered": {},
+                  "delivered_at": {},
+                  "delivery_channel": {},
+                  "delivery_format": {},
+                  "method_id": {},
+                  "method_version": {},
+                  "model_policy_version": {},
+                  "risk_policy_version": {},
+                  "evidence_policy_version": {},
+                  "weight_policy_version": {},
+                  "analytics_policy_version": {},
+                  "category_policy_version": {},
+                  "lower": {},
+                  "point": {},
+                  "upper": {},
+                  "coverage_target": {},
+                  "risk_label": {},
+                  "evidence_level": {},
+                  "expected_size_category": {},
+                  "backoff_level": {},
+                  "pressure_band": {},
+                  "pressure_score": {},
+                  "plan_profile_id": {},
+                  "plan_profile_version": {},
+                  "data_as_of": {},
+                  "completeness": {}
+                }
+              }
+            },
+            "prediction_evaluations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "prediction_attempt_id",
+                  "prompt_execution_id",
+                  "linked_at",
+                  "is_primary",
+                  "policy_version"
+                ],
+                "properties": {
+                  "prediction_attempt_id": {},
+                  "prompt_execution_id": {},
+                  "linked_at": {},
+                  "is_primary": {},
+                  "policy_version": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array"
+    },
+    "errors": {
+      "type": "array"
+    }
+  }
+}

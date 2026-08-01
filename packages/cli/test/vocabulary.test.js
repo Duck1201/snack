@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
+import { compareOutcomeGroups } from "../src/analytics.js";
 import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
@@ -53,6 +54,9 @@ test("no command calls observed usage a quota percentage or a remaining balance"
     ["sync", "--full"],
     ["status"],
     ["stats", "--verbose"],
+    // The per-client comparison renders refusal counts and intervals, which is exactly the shape of
+    // output that drifts into sounding like a share of real capacity.
+    ["stats", "--by-client"],
     ["doctor"],
     ["config", "get"],
     ["config", "path"],
@@ -195,4 +199,61 @@ test("the domain and prediction modules do not know which client wrote a source"
     assert.doesNotMatch(code, /\bopencode\b/iu, `${module} names OpenCode`);
     assert.doesNotMatch(code, /\bclaude\b/iu, `${module} names Claude Code`);
   }
+});
+
+test("the comparison treats a group key as a label it never reads", () => {
+  // The regex guards catch a client named in code. They cannot catch a branch on a value arriving
+  // from configuration, and that is the leak that would actually hurt: a comparison that works only
+  // for the two clients someone thought of is not a client-neutral core, it is two special cases.
+  //
+  // An unknown client cannot be configured to test this from the outside -- the configuration
+  // schema fail-closes on an adapter it does not know, which is the intended behavior. So the claim
+  // is tested where the key can actually vary: rename every group and nothing but the names may
+  // move. A comparison that recognized a client would answer differently here.
+  const counts = (/** @type {number} */ restricted, /** @type {number} */ eligible) => ({
+    prompts: eligible,
+    eligible,
+    restricted,
+  });
+
+  const named = compareOutcomeGroups([
+    { key: "installation-opencode", ...counts(5, 200) },
+    { key: "installation-claude", ...counts(40, 200) },
+  ]);
+  const anonymous = compareOutcomeGroups([
+    { key: "sardine-cli-installation", ...counts(5, 200) },
+    { key: "☃", ...counts(40, 200) },
+  ]);
+
+  const withoutKeys = (/** @type {typeof named} */ comparison) => ({
+    ...comparison,
+    groups: comparison.groups.map((group) => ({ ...group, key: null })),
+  });
+  assert.deepEqual(withoutKeys(anonymous), withoutKeys(named));
+  assert.deepEqual(
+    anonymous.groups.map((group) => group.difference),
+    ["lower_than_others", "higher_than_others"],
+  );
+});
+
+test("storage names no type after the client that happened to be first", async () => {
+  // Storage sits below the adapters and stores whatever any client observed, so a type of its own
+  // named after one client describes the order the clients were built in rather than anything
+  // about the data. The test that guards the domain modules cannot catch this one: it strips
+  // comments, and a JSDoc type lives entirely in a comment.
+  const source = await readFile(new URL("../src/storage.js", import.meta.url), "utf8");
+  // String literals are stripped instead of comments here, and deliberately so. `opencode-session`
+  // is the salt every stored session fingerprint was hashed with and `opencode-outcome-v1` is a
+  // policy version written onto every outcome row; both are frozen wire values whose pre-images
+  // are gone, so renaming their bytes would silently invalidate the history this test exists to
+  // protect. Prose may say "OpenCode"; only an identifier that glues a client name to another word
+  // is a type, a function, or a constant named after a client.
+  const withoutLiterals = source
+    .replaceAll(/"(?:[^"\\\n]|\\.)*"/gu, '""')
+    .replaceAll(/'(?:[^'\\\n]|\\.)*'/gu, "''")
+    .replaceAll(/`(?:[^`\\]|\\.)*`/gu, "``");
+  const named = [...withoutLiterals.matchAll(/\b\w*(?:OpenCode|Claude)\w+\b/gu)].map(
+    (match) => match[0],
+  );
+  assert.deepEqual([...new Set(named)], [], "storage.js names identifiers after a client");
 });

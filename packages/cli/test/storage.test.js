@@ -14,6 +14,7 @@ import {
   inspectDatabase,
   migrationDirectory,
   readIngestionCursor,
+  readSpoolIssueCount,
   restoreSetupDatabaseBackup,
   storeObservations,
 } from "../src/storage.js";
@@ -338,7 +339,14 @@ test("upgrading a 0.6 database to 0.7 keeps every row it already held", async ()
   seedZeroSixDatabase(paths.databaseFile);
   const before = tableCounts(paths.databaseFile);
 
-  const upgrade = await initializeDatabase(paths, { applicationVersion: "0.7.0", now });
+  // Pinned to the migrations 0.7 shipped. Left pointing at the whole directory this test would
+  // quietly become "0.6 upgrades to whatever is newest" the moment a later release added one, and
+  // the 0.6-to-0.7 leg it is named after would stop being covered by anything.
+  const upgrade = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
 
   assert.deepEqual(upgrade.applied, [10, 11]);
   assert.equal(upgrade.backupCreated, true);
@@ -348,13 +356,334 @@ test("upgrading a 0.6 database to 0.7 keeps every row it already held", async ()
   // rebuilds from scratch.
   assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 2);
   assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
+  // Stopped at 0.7 while the installed release ships more migrations, so `pending` is the honest
+  // reading and the one a user in this position would see: intact, upgradeable, not yet upgraded.
+  assert.deepEqual(await inspectDatabase(paths.databaseFile), {
+    exists: true,
+    integrity: "ok",
+    migrations: "pending",
+  });
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
+});
+
+test("upgrading a 0.7 database to 0.8 keeps every row it already held", async () => {
+  // 0.8 records which client produced each prompt, which is a column on the largest table in the
+  // database and the one four other tables cascade from. The rows a 0.7 install already holds are
+  // the thing that has to survive it.
+  const { paths } = await makeStorage();
+  const baseline = await copyMigrationsThrough(11);
+  await initializeDatabase(paths, { migrationsDir: baseline, applicationVersion: "0.7.0", now });
+  // Every column this seed writes still exists at 011, so the rows a 0.6 binary left behind are
+  // also the rows a 0.7 binary holds; what differs is the schema they now sit in.
+  seedZeroSixDatabase(paths.databaseFile);
+  const before = tableCounts(paths.databaseFile);
+
+  const upgrade = await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+
+  assert.deepEqual(upgrade.applied, [12]);
+  assert.equal(upgrade.backupCreated, true);
+  const after = tableCounts(paths.databaseFile);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 1);
+  assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
   assert.deepEqual(await inspectDatabase(paths.databaseFile), {
     exists: true,
     integrity: "ok",
     migrations: "current",
   });
-  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
 });
+
+test("a 0.6 database reaches 0.8 through 0.7 without a reset", async () => {
+  // 0.6 is the guaranteed migration baseline, and the promise is that it stays reachable as the
+  // chain grows rather than only from whichever release last thought about it. An install that
+  // skipped 0.7 entirely takes the same path, one upgrade at a time.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(9),
+    applicationVersion: "0.6.0",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  const before = tableCounts(paths.databaseFile);
+
+  const toZeroSeven = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
+  const toZeroEight = await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+
+  assert.deepEqual(toZeroSeven.applied, [10, 11]);
+  assert.deepEqual(toZeroEight.applied, [12]);
+  const after = tableCounts(paths.databaseFile);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 3);
+  assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
+  // The cursor is what makes it an upgrade rather than a reset: a database that forgot where its
+  // reader stopped would re-ingest a whole history and describe usage that never happened.
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
+  // Row counts alone cannot tell a preserved forecast from a rewritten one, and a forecast the user
+  // was actually shown is the one row the product may never restate. Compared field by field.
+  assert.deepEqual(readDeliveredForecast(paths.databaseFile), {
+    prediction_attempt_id: 1,
+    lower: 0.4,
+    point: 0.6,
+    upper: 0.8,
+    risk_label: "elevated",
+    evidence_level: "low",
+    model_policy_version: "stage5-prediction-v2",
+    delivered_at: now.toISOString(),
+    channel: "stdout",
+    is_primary: 1,
+    prompt_execution_id: 1,
+  });
+});
+
+/**
+ * Read the one forecast the user was shown, with the delivery and evaluation that reference it.
+ *
+ * @param {string} databaseFile
+ */
+function readDeliveredForecast(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT prediction_attempt.id AS prediction_attempt_id,
+                prediction_attempt.lower, prediction_attempt.point, prediction_attempt.upper,
+                prediction_attempt.risk_label, prediction_attempt.evidence_level,
+                prediction_attempt.model_policy_version,
+                prediction_delivery.delivered_at, prediction_delivery.channel,
+                prediction_evaluation.is_primary, prediction_evaluation.prompt_execution_id
+           FROM prediction_attempt
+           JOIN prediction_delivery
+             ON prediction_delivery.prediction_attempt_id = prediction_attempt.id
+           JOIN prediction_evaluation
+             ON prediction_evaluation.prediction_attempt_id = prediction_attempt.id`,
+      )
+      .get();
+  } finally {
+    database.close();
+  }
+}
+
+test("a database written by a newer release says so instead of blaming the migration history", async () => {
+  // Running an older binary against a database a newer one already upgraded is a thing people do
+  // -- a rollback, a second machine, an npm install that resolved differently. Until now it
+  // produced `migration_history_mismatch`, the same answer given for a tampered or hand-edited
+  // migration, which sends someone hunting for corruption that is not there. The two situations
+  // are distinguishable: a stored number nobody has heard of and higher than anything available
+  // means the database is ahead, not damaged.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+  const older = await copyMigrationsThrough(11);
+
+  await assert.rejects(
+    () => initializeDatabase(paths, { migrationsDir: older, applicationVersion: "0.7.0", now }),
+    (error) => {
+      assert.ok(error instanceof SnackError);
+      assert.equal(error.reason, "storage_newer_than_application");
+      // The message has to name both numbers and where the way back is. No downgrade is offered:
+      // the pre-migration backup is the only route, and it already exists.
+      assert.match(error.message, /12/u);
+      assert.match(error.message, /11/u);
+      assert.match(error.message, /backup/iu);
+      return true;
+    },
+  );
+
+  // And the read-only inspection reports it rather than throwing, so `doctor` can say which of the
+  // two problems this is instead of reporting storage as unreadable.
+  assert.deepEqual(await inspectDatabase(paths.databaseFile, { migrationsDir: older }), {
+    exists: true,
+    integrity: "ok",
+    migrations: "ahead",
+  });
+});
+
+test("a prompt stored before the second client arrived keeps an honest unknown attribution", async () => {
+  // The upgrade can only attribute a prompt when its source has one binding, because then there is
+  // one client it could have come from. Where two clients already shared a source, naming either
+  // one would be a guess, and a guess is worse than the gap: it would be counted as evidence about
+  // a client that may never have run that prompt.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  seedSecondClientOnSharedSource(paths.databaseFile);
+
+  await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+
+  const attributions = readAttributions(paths.databaseFile);
+  // `prompt-1` sits on the shared alias and stays unknown; `prompt-2` sits on a source only one
+  // client is bound to and is attributed to that client.
+  assert.deepEqual(attributions, [
+    { source_prompt_id: "prompt-1", installation_id: null },
+    { source_prompt_id: "prompt-2", installation_id: "99999999-2222-4333-8444-555555555555" },
+  ]);
+});
+
+test("a prompt the upgrade left unattributed is not claimed by a client that reused its id", async () => {
+  // The gap the collision guard did not cover. On a source two clients already shared, migration
+  // 012 leaves the attribution unknown by design -- and an unknown attribution used to be treated
+  // as a free one: the next client to present that prompt id claimed the row and overwrote it.
+  //
+  // That is the same silent data loss the guard exists to stop, reached by the one path this stage
+  // is actually about: an upgraded shared source.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  seedSecondClientOnSharedSource(paths.databaseFile);
+  await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+  // Confirms the premise rather than assuming it: `prompt-1` is on the shared alias, so the upgrade
+  // could not attribute it and left it NULL.
+  assert.equal(readStoredPrompt(paths.databaseFile, "prompt-1").installation_id, null);
+
+  const claudeSource = {
+    alias: "work",
+    installation_id: "99999999-2222-4333-8444-555555555555",
+    adapter: "claude",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "cc-jsonl-turntree-v1",
+  };
+  const counts = storeObservations(
+    paths.databaseFile,
+    claudeSource,
+    {
+      observations: [
+        {
+          // The other client's own prompt, which merely happens to carry the same identifier.
+          source_prompt_id: "prompt-1",
+          source_session_id: "claude-session",
+          revision: "2026-01-02T05:00:00.000Z",
+          revision_domain: "claude-uuid-v1",
+          parser_version: "claude-session-v1",
+          started_at: "2026-01-02T05:00:00.000Z",
+          completed_at: "2026-01-02T05:00:09.000Z",
+          duration_ms: 9000,
+          completion: "completed",
+          provider: "anthropic",
+          model: "claude-opus-5",
+          outcome: "success",
+          usage_slices: [
+            {
+              source_slice_id: "slice-b",
+              provider: "anthropic",
+              model: "claude-opus-5",
+              input_tokens: 999,
+              output_tokens: 888,
+              reasoning_tokens: null,
+              cache_read_tokens: null,
+              cache_write_tokens: null,
+              cost_decimal: null,
+              currency: null,
+            },
+          ],
+          restrictions: [],
+        },
+      ],
+      cursor: null,
+    },
+    now,
+    {
+      mappedProviders: new Set(["anthropic"]),
+      providerMappingCounts: new Map([["anthropic", 1]]),
+      path: "backfill",
+    },
+  );
+
+  // The stored prompt is untouched: still the first client's parser, duration and usage slice.
+  const stored = readStoredPrompt(paths.databaseFile, "prompt-1");
+  assert.equal(stored.parser_version, "opencode-session-v1");
+  assert.equal(stored.duration_ms, 1000);
+  assert.equal(stored.slices, 1);
+  assert.equal(stored.source_slice_id, "slice-1");
+  // And it stays unattributed rather than being handed to whoever asked last.
+  assert.equal(stored.installation_id, null);
+  // Refused and reported, not absorbed.
+  assert.equal(counts.rejected_invalid, 1);
+  assert.equal(counts.updated, 0);
+  assert.equal(readSpoolIssueCount(paths.databaseFile, "work"), 1);
+});
+
+/** @param {string} databaseFile @param {string} sourcePromptId */
+function readStoredPrompt(databaseFile, sourcePromptId) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return /** @type {Record<string, unknown>} */ (
+      database
+        .prepare(
+          `SELECT prompt_execution.installation_id, prompt_execution.parser_version,
+                  prompt_execution.duration_ms,
+                  (SELECT COUNT(*) FROM prompt_usage_slice
+                    WHERE prompt_execution_id = prompt_execution.id) AS slices,
+                  (SELECT source_slice_id FROM prompt_usage_slice
+                    WHERE prompt_execution_id = prompt_execution.id) AS source_slice_id
+             FROM prompt_execution
+            WHERE source_prompt_id = ?`,
+        )
+        .get(sourcePromptId)
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Add a second client bound to the same capacity source, plus a source only one client feeds, so
+ * the upgrade has both an ambiguous and an unambiguous case to decide.
+ *
+ * @param {string} databaseFile
+ */
+function seedSecondClientOnSharedSource(databaseFile) {
+  const database = new Database(databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    database.exec(`
+      INSERT INTO client_installation (id, client_kind, local_fingerprint, created_at, last_seen_at)
+        VALUES ('99999999-2222-4333-8444-555555555555', 'claude', 'fingerprint-2',
+                '${now.toISOString()}', '${now.toISOString()}');
+      INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+        VALUES ('work', '99999999-2222-4333-8444-555555555555', 'claude', 'anthropic', 'default');
+      INSERT INTO capacity_source (alias, created_at) VALUES ('personal', '${now.toISOString()}');
+      INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+        VALUES ('personal', '99999999-2222-4333-8444-555555555555', 'claude', 'anthropic',
+                'default');
+      INSERT INTO capacity_period (id, source_alias, provider, profile, plan, started_at)
+        VALUES (2, 'personal', 'anthropic', 'default', 'pro', '${now.toISOString()}');
+      INSERT INTO prompt_execution
+          (id, source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+           source_revision, observation_hash, revision_domain, parser_version, started_at,
+           completed_at, duration_ms, completion, first_observed_at, last_observed_at)
+        VALUES (2, 'personal', 2, 'prompt-2', 'session-hash-2', '1', 'hash-2', 'claude-uuid-v1',
+                'cc-jsonl-turntree-v1', '2026-01-02T02:00:00.000Z', '2026-01-02T02:00:01.000Z',
+                1000, 'completed', '${now.toISOString()}', '${now.toISOString()}');
+    `);
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile */
+function readAttributions(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT source_prompt_id, installation_id FROM prompt_execution ORDER BY source_prompt_id",
+      )
+      .all();
+  } finally {
+    database.close();
+  }
+}
 
 /**
  * Fill a database at the 0.6 schema with one of every row an upgrade has to preserve, including
@@ -403,6 +732,29 @@ function seedZeroSixDatabase(databaseFile) {
       INSERT INTO ingestion_cursor
           (source_alias, fingerprint, time_updated, message_id, committed_at)
         VALUES ('work', 'oc-sqlite-msgpart-v1', 2000, 'message-2000', '${now.toISOString()}');
+      -- A forecast the user was actually shown, the record that it was shown, and the outcome it
+      -- was later scored against. These are the snapshots the migration baseline promises to
+      -- preserve, and they are the rows an upgrade can least afford to lose: they are immutable by
+      -- trigger precisely because a forecast the user saw cannot be rewritten afterwards, so a
+      -- migration that dropped them would destroy the only record of what was promised.
+      INSERT INTO prediction_attempt
+          (id, source_alias, capacity_period_id, generated_at, method_id, method_version,
+           model_policy_version, risk_policy_version, evidence_policy_version, weight_policy_version,
+           analytics_policy_version, category_policy_version, lower, point, upper, coverage_target,
+           risk_label, evidence_level, expected_size_category, backoff_level, pressure_band,
+           pressure_score, pressure_contributors_json, plan_profile_id, plan_profile_version,
+           data_as_of, completeness)
+        VALUES (1, 'work', 1, '${now.toISOString()}', 'bayesian-pressure-band', '1',
+                'stage5-prediction-v2', 'stage5-risk-v1', 'stage5-evidence-v1', 'stage5-weight-v1',
+                'stage4-analytics-v1', 'stage6-category-v1', 0.4, 0.6, 0.8, 0.8, 'elevated', 'low',
+                'typical', 'band', 'moderate', 0.5, NULL, 'generic', '1.0.0',
+                '${now.toISOString()}', 'complete');
+      INSERT INTO prediction_delivery
+          (prediction_attempt_id, delivered_at, channel, format, invocation_id)
+        VALUES (1, '${now.toISOString()}', 'stdout', 'human', 'invocation-1');
+      INSERT INTO prediction_evaluation
+          (prediction_attempt_id, prompt_execution_id, linked_at, is_primary, policy_version)
+        VALUES (1, 1, '${now.toISOString()}', 1, 'stage5-evaluation-v1');
     `);
   } finally {
     database.close();

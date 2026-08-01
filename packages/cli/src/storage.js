@@ -47,7 +47,23 @@ export async function withStorageOperationLock(paths, callback) {
 }
 
 /**
- * @typedef {object} ConfiguredOpenCodeSource
+ * Frozen wire values. Both name the client that happened to be first, and neither may be renamed
+ * to say so less loudly.
+ *
+ * `SESSION_FINGERPRINT_SALT` was mixed into every session fingerprint this database has ever
+ * stored, and the pre-images are gone by design: changing the bytes would not migrate the old
+ * fingerprints, it would silently stop matching them, and every session would look new. The salt is
+ * a constant of the stored data, not a description of which client produced it.
+ *
+ * `OUTCOME_POLICY_VERSION` is written onto every outcome row so a later reader can tell which rules
+ * decided that outcome. Renaming it would make one set of rules claim two identities; the only
+ * legitimate change is a bump, and only when the rules themselves change.
+ */
+const SESSION_FINGERPRINT_SALT = "opencode-session";
+const OUTCOME_POLICY_VERSION = "opencode-outcome-v1";
+
+/**
+ * @typedef {object} ConfiguredSource
  * @property {string} alias
  * @property {string} installation_id
  * @property {string} adapter
@@ -269,10 +285,21 @@ export async function inspectDatabase(databaseFile, options = {}) {
     const foreignKeyViolations = /** @type {unknown[]} */ (database.pragma("foreign_key_check"));
     const migrations = await loadMigrations(options.migrationsDir ?? migrationDirectory);
     const applied = readAppliedMigrations(database);
-    verifyAppliedMigrations(applied, migrations);
+    const healthy = integrity === "ok" && foreignKeyViolations.length === 0;
+    // Reported rather than thrown. This is the read-only inspection `doctor` runs, and a database
+    // written by a newer release is intact and readable by that release -- describing it as
+    // inaccessible storage would be both wrong and unactionable.
+    try {
+      verifyAppliedMigrations(applied, migrations);
+    } catch (error) {
+      if (error instanceof SnackError && error.reason === "storage_newer_than_application") {
+        return { exists: true, integrity: healthy ? "ok" : "failed", migrations: "ahead" };
+      }
+      throw error;
+    }
     return {
       exists: true,
-      integrity: integrity === "ok" && foreignKeyViolations.length === 0 ? "ok" : "failed",
+      integrity: healthy ? "ok" : "failed",
       migrations: applied.size === migrations.length ? "current" : "pending",
     };
   } catch (error) {
@@ -371,7 +398,7 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
 
 /**
  * @param {string} databaseFile
- * @param {ConfiguredOpenCodeSource} source
+ * @param {ConfiguredSource} source
  * @param {{observations: Observation[], cursor: unknown}} batch An adapter's cursor is opaque
  *   here: storage records where a reader stopped and hands it back, and only the adapter that
  *   wrote it knows what it means.
@@ -433,6 +460,17 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
       // Loaded once per batch. Enforcing the tombstone here rather than through the ingestion
       // cursor is what makes it survive `--full`, which re-reads everything by definition.
       const tombstones = readPurgeTombstones(database, source.alias);
+      // Whether more than one client feeds this capacity source. Read once per batch rather than
+      // per observation: it decides how an unattributed prompt may be treated, and on a hundred
+      // thousand observations the difference is a constant against a hundred thousand scans.
+      const bindings = database
+        .prepare("SELECT COUNT(*) AS count FROM source_binding WHERE source_alias = ?")
+        .get(source.alias);
+      const sharedSource =
+        typeof bindings === "object" &&
+        bindings !== null &&
+        "count" in bindings &&
+        Number(bindings.count) > 1;
       for (const observation of batch.observations) {
         if (
           tombstones.length > 0 &&
@@ -517,6 +555,73 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           counts.pending_mapping += 1;
           continue;
         }
+        if (!isValidObservation(observation)) {
+          counts.rejected_invalid += 1;
+          continue;
+        }
+        const observationHash = hashObservation(observation);
+        const existing = database
+          .prepare(
+            `SELECT id, source_revision, observation_hash, completion, revision_domain,
+                    installation_id
+              FROM prompt_execution
+             WHERE source_alias = ? AND source_prompt_id = ?`,
+          )
+          .get(source.alias, observation.source_prompt_id);
+        const storedRow =
+          typeof existing === "object" && existing !== null
+            ? /** @type {Record<string, unknown>} */ (existing)
+            : null;
+        // An attribution that is recorded and belongs to somebody else.
+        const claimedByAnother =
+          typeof storedRow?.installation_id === "string" &&
+          storedRow.installation_id !== source.installation_id;
+        // An attribution the upgrade could not determine, on a source where it genuinely could not:
+        // two clients already shared it, so a stored prompt could have come from either. Here a
+        // differing revision domain is the whole signal there is, and it says these are not the
+        // same prompt -- one client's identifier namespace has collided with another's.
+        //
+        // Where the source has a single binding this does not apply: the domains differ there when
+        // one installation reports the same prompt through the spool and through the backfill,
+        // which is by design and must keep merging.
+        const unattributedOnSharedSource =
+          storedRow !== null &&
+          storedRow.installation_id === null &&
+          sharedSource &&
+          typeof storedRow.revision_domain === "string" &&
+          storedRow.revision_domain !== observation.revision_domain;
+        if (claimedByAnother || unattributedOnSharedSource) {
+          // Two clients feeding one capacity source identify their prompts in their own namespaces,
+          // so a prompt id is unique per client and not per source. Where two of them agree, this
+          // is not one prompt observed twice; it is two prompts that cannot both be stored under
+          // the key they share.
+          //
+          // Refusing is the only correct answer. Merging would attribute one client's work to the
+          // other, and overwriting silently destroys a prompt -- which is what happened before this
+          // guard whenever both had succeeded, because two agreeing outcomes read as a compatible
+          // backfill. The prompt already stored is kept, because it is the one whose evidence is
+          // already in the forecast, and the collision is reported so a person can see that a real
+          // observation was dropped rather than absorbed.
+          //
+          // This has to come before anything else in this iteration, and before the pending-mapping
+          // and pending-spool deletions below in particular. Those are scoped by prompt id and
+          // provider, not by installation, so running them first would clear the other client's
+          // pending state for a prompt this observation is about to be refused for -- the refusal
+          // would be correct and the side effect would already have happened.
+          //
+          // One row per occurrence rather than an incrementing counter: the unique index treats
+          // NULL segment and line offset as distinct, so `ON CONFLICT` would never match. The count
+          // `doctor` reports is a sum over occurrences either way.
+          database
+            .prepare(
+              `INSERT INTO ingestion_issue
+                 (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+               VALUES (?, ?, 'cross_client_prompt_id_collision', NULL, NULL, ?, ?, 1)`,
+            )
+            .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
+          counts.rejected_invalid += 1;
+          continue;
+        }
         database
           .prepare(
             `DELETE FROM ambiguous_profile_mapping
@@ -540,18 +645,24 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             )
             .run(source.installation_id, observation.source_prompt_id, observation.provider);
         }
-        if (!isValidObservation(observation)) {
-          counts.rejected_invalid += 1;
-          continue;
+        if (
+          typeof existing === "object" &&
+          existing !== null &&
+          "id" in existing &&
+          typeof existing.id === "number"
+        ) {
+          // A prompt the upgrade could not attribute is attributed the next time the client that
+          // produced it observes it, which is what makes an ambiguous history heal instead of
+          // staying unknown forever. Only the gap is filled: an attribution already recorded is
+          // never rewritten, so re-reading a history cannot move a prompt from one client to
+          // another.
+          database
+            .prepare(
+              `UPDATE prompt_execution SET installation_id = ?
+                WHERE id = ? AND installation_id IS NULL`,
+            )
+            .run(source.installation_id, existing.id);
         }
-        const observationHash = hashObservation(observation);
-        const existing = database
-          .prepare(
-            `SELECT id, source_revision, observation_hash, completion, revision_domain
-              FROM prompt_execution
-             WHERE source_alias = ? AND source_prompt_id = ?`,
-          )
-          .get(source.alias, observation.source_prompt_id);
         const existingRevisionDomain =
           typeof existing === "object" &&
           existing !== null &&
@@ -792,15 +903,17 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           const inserted = database
             .prepare(
               `INSERT INTO prompt_execution
-                 (source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+                 (source_alias, installation_id, capacity_period_id, source_prompt_id,
+                   source_session_fingerprint,
                    source_revision, observation_hash, revision_domain, parser_version, started_at, completed_at,
                    duration_ms, completion, input_analyzer_version, estimated_input_tokens,
                    input_line_count_bucket, input_code_block_count_bucket, input_attachment_count,
                    first_observed_at, last_observed_at, seen_spool)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               source.alias,
+              source.installation_id,
               observationPeriod.id,
               observation.source_prompt_id,
               hashOpaque(observation.source_session_id),
@@ -850,9 +963,13 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           .prepare(
             `INSERT INTO prompt_source_outcome
                 (prompt_execution_id, outcome, policy_version)
-              VALUES (?, ?, 'opencode-outcome-v1')`,
+              VALUES (?, ?, ?)`,
           )
-          .run(promptId, restrictions.length > 0 ? "restricted" : observation.outcome);
+          .run(
+            promptId,
+            restrictions.length > 0 ? "restricted" : observation.outcome,
+            OUTCOME_POLICY_VERSION,
+          );
         const insertRestriction = database.prepare(
           `INSERT INTO restriction_observation
              (prompt_execution_id, class, source_code, observed_at, classifier_version, provenance)
@@ -950,7 +1067,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
  * Start a capacity period immediately after a setup change commits.
  *
  * @param {string} databaseFile
- * @param {ConfiguredOpenCodeSource} source
+ * @param {ConfiguredSource} source
  * @param {Date} now
  * @param {{id: string, version: string} | null} [planProfile]
  */
@@ -971,7 +1088,7 @@ export function ensureCapacityPeriod(databaseFile, source, now, planProfile = nu
 
 /**
  * @param {Database.Database} database
- * @param {ConfiguredOpenCodeSource} source
+ * @param {ConfiguredSource} source
  * @param {string} timestamp
  * @param {{id: string, version: string} | null} planProfile
  */
@@ -1295,6 +1412,8 @@ export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
  * @property {string | null} completed_at
  * @property {number | null} duration_ms
  * @property {string} outcome
+ * @property {string | null} installation_id Null for a prompt stored before attribution existed,
+ *   or one on a source two clients already shared when the column arrived.
  * @property {UsageSliceRow[]} slices
  */
 
@@ -1320,6 +1439,7 @@ export function readUsageWindowRows(databaseFile, sourceAlias, window) {
            prompt_execution.started_at AS started_at,
            prompt_execution.completed_at AS completed_at,
            prompt_execution.duration_ms AS duration_ms,
+           prompt_execution.installation_id AS installation_id,
            prompt_source_outcome.outcome AS outcome,
            prompt_usage_slice.source_slice_id AS source_slice_id,
            prompt_usage_slice.provider AS provider,
@@ -1359,6 +1479,7 @@ export function readUsageWindowRows(databaseFile, sourceAlias, window) {
           completed_at: row.completed_at,
           duration_ms: row.duration_ms,
           outcome: row.outcome,
+          installation_id: row.installation_id,
           slices: [],
         };
         prompts.set(row.prompt_execution_id, prompt);
@@ -1430,25 +1551,35 @@ export function readRestrictionWindowRows(databaseFile, sourceAlias, window) {
   }
 }
 
-/** @param {string} databaseFile @param {ConfiguredOpenCodeSource} source */
-export function readPendingMappingCount(databaseFile, source) {
+/**
+ * @param {string} databaseFile
+ * @param {ConfiguredSource} source
+ * @param {string[]} [installationIds] Every client feeding this capacity source. Defaults to the
+ *   one installation the source describes.
+ */
+export function readPendingMappingCount(databaseFile, source, installationIds) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  // Pending mappings belong to the capacity source; ambiguous ones belong to a client installation.
+  // A caller describing one shared source therefore has to name every client feeding it, or the
+  // count answers for whichever client it happened to pass.
+  const installations = installationIds ?? [source.installation_id];
+  const placeholders = installations.map(() => "?").join(", ");
   try {
     const row = database
       .prepare(
         `SELECT
            (SELECT COUNT(*) FROM pending_mapping WHERE source_alias = ?) +
            (SELECT COUNT(*) FROM ambiguous_profile_mapping
-            WHERE installation_id = ? AND provider = ?) AS count`,
+            WHERE installation_id IN (${placeholders}) AND provider = ?) AS count`,
       )
-      .get(source.alias, source.installation_id, source.provider);
+      .get(source.alias, ...installations, source.provider);
     return typeof row === "object" && row !== null && "count" in row ? Number(row.count) : 0;
   } finally {
     database.close();
   }
 }
 
-/** @param {string} databaseFile @param {ConfiguredOpenCodeSource} source */
+/** @param {string} databaseFile @param {ConfiguredSource} source */
 export function readPendingSpoolObservations(databaseFile, source) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
@@ -1497,7 +1628,7 @@ function legacyCursorField(cursor, field, expected) {
 
 /** @param {string} value */
 function hashOpaque(value) {
-  return createHash("sha256").update(`opencode-session\0${value}`).digest("hex");
+  return createHash("sha256").update(`${SESSION_FINGERPRINT_SALT}\0${value}`).digest("hex");
 }
 
 /** @param {Observation} observation */
@@ -1676,8 +1807,21 @@ function readAppliedMigrations(database) {
  */
 function verifyAppliedMigrations(applied, available) {
   const byNumber = new Map(available.map((migration) => [migration.number, migration]));
+  const highestAvailable = Math.max(0, ...byNumber.keys());
   for (const [number, stored] of applied) {
     const migration = byNumber.get(number);
+    // A migration this build has never heard of, numbered beyond everything it ships, is a database
+    // a newer release already upgraded. That is a different situation from a history that was
+    // edited or corrupted, and reporting both as a mismatch sent someone looking for damage that
+    // was not there. Told apart here so the reader can say which one it is.
+    if (!migration && number > highestAvailable) {
+      throw new SnackError(
+        `Storage was written by a newer release: it holds migration ${number}, and this ` +
+          `application ships up to ${highestAvailable}. Install the newer release to use it, ` +
+          "or restore the pre-migration backup taken before the upgrade from the backup directory.",
+        { code: ExitCode.storage, reason: "storage_newer_than_application" },
+      );
+    }
     if (!migration || migration.name !== stored.name || migration.checksum !== stored.checksum) {
       throw new SnackError("Stored migration history does not match this application version.", {
         code: ExitCode.storage,
@@ -1962,6 +2106,8 @@ export function linkPrimaryEvaluations(databaseFile, sourceAlias, policyVersion)
  * @property {"success" | "restricted" | "excluded"} outcome
  * @property {string} evidence_level
  * @property {string} model_policy_version
+ * @property {string | null} installation_id Which client produced the prompt the forecast was
+ *   scored against, where that is known.
  */
 
 /**
@@ -1983,10 +2129,13 @@ export function readCalibrationPairs(databaseFile, sourceAlias) {
            prediction_attempt.upper AS upper,
            prediction_attempt.evidence_level AS evidence_level,
            prediction_attempt.model_policy_version AS model_policy_version,
+           prompt_execution.installation_id AS installation_id,
            prompt_source_outcome.outcome AS outcome
          FROM prediction_evaluation
          JOIN prediction_attempt
            ON prediction_attempt.id = prediction_evaluation.prediction_attempt_id
+         JOIN prompt_execution
+           ON prompt_execution.id = prediction_evaluation.prompt_execution_id
          JOIN prompt_source_outcome
            ON prompt_source_outcome.prompt_execution_id = prediction_evaluation.prompt_execution_id
          WHERE prediction_attempt.source_alias = ?

@@ -3,13 +3,16 @@
 Status: complete.
 
 Cross-platform runtime validation passed on Node.js `24.18.1` in
-[CI run 30671328826](https://github.com/Duck1201/snack/actions/runs/30671328826): `npm run check`
-and `npm run pack:smoke` green on `ubuntu-latest`, `macos-latest`, and WSL2/Debian 13, with 348 CLI
-tests. Budgets measured locally at 100,000 prompts: Claude backfill 12.5 s against a 30 s budget,
+[CI run 30680888064](https://github.com/Duck1201/snack/actions/runs/30680888064): `npm run check`
+and `npm run pack:smoke` green on `ubuntu-latest`, `macos-latest`, and WSL2/Debian 13, with 382 CLI
+tests. The Stage 7 validation this supersedes was
+[CI run 30671328826](https://github.com/Duck1201/snack/actions/runs/30671328826) at 348 tests.
+Budgets measured locally at 100,000 prompts: Claude backfill 12.5 s against a 30 s budget,
 `status --no-sync` p95 169 ms against 250 ms over a real history, and the steady-state commands
-surviving a 150 MB heap cap.
+surviving a 150 MB heap cap. Full per-environment figures are in
+[platform-smoke.md](./release/platform-smoke.md#stage-8).
 
-SNACK `0.7.x` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
+SNACK `0.8.x` reads Claude Code through the JSONL turn-tree family `cc-jsonl-turntree-v1` by
 read-only backfill. There is no live-capture path for Claude Code and no SNACK hook is registered in
 Claude Code settings; see [ADR-0006](./adr/0006-claude-jsonl-backfill-without-hooks.md).
 
@@ -112,3 +115,27 @@ database, so the name never survives the trip.
 Claude Code JSONL carries no cost field. Cost and currency are stored as null for Claude
 observations rather than derived from a price table, and the field-completeness evidence gate lowers
 the evidence level accordingly.
+
+## Client-family Support Policy
+
+The support promise from `0.8.0` — newest validated family plus one previous, per client — is
+published as a single matrix for both clients in
+[docs/opencode-support.md](./opencode-support.md#client-family-support-policy). Claude Code's newest
+validated family is `cc-jsonl-turntree-v1`, and there is no previous one yet.
+
+## Client Attribution
+
+From `0.8.0` each stored prompt records which client installation produced it, so a capacity source
+fed by both clients can be asked whether they fare differently against it — `snack stats
+--by-client`. The attribution never splits the shared source: it stays one lineage, one capacity
+period, and one usage profile.
+
+Prompts stored before `0.8.0` are attributed by the upgrade only where their capacity source has
+exactly one binding. Where both clients already shared a source, the answer is genuinely unknown and
+is reported as unattributed rather than guessed; the next synchronization that observes such a
+prompt fills it in.
+
+Because prompt identifiers are unique per client rather than per capacity source, two clients can in
+principle present the same one. That is two prompts, not one, and ingestion refuses the later
+observation, keeps what is already stored, and records the collision for `doctor` rather than
+overwriting an observation silently.

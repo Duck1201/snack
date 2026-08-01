@@ -28,7 +28,7 @@ const PLAN_PROFILE_STALE_DAYS = 365;
 
 /**
  * @param {import("./paths.js").SnackPaths} paths
- * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string}} [options]
+ * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string, migrationsDir?: string}} [options]
  * @returns {Promise<{status: "ok" | "degraded" | "error", checks: DoctorCheck[]}>}
  */
 export async function runDoctor(paths, options = {}) {
@@ -72,7 +72,10 @@ export async function runDoctor(paths, options = {}) {
   try {
     const storageLock = await checkLock(`${paths.databaseFile}.lock`, "storage_lock");
     if (storageLock) checks.push(storageLock);
-    const storage = await inspectDatabase(paths.databaseFile);
+    const storage = await inspectDatabase(
+      paths.databaseFile,
+      options.migrationsDir === undefined ? {} : { migrationsDir: options.migrationsDir },
+    );
     if (!storage.exists) {
       checks.push(warn("storage", "Storage has not been initialized."));
     } else {
@@ -84,7 +87,16 @@ export async function runDoctor(paths, options = {}) {
       checks.push(
         storage.migrations === "current"
           ? pass("storage_migrations", "Storage migrations are current.")
-          : fail("storage_migrations", "Storage migrations are not current."),
+          : storage.migrations === "ahead"
+            ? // Intact, readable, and simply beyond this build. Naming it is what turns a dead end
+              // into an instruction, and no downgrade is implied: the newer release is the way
+              // forward, and the pre-migration backup is the way back.
+              fail(
+                "storage_migrations",
+                "Storage was written by a newer release; install that release to use it, " +
+                  "or restore the pre-migration backup taken before the upgrade.",
+              )
+            : fail("storage_migrations", "Storage migrations are not current."),
       );
     }
   } catch {
@@ -121,29 +133,50 @@ export async function runDoctor(paths, options = {}) {
             : fail("opencode_plugin", "OpenCode live-capture plugin registration is incompatible."),
     );
   }
-  for (const source of sources) {
-    if (!isConfiguredSource(source)) continue;
+  // Configuration holds one entry per client, and a capacity source can have several. Whether a
+  // client's own history is readable is a question per client; everything else here -- the plan
+  // profile, the mapping, the freshness, what ingestion refused -- is a question about the source
+  // one lineage at a time. Asked once per client, those answers came back duplicated under an
+  // identical id, so a consumer could not key on the id and one refusal read as two.
+  const configured = sources.filter((source) => isConfiguredSource(source));
+  const selected = configured.filter(
     // Narrowing touches the per-source checks only: runtime, permissions, storage and plugin
     // registration are properties of the installation, and hiding them would answer a narrower
     // question than the one `doctor` exists to answer.
-    if (options.source !== undefined && source.alias !== options.source) continue;
-    checks.push(planProfileCheck(source, now));
+    (source) => options.source === undefined || source.alias === options.source,
+  );
+  for (const source of selected) {
     const client = source.adapter === "claude" ? "Claude Code" : "OpenCode";
+    // The adapter is what distinguishes the answer, so it belongs in the id and not only in the
+    // prose. Two clients on one alias otherwise report the same id twice, and a reader cannot tell
+    // which history is the unreadable one.
+    const id = `source_fingerprint:${source.alias}:${source.adapter}`;
     try {
       const fingerprint = createSourceAdapter(source).fingerprint();
       checks.push(
         fingerprint.supported && fingerprint.family === source.fingerprint
-          ? pass(`source_fingerprint:${source.alias}`, `${client} schema fingerprint is supported.`)
-          : fail(
-              `source_fingerprint:${source.alias}`,
-              `${client} schema fingerprint is unsupported.`,
-            ),
+          ? pass(id, `${client} schema fingerprint is supported.`)
+          : fail(id, `${client} schema fingerprint is unsupported.`),
       );
     } catch {
-      checks.push(fail(`source_fingerprint:${source.alias}`, `${client} source is inaccessible.`));
+      checks.push(fail(id, `${client} source is inaccessible.`));
     }
+  }
+  // One pass per capacity source, in the order the sources were configured.
+  const aliases = [...new Set(selected.map((source) => source.alias))];
+  for (const alias of aliases) {
+    const source = /** @type {typeof selected[number]} */ (
+      selected.find((candidate) => candidate.alias === alias)
+    );
+    checks.push(planProfileCheck(source, now));
     try {
-      const pending = readPendingMappingCount(paths.databaseFile, source);
+      const pending = readPendingMappingCount(
+        paths.databaseFile,
+        source,
+        selected
+          .filter((candidate) => candidate.alias === alias)
+          .map((candidate) => candidate.installation_id),
+      );
       checks.push(
         pending === 0
           ? pass(
@@ -188,19 +221,23 @@ export async function runDoctor(paths, options = {}) {
       checks.push(
         ...(await checkSpoolDirectory(join(paths.spoolDir, source.alias), source.alias, cursors)),
       );
-      try {
-        const rejected = readSpoolIssueCount(paths.databaseFile, source.alias);
-        checks.push(
-          rejected === 0
-            ? pass(`source_spool:${source.alias}`, "Live spool has no rejected events.")
-            : warn(
-                `source_spool:${source.alias}`,
-                `${rejected} live spool event(s) were rejected.`,
-              ),
-        );
-      } catch {
-        checks.push(warn(`source_spool:${source.alias}`, "Live spool health is unknown."));
-      }
+    }
+    try {
+      // Named for ingestion, and outside the spool branch, because that is what it counts: the
+      // issue table records every observation any path refused, and backfill records them too.
+      // Nested under `spoolExists` it answered only for a client that has a live capture path, so a
+      // source read purely by backfill could refuse observations and report nothing at all.
+      const rejected = readSpoolIssueCount(paths.databaseFile, source.alias);
+      checks.push(
+        rejected === 0
+          ? pass(`source_ingestion:${source.alias}`, "No observations were refused on ingestion.")
+          : warn(
+              `source_ingestion:${source.alias}`,
+              `${rejected} observation(s) were refused on ingestion.`,
+            ),
+      );
+    } catch {
+      checks.push(warn(`source_ingestion:${source.alias}`, "Ingestion health is unknown."));
     }
   }
 

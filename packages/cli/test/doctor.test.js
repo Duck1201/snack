@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { runDoctor } from "../src/doctor.js";
 import { run } from "../src/main.js";
 import { pluginPackageSpec } from "../src/opencode-config.js";
-import { initializeDatabase } from "../src/storage.js";
-import { cleanupRunFixtures, createClaudeHistory, makeRunFixture } from "./fixtures/run-fixture.js";
+import { initializeDatabase, migrationDirectory } from "../src/storage.js";
+import {
+  cleanupRunFixtures,
+  createClaudeHistory,
+  createOpenCodeDatabase,
+  makeRunFixture,
+} from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
 
@@ -123,6 +128,95 @@ test("a Claude-only installation is not told about the OpenCode plugin", async (
   // question they did not ask, and degrades a healthy installation for it.
   const ids = document.data.checks.map((/** @type {{id: string}} */ check) => check.id);
   assert.ok(!ids.includes("opencode_plugin"), ids.join(", "));
-  assert.ok(ids.includes("source_fingerprint:claude"));
+  assert.ok(ids.includes("source_fingerprint:claude:claude"), ids.join(", "));
   assert.equal(document.status, "ok");
+});
+
+test("doctor names a newer-release database instead of calling storage inaccessible", async () => {
+  // The check people actually reach for when something is wrong. Reporting "storage is invalid or
+  // inaccessible" for a database a newer release merely upgraded describes damage that has not
+  // happened and hides the one thing that would fix it: run the newer release.
+  const fixture = await makeRunFixture("snack-doctor-ahead-");
+  await initializeDatabase(fixture.paths, { applicationVersion: "0.8.0", now });
+
+  const report = await runDoctor(fixture.paths, {
+    now,
+    nodeVersion: "24.18.1",
+    platform: "linux",
+    migrationsDir: await migrationsThrough(fixture.root, 11),
+  });
+
+  const byId = new Map(report.checks.map((check) => [check.id, check]));
+  assert.equal(byId.get("storage")?.status, undefined, "storage was reported as unreadable");
+  assert.equal(byId.get("storage_integrity")?.status, "pass");
+  const migrations = byId.get("storage_migrations");
+  assert.equal(migrations?.status, "fail");
+  assert.match(migrations.message, /newer release/iu);
+});
+
+/**
+ * Copy the released migrations up to a number, so an older application can be pointed at them.
+ *
+ * @param {string} root
+ * @param {number} through
+ */
+async function migrationsThrough(root, through) {
+  const directory = join(root, `migrations-${through}`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  for (const name of await readdir(migrationDirectory)) {
+    if (Number(name.slice(0, 3)) > through) continue;
+    await writeFile(join(directory, name), await readFile(join(migrationDirectory, name), "utf8"));
+  }
+  return directory;
+}
+
+test("two clients behind one capacity source do not produce two of the same check", async () => {
+  // A capacity source is one lineage however many clients feed it, and most of what `doctor` asks
+  // about it -- its plan profile, its mapping, how fresh it is, what ingestion refused -- is a
+  // question about the source, not about each client. Asked once per configured client, every one
+  // of those answers appeared twice under an identical id, so a machine consumer could not key on
+  // the id and one refusal read as two.
+  const fixture = await makeRunFixture("snack-doctor-shared-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  for (const client of ["opencode", "claude"]) {
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        "--non-interactive",
+        "--source",
+        "work",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+      ],
+      fixture.options,
+    );
+  }
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const checks = /** @type {{id: string}[]} */ (JSON.parse(fixture.stdout.value).data.checks);
+
+  const duplicated = [...new Set(checks.map((check) => check.id))].filter(
+    (id) => checks.filter((check) => check.id === id).length > 1,
+  );
+  assert.deepEqual(duplicated, [], `duplicate check ids: ${duplicated.join(", ")}`);
+
+  // The one question that really is per client keeps an answer per client, and says which is which
+  // in the id rather than only in the prose.
+  const fingerprints = checks
+    .filter((check) => check.id.startsWith("source_fingerprint:"))
+    .map((check) => check.id);
+  assert.deepEqual(fingerprints.sort(), [
+    "source_fingerprint:work:claude",
+    "source_fingerprint:work:opencode",
+  ]);
 });
