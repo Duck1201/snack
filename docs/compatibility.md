@@ -109,6 +109,52 @@ A consumer written against `0.9.0` needs no change for any of these. A consumer 
 `command` echoing arbitrary argv, or on a read-only command crashing rather than refusing, was
 relying on a defect.
 
+## Upgrading from 0.6+
+
+Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a
+`snack sync`. This is the whole path, in order.
+
+**1. Install.**
+
+```bash
+npm install -g @snack-ai/cli
+```
+
+If the OpenCode live-capture plugin is installed, take it too. Its behaviour has not changed since
+`0.1.2`; `0.1.3` republishes the corrected spool schema described below.
+
+```bash
+npm install -g @snack-ai/opencode
+```
+
+**2. Apply the migrations.** The first command that opens storage for write applies every pending
+migration, taking a backup before it does. `snack sync` is that command.
+
+Until then, read-only commands — `status --no-sync`, `export`, `data purge` — **refuse** rather than
+crash: exit `5`, reason `storage_migrations_pending`, naming the way out. Before `0.9.0` this was
+exit `10` and "Unexpected internal failure", which is why the refusal is worth knowing about. The
+migration floor is `0.6.0`, and `npm run upgrade:smoke` proves it against the published `0.6.1`
+artifact rather than only in-tree.
+
+**3. If you consume `--json`, read `schema_version` before the payload.** It moved from `1` to `2`.
+Only one payload changed shape: `config set`, whose three `data.storage` keys are now snake_case
+(`backup_created`, `backup_file`, `migration_count`). Every other command's document captured from
+`0.7` or `0.8` still validates as version 2, and `contracts.test.js` asserts exactly that list so an
+unintended break cannot hide behind this one. Each payload now has a published schema under
+`packages/cli/schemas/commands/`, routed from the envelope by command name.
+
+**4. If you consume `export`**, its document version is `2`, at
+`data.export.export_schema_version`, and `export --json` is documented rather than undeclared.
+
+**5. If you script `doctor`**, `doctor --source <unknown-alias>` now exits `4` with
+`source_not_configured` instead of exiting `0` with a clean bill of health.
+
+**6. If you validate the spool against the published schema**, recompile it. Event
+`schema_version` is still `1` and the set of accepted documents is unchanged; the file gained the
+`type` declarations Ajv strict requires, so it now compiles instead of erroring.
+
+**Not ready for this?** `stable` still holds `0.6.1` — see [npm channels](#npm-channels).
+
 ## Deprecation policy
 
 - A deprecated command, flag, or field warns for at least one minor release before it is removed.
@@ -149,3 +195,14 @@ redefine it without the same reset.
 
 Rejected on the release branch for the duration of the freeze: the Codex adapter, a TUI, a public
 plugin API, database encryption, and any change to the forecasting model.
+
+## Public beta
+
+`0.9.0` is the public beta of the 1.0 candidate. Report what you find through the forms in
+[.github/ISSUE_TEMPLATE](../.github/ISSUE_TEMPLATE); `snack doctor` output and the reason code from
+a failing command are the two most useful things to include.
+
+Beta feedback is **consultative evidence, not a release gate**. It informs Stage 10 and it cannot on
+its own hold a release or reset the freeze — only a change to a public schema or a public semantic
+does that, under the rule above. A report that names such a change is the thing to escalate; a
+report that names a defect inside the frozen surface is an ordinary fix.
