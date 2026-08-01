@@ -139,6 +139,13 @@ Run the same reconciliation once more at the end: the number is the check.
 - **Anchor seeded data to `new Date()`.** The CLI uses the real clock; only tests inject `now`. Data
   seeded at a fixed date falls outside every rolling window and every command reports "nothing
   observed", which reads as a bug in your change.
+- **Re-stamping an OpenCode fixture means rewriting the JSON, not just the columns.** The adapter
+  takes `started_at` from `time.created` inside `message.data`, not from the `time_created` /
+  `time_updated` columns. Updating only the columns produces the most misleading state there is:
+  `sync` reports `1 read, 1 inserted` and every horizon then reports `0 prompts`, so the ingestion
+  path looks healthy while nothing is in range. Rewrite the timestamps inside the `data` blob too,
+  or pass a wide `--horizon` (for example `P365D`) when the point is to exercise a command rather
+  than the windows themselves.
 - **`prompt_execution.completion` is CHECK-constrained** to `provisional` or `completed`, and
   `Observation` requires `source_session_id` (not `source_session_fingerprint`, which is a column
   but not a field of the type). Both produce confusing failures when seeding.
@@ -168,6 +175,10 @@ Run the same reconciliation once more at the end: the number is the check.
   once.
 - **Seeding with a fixed `now` such as `2026-03-01`.** Every prompt landed months outside the
   31-hour span the pressure calculation reads, so every command reported an empty history.
+- **Moving an OpenCode fixture onto the real clock with `UPDATE message SET time_created = ?`.** The
+  columns moved and the prompt still landed at the fixture's original date, because the adapter
+  reads the timestamp out of the `data` JSON. `sync` said `1 inserted` and `stats` said `0 prompts`
+  across every horizon — a state that reads as a regression in the analytics windows and is not one.
 - **Driving the pty with `pty.fork()` and a single `os.write` of all answers.** It hung and produced
   no output; `script -qec` with paced input worked.
 - **Trusting a green fixture suite for a new source adapter.** Seventeen fixture assertions passed
