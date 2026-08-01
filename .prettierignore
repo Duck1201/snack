@@ -6,3 +6,7 @@ AGENTS.md
 CONTEXT.md
 PLAN.md
 docs/
+
+# Captured output of an earlier release, kept exactly as that release emitted it. Reformatting
+# these would make them a record of today's formatter rather than of what 0.7 actually produced.
+packages/cli/test/fixtures/contracts/

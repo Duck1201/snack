@@ -188,19 +188,23 @@ export async function runDoctor(paths, options = {}) {
       checks.push(
         ...(await checkSpoolDirectory(join(paths.spoolDir, source.alias), source.alias, cursors)),
       );
-      try {
-        const rejected = readSpoolIssueCount(paths.databaseFile, source.alias);
-        checks.push(
-          rejected === 0
-            ? pass(`source_spool:${source.alias}`, "Live spool has no rejected events.")
-            : warn(
-                `source_spool:${source.alias}`,
-                `${rejected} live spool event(s) were rejected.`,
-              ),
-        );
-      } catch {
-        checks.push(warn(`source_spool:${source.alias}`, "Live spool health is unknown."));
-      }
+    }
+    try {
+      // Named for ingestion, and outside the spool branch, because that is what it counts: the
+      // issue table records every observation any path refused, and backfill records them too.
+      // Nested under `spoolExists` it answered only for a client that has a live capture path, so a
+      // source read purely by backfill could refuse observations and report nothing at all.
+      const rejected = readSpoolIssueCount(paths.databaseFile, source.alias);
+      checks.push(
+        rejected === 0
+          ? pass(`source_ingestion:${source.alias}`, "No observations were refused on ingestion.")
+          : warn(
+              `source_ingestion:${source.alias}`,
+              `${rejected} observation(s) were refused on ingestion.`,
+            ),
+      );
+    } catch {
+      checks.push(warn(`source_ingestion:${source.alias}`, "Ingestion health is unknown."));
     }
   }
 

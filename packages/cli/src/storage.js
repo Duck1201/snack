@@ -563,11 +563,66 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const observationHash = hashObservation(observation);
         const existing = database
           .prepare(
-            `SELECT id, source_revision, observation_hash, completion, revision_domain
+            `SELECT id, source_revision, observation_hash, completion, revision_domain,
+                    installation_id
               FROM prompt_execution
              WHERE source_alias = ? AND source_prompt_id = ?`,
           )
           .get(source.alias, observation.source_prompt_id);
+        if (
+          typeof existing === "object" &&
+          existing !== null &&
+          "installation_id" in existing &&
+          typeof existing.installation_id === "string" &&
+          existing.installation_id !== source.installation_id
+        ) {
+          // Two clients feeding one capacity source identify their prompts in their own namespaces,
+          // so a prompt id is unique per client and not per source. Where two of them agree, this
+          // is not one prompt observed twice; it is two prompts that cannot both be stored under
+          // the key they share.
+          //
+          // Refusing is the only correct answer. Merging would attribute one client's work to the
+          // other, and overwriting silently destroys a prompt -- which is what happened before this
+          // guard whenever both had succeeded, because two agreeing outcomes read as a compatible
+          // backfill. The prompt already stored is kept, because it is the one whose evidence is
+          // already in the forecast, and the collision is reported so a person can see that a real
+          // observation was dropped rather than absorbed.
+          //
+          // This has to come before anything else touches the row: the paths below merge
+          // restrictions and finalize boundaries onto whatever they find under the shared key, and
+          // the whole point is that the row they found belongs to another client.
+          //
+          // Gated on the installation rather than on the revision domain. One installation
+          // legitimately reports the same prompt through two paths, the spool and the backfill, and
+          // those disagree on domain by design and must keep merging.
+          database
+            .prepare(
+              `INSERT INTO ingestion_issue
+                 (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+               VALUES (?, ?, 'cross_client_prompt_id_collision', NULL, NULL, ?, ?, 1)`,
+            )
+            .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
+          counts.rejected_invalid += 1;
+          continue;
+        }
+        if (
+          typeof existing === "object" &&
+          existing !== null &&
+          "id" in existing &&
+          typeof existing.id === "number"
+        ) {
+          // A prompt the upgrade could not attribute is attributed the next time the client that
+          // produced it observes it, which is what makes an ambiguous history heal instead of
+          // staying unknown forever. Only the gap is filled: an attribution already recorded is
+          // never rewritten, so re-reading a history cannot move a prompt from one client to
+          // another.
+          database
+            .prepare(
+              `UPDATE prompt_execution SET installation_id = ?
+                WHERE id = ? AND installation_id IS NULL`,
+            )
+            .run(source.installation_id, existing.id);
+        }
         const existingRevisionDomain =
           typeof existing === "object" &&
           existing !== null &&
@@ -808,15 +863,17 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           const inserted = database
             .prepare(
               `INSERT INTO prompt_execution
-                 (source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+                 (source_alias, installation_id, capacity_period_id, source_prompt_id,
+                   source_session_fingerprint,
                    source_revision, observation_hash, revision_domain, parser_version, started_at, completed_at,
                    duration_ms, completion, input_analyzer_version, estimated_input_tokens,
                    input_line_count_bucket, input_code_block_count_bucket, input_attachment_count,
                    first_observed_at, last_observed_at, seen_spool)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               source.alias,
+              source.installation_id,
               observationPeriod.id,
               observation.source_prompt_id,
               hashOpaque(observation.source_session_id),

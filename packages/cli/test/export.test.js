@@ -70,13 +70,16 @@ test("exports one JSON document carrying every table and the provenance to read 
 
   // The export schema versions separately from the envelope: it becomes a frozen public
   // contract at 1.0, on its own timeline.
-  assert.equal(document.data.export.export_schema_version, "1");
+  // Version 2 added the client each prompt was attributed to, and the bindings that say what an
+  // attribution means. A consumer written against version 1 still finds every column it read.
+  assert.equal(document.data.export.export_schema_version, "2");
   assert.deepEqual(Object.keys(document.data.tables).sort(), [
     "capacity_periods",
     "prediction_evaluations",
     "predictions",
     "prompts",
     "restrictions",
+    "source_bindings",
     "usage_slices",
   ]);
   assert.equal(document.data.tables.prompts.length, 1);
@@ -234,6 +237,7 @@ test("a CSV export writes one file per table beside a manifest", async () => {
     "predictions.csv",
     "prompts.csv",
     "restrictions.csv",
+    "source_bindings.csv",
     "usage_slices.csv",
   ]);
   assert.equal((await stat(target)).mode & 0o777, 0o700);
@@ -242,7 +246,7 @@ test("a CSV export writes one file per table beside a manifest", async () => {
   const table = EXPORT_TABLES.find((candidate) => candidate.name === "prompts");
   assert.equal(prompts.split("\n")[0], table?.columns.join(","));
   assert.equal(prompts.trimEnd().split("\n").length, 2);
-  assert.equal(manifest.export_schema_version, "1");
+  assert.equal(manifest.export_schema_version, "2");
   assert.equal(manifest.provenance.plan_profiles[0].id, "generic");
 });
 

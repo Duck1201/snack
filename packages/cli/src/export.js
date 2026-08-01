@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
  * The export contract, versioned independently of the output envelope because it freezes as a
  * public contract at 1.0 on its own timeline.
  */
-export const EXPORT_SCHEMA_VERSION = "1";
+export const EXPORT_SCHEMA_VERSION = "2";
 
 /**
  * Exported tables, flat and joined by key rather than nested.
@@ -44,10 +44,27 @@ export const EXPORT_TABLES = [
        ORDER BY started_at, id`,
   },
   {
+    // What an `installation_id` on a prompt means. The attribution is an opaque id, so without the
+    // bindings a consumer can tell two clients apart but not say which is which; with them the join
+    // is one row per configured client rather than a client name repeated on every prompt.
+    //
+    // `client_installation` itself is not exported. Its `local_fingerprint` is derived from a local
+    // path, and an export is the one artifact that leaves the machine.
+    name: "source_bindings",
+    columns: ["source_alias", "installation_id", "adapter", "provider", "profile"],
+    sql: (filter) => `
+      SELECT source_alias, installation_id, adapter, provider, profile
+        FROM source_binding
+       WHERE 1 = 1
+         ${filter.source ? "AND source_alias = @source" : ""}
+       ORDER BY source_alias, installation_id`,
+  },
+  {
     name: "prompts",
     columns: [
       "id",
       "source_alias",
+      "installation_id",
       "capacity_period_id",
       "started_at",
       "completed_at",
@@ -70,6 +87,7 @@ export const EXPORT_TABLES = [
     sql: (filter) => `
       SELECT prompt_execution.id AS id,
              prompt_execution.source_alias AS source_alias,
+             prompt_execution.installation_id AS installation_id,
              prompt_execution.capacity_period_id AS capacity_period_id,
              prompt_execution.started_at AS started_at,
              prompt_execution.completed_at AS completed_at,

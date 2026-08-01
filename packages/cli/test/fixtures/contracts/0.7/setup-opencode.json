@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "command": "setup opencode",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "source": {
+      "alias": "work",
+      "installation_id": "33b0563c-232a-48f8-b898-76461caef6ea",
+      "adapter": "opencode",
+      "provider": "anthropic",
+      "profile": "default",
+      "plan": "pro",
+      "plan_profile": "generic"
+    },
+    "fingerprint": {
+      "family": "oc-sqlite-msgpart-v1",
+      "supported": true
+    },
+    "dry_run": {
+      "observations": 1
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

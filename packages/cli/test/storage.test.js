@@ -338,7 +338,14 @@ test("upgrading a 0.6 database to 0.7 keeps every row it already held", async ()
   seedZeroSixDatabase(paths.databaseFile);
   const before = tableCounts(paths.databaseFile);
 
-  const upgrade = await initializeDatabase(paths, { applicationVersion: "0.7.0", now });
+  // Pinned to the migrations 0.7 shipped. Left pointing at the whole directory this test would
+  // quietly become "0.6 upgrades to whatever is newest" the moment a later release added one, and
+  // the 0.6-to-0.7 leg it is named after would stop being covered by anything.
+  const upgrade = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
 
   assert.deepEqual(upgrade.applied, [10, 11]);
   assert.equal(upgrade.backupCreated, true);
@@ -348,13 +355,145 @@ test("upgrading a 0.6 database to 0.7 keeps every row it already held", async ()
   // rebuilds from scratch.
   assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 2);
   assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
+  // Stopped at 0.7 while the installed release ships more migrations, so `pending` is the honest
+  // reading and the one a user in this position would see: intact, upgradeable, not yet upgraded.
+  assert.deepEqual(await inspectDatabase(paths.databaseFile), {
+    exists: true,
+    integrity: "ok",
+    migrations: "pending",
+  });
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
+});
+
+test("upgrading a 0.7 database to 0.8 keeps every row it already held", async () => {
+  // 0.8 records which client produced each prompt, which is a column on the largest table in the
+  // database and the one four other tables cascade from. The rows a 0.7 install already holds are
+  // the thing that has to survive it.
+  const { paths } = await makeStorage();
+  const baseline = await copyMigrationsThrough(11);
+  await initializeDatabase(paths, { migrationsDir: baseline, applicationVersion: "0.7.0", now });
+  // Every column this seed writes still exists at 011, so the rows a 0.6 binary left behind are
+  // also the rows a 0.7 binary holds; what differs is the schema they now sit in.
+  seedZeroSixDatabase(paths.databaseFile);
+  const before = tableCounts(paths.databaseFile);
+
+  const upgrade = await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+
+  assert.deepEqual(upgrade.applied, [12]);
+  assert.equal(upgrade.backupCreated, true);
+  const after = tableCounts(paths.databaseFile);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 1);
+  assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
   assert.deepEqual(await inspectDatabase(paths.databaseFile), {
     exists: true,
     integrity: "ok",
     migrations: "current",
   });
+});
+
+test("a 0.6 database reaches 0.8 through 0.7 without a reset", async () => {
+  // 0.6 is the guaranteed migration baseline, and the promise is that it stays reachable as the
+  // chain grows rather than only from whichever release last thought about it. An install that
+  // skipped 0.7 entirely takes the same path, one upgrade at a time.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(9),
+    applicationVersion: "0.6.0",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  const before = tableCounts(paths.databaseFile);
+
+  const toZeroSeven = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
+  const toZeroEight = await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+
+  assert.deepEqual(toZeroSeven.applied, [10, 11]);
+  assert.deepEqual(toZeroEight.applied, [12]);
+  const after = tableCounts(paths.databaseFile);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 3);
+  assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
+  // The cursor is what makes it an upgrade rather than a reset: a database that forgot where its
+  // reader stopped would re-ingest a whole history and describe usage that never happened.
   assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
 });
+
+test("a prompt stored before the second client arrived keeps an honest unknown attribution", async () => {
+  // The upgrade can only attribute a prompt when its source has one binding, because then there is
+  // one client it could have come from. Where two clients already shared a source, naming either
+  // one would be a guess, and a guess is worse than the gap: it would be counted as evidence about
+  // a client that may never have run that prompt.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(11),
+    applicationVersion: "0.7.0",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  seedSecondClientOnSharedSource(paths.databaseFile);
+
+  await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+
+  const attributions = readAttributions(paths.databaseFile);
+  // `prompt-1` sits on the shared alias and stays unknown; `prompt-2` sits on a source only one
+  // client is bound to and is attributed to that client.
+  assert.deepEqual(attributions, [
+    { source_prompt_id: "prompt-1", installation_id: null },
+    { source_prompt_id: "prompt-2", installation_id: "99999999-2222-4333-8444-555555555555" },
+  ]);
+});
+
+/**
+ * Add a second client bound to the same capacity source, plus a source only one client feeds, so
+ * the upgrade has both an ambiguous and an unambiguous case to decide.
+ *
+ * @param {string} databaseFile
+ */
+function seedSecondClientOnSharedSource(databaseFile) {
+  const database = new Database(databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    database.exec(`
+      INSERT INTO client_installation (id, client_kind, local_fingerprint, created_at, last_seen_at)
+        VALUES ('99999999-2222-4333-8444-555555555555', 'claude', 'fingerprint-2',
+                '${now.toISOString()}', '${now.toISOString()}');
+      INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+        VALUES ('work', '99999999-2222-4333-8444-555555555555', 'claude', 'anthropic', 'default');
+      INSERT INTO capacity_source (alias, created_at) VALUES ('personal', '${now.toISOString()}');
+      INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+        VALUES ('personal', '99999999-2222-4333-8444-555555555555', 'claude', 'anthropic',
+                'default');
+      INSERT INTO capacity_period (id, source_alias, provider, profile, plan, started_at)
+        VALUES (2, 'personal', 'anthropic', 'default', 'pro', '${now.toISOString()}');
+      INSERT INTO prompt_execution
+          (id, source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+           source_revision, observation_hash, revision_domain, parser_version, started_at,
+           completed_at, duration_ms, completion, first_observed_at, last_observed_at)
+        VALUES (2, 'personal', 2, 'prompt-2', 'session-hash-2', '1', 'hash-2', 'claude-uuid-v1',
+                'cc-jsonl-turntree-v1', '2026-01-02T02:00:00.000Z', '2026-01-02T02:00:01.000Z',
+                1000, 'completed', '${now.toISOString()}', '${now.toISOString()}');
+    `);
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile */
+function readAttributions(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT source_prompt_id, installation_id FROM prompt_execution ORDER BY source_prompt_id",
+      )
+      .all();
+  } finally {
+    database.close();
+  }
+}
 
 /**
  * Fill a database at the 0.6 schema with one of every row an upgrade has to preserve, including
