@@ -1,10 +1,10 @@
 # @snack-ai/cli
 
-## 1.0.0-rc.0
+## 1.0.0
 
 ### Major Changes
 
-- First stable release.
+- 333cac9: First stable release.
 
   Six surfaces are public contracts under strict SemVer from here: the documented commands and
   flags, the exit-code categories, the `--json` envelope and its per-command payload schemas, the

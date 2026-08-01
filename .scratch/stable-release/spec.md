@@ -1,7 +1,7 @@
 # Stage 10 — First Stable Release
 
-Status: Wave 1 merged (PR #26). Wave 2 cut to `1.0.0-rc.0` and gated locally, awaiting merge and a
-dispatch. Wave 3 pending — its staging gate is built and passing.
+Status: Wave 1 merged (PR #26). Waves 2 and 3 complete on `stage-10-wave2-rc`: both packages at
+`1.0.0`, every gate green, no release candidate published. Awaiting merge and the npm publish.
 
 Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 `docs/architecture.md`; this file records what was decided while building it and what remains.
@@ -115,17 +115,15 @@ serves and the repository README GitHub serves. Permanent, not scoped to 1.0. Th
 is the only documentation an npm installer ever sees, and the Stage 9 lesson applies unchanged: the
 question is never whether the behavior changed, but whether anything named in `files` changed.
 
-## Wave 2 — the release candidate
+## Wave 2 — the release candidate, cut but never published
 
-Cut and gated locally. **The dispatch is the user's**; an agent cannot publish.
+Both packages were versioned to `1.0.0-rc.0` and every gate was run against that candidate. Then, by
+decision, the RC publication was **skipped entirely** and the version went straight to `1.0.0`. No
+package has ever carried the `rc` tag.
 
-Both packages are at `1.0.0-rc.0`, `release.yml` confirms on `publish-1.0.0-rc.0`, and `candidate`
-is now one of its `dist_tag` options because Wave 3 publishes under it before `latest` moves by
-hand.
-
-**The number is `rc.0`, not `rc.1`.** That is what Changesets produces on entering pre mode, and the
-prose was corrected to match the artifact rather than the artifact bent to match the prose. A
-version invented to fit a document is a version that drifts from it later.
+**The number was `rc.0`, not `rc.1`,** because that is what Changesets produces on entering pre
+mode. The prose was corrected to match the artifact rather than the artifact bent to match the
+prose: a version invented to fit a document is a version that drifts from it later.
 
 ### The bump found a defect the whole history had hidden
 
@@ -134,51 +132,78 @@ this one was final, so no test had ever run against a prerelease and the assumpt
 challenged.
 
 Checked before touching it, because the same assertion in the **published** schema would have been a
-real defect: an RC emitting an export invalid against its own frozen contract. It is not —
-`export.schema.json` declares `cli_version` as a plain string, so `1.0.0-rc.0` is a valid document
-and only the test was wrong. It now asserts equality with the manifest's version, which is the
-stronger claim anyway: the export must name the build that produced it, where the regular expression
-only ever checked that it looked like a version.
+real defect: an artifact emitting an export invalid against its own frozen contract. It is not —
+`export.schema.json` declares `cli_version` as a plain string, so only the test was wrong. It now
+asserts equality with the manifest's version, which is the stronger claim anyway: the export must
+name the build that produced it, where the regular expression only ever checked that it looked like
+a version.
 
-### Gates, all green against the candidate
+**This is the wave's whole return.** The RC was never published, so cutting it bought exactly one
+thing — and that thing was a defect ten releases of green builds had not been able to surface.
+Running the gates against a cut version is a different act from running them against the tree.
 
-`npm run check` (412 + 4 + 4), `pack:smoke` on `snack-ai-cli-1.0.0-rc.0.tgz` (57 files),
-`release:check`, `release:evidence` re-run so the recorded version matches the release.
+## Wave 3 — the stable release
 
-`upgrade:smoke`: all five chains, `0.6.0` / `0.6.1` / `0.7.0` / `0.8.2` / `0.9.0` → `1.0.0-rc.0`,
+The version-only step, from the gated candidate source. Both packages at `1.0.0`, `release.yml`
+confirming on `publish-1.0.0`, and `candidate` among its `dist_tag` options for the promotion.
+
+**The `## 1.0.0-rc.0` sections were removed from both changelogs.** Changesets wrote them on the pre
+version bump, and they announce a version nobody can install. That is the same defect the
+unpublished `0.3.0` left behind and which `PLAN.md` still records; shipping it again in the 1.0
+tarball would have been careless in a way this project has already paid for once.
+
+### What skipping the RC costs, stated plainly
+
+Recorded in `docs/compatibility.md`, `docs/architecture.md` and `PLAN.md` rather than quietly
+dropped, because the public beta published the original promise.
+
+- **Calendar time under real use.** The class of defect that only appears when people run something
+  for a week.
+- **The only rehearsal of the npm publish path itself** — provenance signing, trusted publishing,
+  dist-tag resolution, and a real `npm install` from the public registry. The staging registry
+  proves a tarball resolves and installs; it cannot prove npm's own workflow does. Stage 3 of this
+  project reported a successful publish from a job its own gate had skipped, which is exactly the
+  class of failure only publishing reveals. `1.0.0` is the first artifact to traverse that path, and
+  it does so as the final release rather than as a candidate.
+
+Every artifact-level gate stands and was run.
+
+### Gates, green against `1.0.0`
+
+`npm run check` — zero failures across 412 CLI, 4 plugin and 4 script tests. `pack:smoke` on
+`snack-ai-cli-1.0.0.tgz`, 57 files. `release:check`. `release:evidence` re-run so the recorded
+version is the released one.
+
+`upgrade:smoke`: all five chains, `0.6.0` / `0.6.1` / `0.7.0` / `0.8.2` / `0.9.0` → `1.0.0`,
 integrity `ok` on each. Three migrations from the `0.6` line, one from `0.7`, none from `0.8.2`
-onward — which is the expected shape, since Stage 10 adds no migration.
+onward — the expected shape, since Stage 10 adds no migration.
 
-`release:staging`: both tarballs published to an isolated verdaccio, the CLI installed by name and
-version over a real `0.6.0` database, `doctor` clean.
+`release:staging`: both tarballs published to an isolated verdaccio with uplinks disabled, the CLI
+installed **by name and version** through it over a real `0.6.0` database, `doctor` clean, and the
+served tarball's digest compared against the staged one.
 
 ```
-snack-ai-cli-1.0.0-rc.0.tgz       sha256:b751ec5aa2362dd66efdb96570313c11b7a57cb3f2d82099624a403ddf0af3c3
-snack-ai-opencode-1.0.0-rc.0.tgz  sha256:789ef7ee78e0bb67143d492a5b9a00eaccec861c9ab7da2baeb7259bc010f0fe
+snack-ai-cli-1.0.0.tgz       sha256:ef37befdaa246d436d5e2082b9b6f0d800b7a7326ed0c4a4830c83b34eef702a
+snack-ai-opencode-1.0.0.tgz  sha256:fd9790874869f15a132e1c140933e1641e80fb8dd0f413dbdd8ac2d78a16a594
 ```
 
-`release:evidence` and `release:staging` measured those digests independently and agree, which is
-the cross-check both exist for. Publish these exact tarballs; a different digest is a different
+`release:evidence` and `release:staging` measured those independently and agree, which is the
+cross-check both exist for. Publish these exact tarballs; a different digest is a different
 artifact.
 
-### Still to do in this wave
+### The steps an agent cannot take
 
-Merge, then dispatch `release.yml` with `dist_tag: rc`. Then re-run the smoke suites against the
-**published** artifacts rather than these workspace builds, and record `## 1.0.0-rc.0` in
-`docs/release/identity.md` after `npm view` agrees — never from the workflow's own status.
-
-Check `gh run list` before dispatching. Stage 9 dispatched twice, six minutes apart, because neither
-party checked whether the other had.
-
-## Wave 3 — promotion (pending)
-
-`npm run release:staging` exists and passes: verdaccio on a temp port with uplinks disabled, both
-tarballs published into it, the CLI installed **by name and version** through it over a `0.6.0`
-database, and the served tarball's digest compared against the staged one. Anonymous publish is
-deliberate — the registry lives in a temp directory for one run, and an account only adds the
-interactive `npm adduser` to the things that can fail on the way to the gate.
-
-Then: the version-only commit, the checksum comparison against what npm serves, `latest` and
-`stable` moved by hand, `rc` and `candidate` removed, `v1.0.0` tagged.
-
-An agent cannot merge, publish, or move a dist-tag. Those are the user's steps.
+1. Merge the pull request.
+2. Dispatch `release.yml` from `main` with `dist_tag: candidate` and confirmation `publish-1.0.0`.
+   Check `gh run list` first — Stage 9 dispatched twice, six minutes apart, because neither party
+   checked whether the other had.
+3. Verify the published tarball's digest against the two above. A mismatch means the artifact on the
+   registry is not the one that passed the gates, and it is fixed on the branch rather than patched
+   in place.
+4. By hand, with an authenticated npm session — trusted publishing authorizes a publish and not a
+   `dist-tag` call, which answers `E401` even for the package just published: move `latest` to
+   `1.0.0` on both packages, move `stable` to `1.0.0`, remove `candidate`.
+5. `npm view @snack-ai/cli dist-tags` and the same for the plugin, before writing any document.
+6. Tag `v1.0.0`, GitHub release titled `v1.0.0` with the feature story in the body.
+7. Write `docs/release/identity.md ## 1.0.0` from `npm view` output, never from the workflow's own
+   status — a run has reported success on a skipped job before.

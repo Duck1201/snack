@@ -804,7 +804,7 @@ Release channels:
 
 - CLI `0.1-0.5` publishes to npm `next`;
 - CLI `0.6.0` is the SNACK MVP and becomes `latest`;
-- CLI `0.7-0.9` each take `latest` on release, so a plain install gets the newest supported product rather than a version development has moved past; `1.0.0-rc.N` publishes to `rc`, because a release candidate is not the newest supported product and `next` is not a channel this project keeps;
+- CLI `0.7-0.9` each take `latest` on release, so a plain install gets the newest supported product rather than a version development has moved past; `rc` is reserved for a release candidate and has never been used, because none was published; `next` is not a channel this project keeps;
 - `stable` points at the newest release whose surface the project is willing to hold still, and moves only by deliberate decision, never by a release;
 - the plugin first publishes its own `0.1.0` to `next` in Stage 3, and its MVP-compatible version becomes plugin `latest` in Stage 6;
 - the plugin follows the same rule as the CLI from `0.7.0` on: its newest supported version holds `latest`, and it carries an `rc` tag only while a release candidate is outstanding;
@@ -855,7 +855,11 @@ being reported identically.
 
 Public contracts freeze in Stage 9, and [compatibility.md](./compatibility.md) is the record of what was frozen. Only backward-compatible implementation/support-matrix changes, fixes, diagnostics, tests, and documentation are permitted afterward. A public schema or semantic change resets Stage 9 and all of its gates; Stage 10 confirms rather than redefines the frozen contracts.
 
-`1.0.0-rc.N` is mandatory. After seven days without P0/P1, final source code is unchanged; a version/changelog/release-metadata-only commit produces checksumed final tarballs. They pass direct `0.6.0 -> 1.0.0` and exact-artifact smoke/integrity gates in an isolated staging registry. A failure discards the publicly unpublished final tarballs, requires a new RC, and restarts soak. Only approved tarballs publish to official npm under temporary `candidate`; checksum verification then permits `latest` promotion and retires the `rc` tag.
+A release candidate and a seven-day soak were both required and were both dropped by decision before `1.0.0`; see the Stage 10 notes in [PLAN.md](../PLAN.md). `1.0.0-rc.0` was cut and gated locally and never published, so no package ever carried the `rc` tag.
+
+What remains is the artifact path, unchanged: a version/changelog/release-metadata-only commit produces checksummed final tarballs from the gated candidate source. They pass direct `0.6.0 -> 1.0.0` and exact-artifact smoke/integrity gates in an isolated staging registry. A failure discards the publicly unpublished final tarballs and is fixed on the release branch before any npm publish. Only approved tarballs publish to official npm under temporary `candidate`; checksum verification then permits `latest` promotion and retires the temporary tag.
+
+What was given up with the candidate is the only rehearsal of the npm publish path itself — provenance signing, trusted publishing, dist-tag resolution, and a real install from the public registry. The staging registry proves a tarball resolves and installs; it cannot prove npm's own workflow does.
 
 ## 19. Evolution Boundaries
 

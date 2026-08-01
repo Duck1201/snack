@@ -127,13 +127,24 @@ major. Until then the Stage 9 reset rule below is what governs, and it governed 
 change to any public schema or semantic during the audit would have reset the freeze and required a
 new `0.9.x` rather than being folded into `1.0.0`.
 
-**No soak.** PLAN.md originally gated promotion on a seven-day release-candidate soak with no
-P0/P1. That gate was dropped by decision: `1.0.0-rc.0` and the promotion happen the same day. Every
-artifact-level gate is unchanged — the isolated staging registry, the checksums, the provenance, and
-the migration chains all still run against the published artifacts — and what is given up is calendar
-time under real use, which is the one class of defect the remaining gates cannot reach. Recorded here
-because the beta published the original promise, and a criterion quietly dropped is worse than one
-openly changed.
+**No release candidate, and no soak.** PLAN.md originally required publishing `1.0.0-rc.N` to the
+`rc` channel and soaking it for seven days with no P0/P1 before promotion. Both were dropped by
+decision. `1.0.0-rc.0` was cut and every gate was run against it, but it was never published, and
+the version went straight to `1.0.0`. No package has ever carried the `rc` tag.
+
+This is recorded rather than quietly removed, because the beta published the original promise, and a
+criterion silently dropped is worse than one openly changed. Two things were given up:
+
+- **calendar time under real use** — the class of defect that only appears when people run something
+  for a week;
+- **the only rehearsal of the npm publish path itself** — provenance signing, trusted publishing,
+  dist-tag resolution, and a real `npm install` from the public registry. The staging registry
+  proves a tarball resolves and installs; it cannot prove npm's own workflow does. `1.0.0` is the
+  first artifact to traverse that path, and it does so as the final release.
+
+Every artifact-level gate is unchanged and did run: the isolated staging registry, per-tarball
+checksums, CycloneDX SBOMs, a double-pack reproducibility comparison, the migration chains from
+every published release since the `0.6.0` floor, and the three-platform CI matrix.
 
 ## Upgrading from 0.6+
 
