@@ -40,6 +40,62 @@ const LABEL = 13;
  * @property {string[]} caveats
  */
 
+/**
+ * One measured token dimension, or the record that nothing was measured.
+ *
+ * The two shapes are the report's own: `buildSourceStats` omits `value` entirely when a source
+ * never reported that dimension, rather than writing a zero it did not observe.
+ *
+ * @typedef {{value: number, unit: string, sample_size: number, missing: number}
+ *   | {unit: string, sample_size: number, missing: number}} Dimension
+ */
+
+/**
+ * One analysis horizon's row in the statistics report.
+ *
+ * @typedef {object} HorizonView
+ * @property {string} horizon
+ * @property {{count: number, eligible: number, excluded: number}} prompts
+ * @property {{by_class: Record<string, number>}} restrictions
+ * @property {Record<string, Dimension>} dimensions
+ * @property {{by_currency: Record<string, string | number>, sample_size: number, missing: number}} cost
+ * @property {{unit: string, sample_size: number, missing: number, complete: boolean} & ({p50: number, p90: number} | {status: string})} duration
+ * @property {{value: number, unit: string}} effective_sample_size
+ * @property {{as_of: string | null}} freshness
+ * @property {{model: string, slices: {count: number, unit: string}, dimensions: Record<string, Dimension>, cost: {by_currency: Record<string, string | number>}}[]} [by_model]
+ */
+
+/**
+ * What `renderStats` reads, stated as its own shape for the same reason `SourceStatusView` is:
+ * a layout can then be tested against a written-out object instead of against a database.
+ *
+ * @typedef {object} StatsReportView
+ * @property {{alias: string, provider: string, plan: string, plan_profile: {id: string, version: string, provenance: string, as_of: string | null}}} source
+ * @property {{band: string, baseline_kind: string, policy_version: string, trend?: {status: string, direction?: string | null, reason?: string | null}}} pressure
+ * @property {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string}} calibration
+ * @property {HorizonView[]} horizons
+ * @property {ClientComparisonView} [by_client]
+ */
+
+/**
+ * One calibration stream. The score and its sample size travel together in one object because a
+ * score without its sample size invites over-reading, and `summarizeCalibration` reports a null
+ * score with a zero sample rather than a zero score.
+ *
+ * @typedef {{status?: string, excluded?: number, brier: {value: number | null, sample_size: number}, interval: {coverage: number | null, mean_width?: number | null, sample_size: number}, forecasts?: number}} CalibrationStream
+ */
+
+/** One model's usage inside one horizon, carried with the horizon it belongs to. */
+/** @typedef {{horizon: HorizonView, entry: NonNullable<HorizonView["by_model"]>[number]}} ModelRow */
+
+/**
+ * @typedef {object} ClientComparisonView
+ * @property {{client: string | null, installation_id?: string, restricted: number, eligible: number, restriction_share: {lower: number, upper: number}, difference: string}[]} groups
+ * @property {{prompts: number}} unattributed
+ * @property {string | null} reason
+ * @property {string} policy_version
+ */
+
 /** @typedef {Exclude<Parameters<typeof styleText>[0], readonly unknown[]>} Style */
 
 /**
@@ -121,6 +177,394 @@ const OVERVIEW = [
     style: (status) => (status.synchronization.status === "ok" ? undefined : "red"),
   },
 ];
+
+/**
+ * The counting columns of the statistics report, one row per analysis horizon.
+ *
+ * Horizons are rows because comparing them is the only question this report exists to answer, and
+ * the old shape -- every measurement for one horizon on one run-on line -- made that comparison a
+ * matter of reading two paragraphs and holding eight numbers.
+ *
+ * @type {{header: string, align: "left" | "center", read: (horizon: HorizonView) => string}[]}
+ */
+const WINDOWS = [
+  { header: "WINDOW", align: "left", read: (horizon) => horizonLabel(horizon.horizon) },
+  { header: "PROMPTS", align: "center", read: (horizon) => String(horizon.prompts.count) },
+  { header: "COUNTED", align: "center", read: (horizon) => String(horizon.prompts.eligible) },
+  {
+    header: "REFUSED",
+    align: "center",
+    // The class is named beside the count rather than dropped or footnoted. "3" alone invites the
+    // reader to assume the worst kind of refusal, and which kind it was is the whole content.
+    read: (horizon) => {
+      const classes = Object.entries(horizon.restrictions.by_class);
+      if (classes.length === 0) return "—";
+      return classes.map(([name, count]) => `${count} ${plainly(name)}`).join(", ");
+    },
+  },
+  { header: "SET ASIDE", align: "center", read: (horizon) => String(horizon.prompts.excluded) },
+  {
+    header: "COST",
+    align: "center",
+    // Never totalled across currencies and never converted between them: the report has no rate to
+    // convert with, and inventing one would be a number the user cannot check. A source that named
+    // no currency is grouped under an explicit unknown rather than dropped.
+    read: (horizon) => {
+      const currencies = Object.entries(horizon.cost.by_currency);
+      if (currencies.length === 0) return "—";
+      return currencies.map(([currency, amount]) => `${amount} ${currency}`).join(", ");
+    },
+  },
+  {
+    header: "TYPICAL",
+    align: "center",
+    read: (horizon) => ("p50" in horizon.duration ? duration(horizon.duration.p50) : "—"),
+  },
+  {
+    header: "SLOWEST 10%",
+    align: "center",
+    read: (horizon) => ("p90" in horizon.duration ? duration(horizon.duration.p90) : "—"),
+  },
+];
+
+/**
+ * The stored token dimensions, each in its own column under its own name.
+ *
+ * `docs/specification/observation.md` forbids summing token classes into one consumption score:
+ * human output may show subtotals, but a label must preserve its dimension. A folded "tokens in"
+ * column adding input to cache reads would be exactly that sum, so the tokens get a second table
+ * instead -- seven columns of ten-digit numbers cannot share a row with the counts and still fit a
+ * terminal.
+ *
+ * @type {{header: string, align: "left" | "center", read: (horizon: HorizonView) => string}[]}
+ */
+const TOKENS = [
+  { header: "WINDOW", align: "left", read: (horizon) => horizonLabel(horizon.horizon) },
+  ...["input", "output", "reasoning", "cache_read", "cache_write"].map((dimension) => ({
+    header: plainly(dimension).toUpperCase(),
+    align: /** @type {"center"} */ ("center"),
+    read: (/** @type {HorizonView} */ horizon) => {
+      const measured = horizon.dimensions[`${dimension}_tokens`];
+      // A dimension the source never reported prints the same dash an absent value prints
+      // everywhere else, rather than a zero it did not measure.
+      return measured && "value" in measured ? count(measured.value) : "—";
+    },
+  })),
+];
+
+/**
+ * Render the statistics report for one capacity source.
+ *
+ * @param {StatsReportView} report
+ * @param {{verbose?: boolean}} options
+ * @returns {string}
+ */
+export function renderStats(report, options) {
+  const verbose = options.verbose === true;
+  const plain = painter(false);
+  const profile = report.source.plan_profile;
+  // A source with too little baseline gets no trend at all, and the headline still has to read as a
+  // sentence rather than as `undefined`. `computeUsageTrend` also returns a trend whose direction is
+  // null with a stated reason, which is not the same thing as no trend and reads as its status.
+  const trend = report.pressure.trend;
+  const moving = trend ? (trend.direction ?? trend.status) : "no trend yet";
+  const lines = [
+    `${report.source.alias} · ${report.source.provider} ${report.source.plan} · ${profile.id}@${profile.version} · pressure ${report.pressure.band}, ${moving}`,
+    "",
+    ...table(WINDOWS, report.horizons, plain),
+    "",
+    ...table(TOKENS, report.horizons, plain),
+    ...(verbose
+      ? [
+          "",
+          ...dimensionDetail(report.horizons, plain),
+          "",
+          ...modelBreakdown(report.horizons, plain),
+        ]
+      : []),
+    "",
+    ...describeCalibration(report.calibration, verbose),
+    describeFreshness(report.horizons),
+    ...(report.by_client ? ["", ...describeClientComparison(report.by_client)] : []),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * How current the whole report is, as one line rather than a column.
+ *
+ * Every horizon carries its own `as_of`, and a column of RFC 3339 timestamps would be the widest
+ * thing on the page to say one thing four times. The newest one bounds all of them: no horizon can
+ * describe an observation that arrived after the last synchronization.
+ *
+ * @param {HorizonView[]} horizons
+ */
+function describeFreshness(horizons) {
+  const seen = horizons
+    .map((horizon) => horizon.freshness.as_of)
+    .filter((/** @type {string | null} */ as_of) => as_of !== null)
+    .sort();
+  const newest = seen.at(-1);
+  return newest === undefined ? "  nothing observed yet" : `  observed up to ${newest}`;
+}
+
+/**
+ * Every dimension with the sample it was measured from and what was missing.
+ *
+ * `docs/specification/analysis.md`: every reported statistic carries its unit and its sample size,
+ * and is never a bare number whose meaning has to be inferred. The default tables carry the value
+ * because that is what the reader came for; this is where the value earns its trust, and it is why
+ * moving the sample sizes out of the default reading is a curation rather than a loss.
+ *
+ * A dimension with nothing measured reports `unknown`, never a zero it did not observe.
+ *
+ * @param {HorizonView[]} horizons
+ * @param {(value: string, style?: Style) => string} paint
+ * @returns {string[]}
+ */
+function dimensionDetail(horizons, paint) {
+  const rows = horizons.flatMap((horizon) =>
+    Object.entries(horizon.dimensions).map(([dimension, measured]) => ({
+      horizon,
+      dimension,
+      measured,
+    })),
+  );
+  if (rows.length === 0) return ["  no dimension observed yet"];
+  return table(
+    [
+      { header: "WINDOW", align: "left", read: ({ horizon }) => horizonLabel(horizon.horizon) },
+      { header: "DIMENSION", align: "left", read: ({ dimension }) => dimension },
+      {
+        header: "VALUE",
+        align: "center",
+        read: ({ measured }) => ("value" in measured ? String(measured.value) : "unknown"),
+      },
+      { header: "UNIT", align: "center", read: ({ measured }) => measured.unit },
+      { header: "SAMPLE", align: "center", read: ({ measured }) => String(measured.sample_size) },
+      { header: "MISSING", align: "center", read: ({ measured }) => String(measured.missing) },
+    ],
+    rows,
+    paint,
+  );
+}
+
+/**
+ * Every horizon's usage split by the model that served it.
+ *
+ * One table across all horizons rather than one per horizon, so the window stays a column and the
+ * comparison the report is built around survives into the detail. Slices rather than prompts,
+ * because one prompt can span several models and counting it once per model would report more
+ * prompts than were made.
+ *
+ * @param {HorizonView[]} horizons
+ * @param {(value: string, style?: Style) => string} paint
+ * @returns {string[]}
+ */
+function modelBreakdown(horizons, paint) {
+  const rows = horizons.flatMap((horizon) =>
+    (horizon.by_model ?? []).map(
+      (/** @type {NonNullable<HorizonView["by_model"]>[number]} */ entry) => ({ horizon, entry }),
+    ),
+  );
+  if (rows.length === 0) return ["  no usage attributed to a named model yet"];
+  const dimensions = [...new Set(rows.flatMap(({ entry }) => Object.keys(entry.dimensions)))];
+  return table(
+    [
+      {
+        header: "WINDOW",
+        align: "left",
+        read: ({ horizon }) => horizonLabel(horizon.horizon),
+      },
+      { header: "MODEL", align: "left", read: ({ entry }) => entry.model },
+      {
+        header: "SLICES",
+        align: "center",
+        read: ({ entry }) => String(entry.slices.count),
+      },
+      ...dimensions.map((dimension) => ({
+        header: plainly(dimension.replace(/_tokens$/u, "")).toUpperCase(),
+        align: /** @type {"center"} */ ("center"),
+        read: (/** @type {ModelRow} */ { entry }) => {
+          const measured = entry.dimensions[dimension];
+          return measured && "value" in measured ? count(measured.value) : "—";
+        },
+      })),
+    ],
+    rows,
+    paint,
+  ).concat(`  counted in ${rows[0]?.entry.slices.unit ?? "usage slices"}`);
+}
+
+/**
+ * The per-client comparison, as counts against their denominators.
+ *
+ * Deliberately never a percentage. A refusal share printed as "7% refused" reads as a measurement
+ * of the provider's real behaviour, which is exactly the claim this product never makes; "3 of 418
+ * counted" says the same thing while showing how much evidence is behind it. Prompts that could not
+ * be attributed are reported rather than assigned.
+ *
+ * @param {ClientComparisonView} comparison
+ * @returns {string[]}
+ */
+function describeClientComparison(comparison) {
+  if (comparison.groups.length === 0) {
+    return [`  by client: no attributed prompts (policy ${comparison.policy_version})`];
+  }
+  /** @type {Record<string, string>} */
+  const verdicts = {
+    higher_than_others: "refused more often than the others",
+    lower_than_others: "refused less often than the others",
+    not_detected: "difference not detected",
+    not_comparable: "not enough counted prompts to compare",
+  };
+  const lines = comparison.groups.map(
+    (/** @type {ClientComparisonView["groups"][number]} */ group) => {
+      // With nothing counted the interval is the untouched prior, not a measurement of anything.
+      // Printing it beside "0 of 0" would dress a starting assumption up as an observation.
+      const interval =
+        group.eligible === 0
+          ? ""
+          : ` [${group.restriction_share.lower.toFixed(3)}-${group.restriction_share.upper.toFixed(3)}]`;
+      return `  ${group.client ?? group.installation_id}  ${group.restricted} of ${group.eligible} counted${interval} · ${verdicts[group.difference] ?? group.difference}`;
+    },
+  );
+  if (comparison.unattributed.prompts > 0) {
+    lines.push(`  ${comparison.unattributed.prompts} prompts could not be attributed to a client`);
+  }
+  return lines;
+}
+
+/**
+ * What the calibration stream is worth, said as a sentence before it is said as a statistic.
+ *
+ * `live brier 0.002 (sample 131, coverage 0.00)` is four statistics and no sentence, and the reader
+ * is a developer deciding whether to trust an estimate rather than a modeller auditing one. The
+ * default reports how much has been checked, which is the part that answers that question; every
+ * digit survives under `--verbose`, and none of it is ever called accuracy -- `CONTEXT.md` puts
+ * that word, along with confidence and certainty, on this term's _Avoid_ list precisely because it
+ * promises something a Brier score does not.
+ *
+ * @param {StatsReportView["calibration"]} calibration
+ * @param {boolean} verbose
+ * @returns {string[]}
+ */
+function describeCalibration(calibration, verbose) {
+  const snapshots = calibration.snapshots ?? 0;
+  const headline =
+    snapshots === 0
+      ? "  no forecasts checked against an outcome yet"
+      : `  ${snapshots} forecasts checked against what happened next`;
+  if (!verbose) return [headline];
+  return [
+    headline,
+    `  live      ${describeStream(calibration.live)}`,
+    `  backtest  ${describeStream(calibration.backtest)}`,
+    `  policy    ${calibration.policy_version}, ${calibration.undelivered_attempts} undelivered`,
+  ];
+}
+
+/**
+ * One calibration stream's figures, or the reason there are none.
+ *
+ * Reported as not available rather than as zero: a Brier score of zero is a perfect forecaster, and
+ * a stream with no outcomes yet is the opposite of that claim.
+ *
+ * @param {CalibrationStream | null | undefined} stream
+ */
+function describeStream(stream) {
+  if (!stream || stream.brier.value === null) return "not available yet";
+  return `brier ${stream.brier.value}, sample ${stream.brier.sample_size}, coverage ${stream.interval.coverage ?? "not available"}`;
+}
+
+/**
+ * Draw one header and one row per record, every column fitted to what it actually holds.
+ *
+ * Fitted rather than fixed, unlike the status overview: there the columns hold a closed set of
+ * words and a fixed width keeps two runs comparable, while here they hold counts whose magnitude is
+ * the reader's own and cannot be guessed from the outside.
+ *
+ * @template T
+ * @param {{header: string, align: "left" | "center", read: (record: T) => string}[]} columns
+ * @param {T[]} records
+ * @param {(value: string, style?: Style) => string} paint
+ * @returns {string[]}
+ */
+function table(columns, records, paint) {
+  const widths = columns.map((column) =>
+    Math.max(...[column.header, ...records.map(column.read)].map(measure)),
+  );
+  const rows = [
+    columns.map((column, index) =>
+      place(column.header, widths[index] ?? 0, column.align, paint, "dim"),
+    ),
+    ...records.map((record) =>
+      columns.map((column, index) =>
+        place(column.read(record), widths[index] ?? 0, column.align, paint),
+      ),
+    ),
+  ];
+  return rows.map((cells) => `  ${cells.join("  ")}`.trimEnd());
+}
+
+/**
+ * An ISO 8601 duration as the word a person uses for that span.
+ *
+ * `PT1H` and `P7D` are the right keys in configuration and in `--json`, where something parses
+ * them. A column header is read, not parsed.
+ *
+ * @param {string} horizon
+ */
+function horizonLabel(horizon) {
+  const parsed = /^P(?:(\d+)([DW])|T(\d+)([HMS]))$/u.exec(horizon);
+  // Anything the pattern does not cover is printed as configured. A horizon nobody anticipated is
+  // better read as its own ISO string than as a guess at what it meant.
+  if (parsed === null) return horizon;
+  const [, span, spanUnit, time, timeUnit] = parsed;
+  return `${span ?? time}${(spanUnit ?? timeUnit ?? "").toLowerCase()}`;
+}
+
+/**
+ * A count at the magnitude it actually reaches, with the unit that names it.
+ *
+ * `5104351653` is read by counting digits with a fingertip. The scale is decimal -- K, M, G -- and
+ * not binary, because these are counts of tokens rather than sizes in memory, and three significant
+ * figures is where a token count stops carrying meaning: nobody acts on the difference between
+ * 5.10G and 5.104G.
+ *
+ * @param {number} value
+ */
+function count(value) {
+  const units = ["", "K", "M", "G", "T"];
+  let scaled = value;
+  let unit = 0;
+  while (Math.abs(scaled) >= 1000 && unit < units.length - 1) {
+    scaled /= 1000;
+    unit += 1;
+  }
+  if (unit === 0) return String(value);
+  const digits = scaled < 10 ? 2 : scaled < 100 ? 1 : 0;
+  return `${scaled.toFixed(digits)}${units[unit]}`;
+}
+
+/**
+ * Milliseconds as the span a person would say out loud.
+ *
+ * `p90 448230.39999999997ms` is a float that escaped a percentile calculation and a unit nobody
+ * converts in their head. Below a minute the seconds keep one decimal, because the difference
+ * between 1.2s and 1.8s is the difference the reader came for; above it, tenths of a second are
+ * noise against minutes.
+ *
+ * @param {number} milliseconds
+ */
+function duration(milliseconds) {
+  const seconds = milliseconds / 1000;
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${String(Math.round(seconds % 60)).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
+}
 
 /**
  * Render every capacity source as one row under one header.

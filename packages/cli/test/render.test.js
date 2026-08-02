@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderStatus, renderStatusTable, sparkline } from "../src/render.js";
+import { renderStats, renderStatus, renderStatusTable, sparkline } from "../src/render.js";
 
 test("a series of scores draws one block per window, low to high", () => {
   // Scores are percentiles in [0, 1] -- `computeUsagePressure().score` -- so the mapping is fixed
@@ -220,6 +220,236 @@ test("the panel names its method only when asked", () => {
 
   assert.doesNotMatch(plain, /bayesian-pressure-band/u);
   assert.match(verbose, / {2}method {7}bayesian-pressure-band@1\n/u);
+});
+
+/**
+ * One statistics report, shaped as `buildSourceStats` builds it, carrying two horizons because one
+ * cannot show that a table compares them and four would make the expectation unreadable. The
+ * numbers are a real source's, so the formatting is exercised against magnitudes that actually
+ * occur rather than against round ones chosen to be easy.
+ *
+ * @param {Record<string, unknown>} overrides
+ */
+function statsFor(overrides = {}) {
+  /** @param {number} [value] @param {number} [sample] */
+  const dimension = (value, sample = 8) =>
+    value === undefined
+      ? { unit: "tokens", sample_size: 0, missing: sample }
+      : { value, unit: "tokens", sample_size: sample, missing: 0 };
+  return {
+    source: {
+      alias: "work",
+      provider: "anthropic",
+      plan: "pro",
+      plan_profile: { id: "generic", version: "1.0.0", provenance: "bundled", as_of: "2026-01-01" },
+    },
+    pressure: {
+      band: "low",
+      baseline_kind: "local",
+      policy_version: "stage4-analytics-v1",
+      trend: {
+        status: "observed",
+        direction: "steady",
+        windows_compared: 5,
+        baseline_windows: 22,
+        reason: null,
+        policy_version: "stage6-trend-v1",
+      },
+    },
+    calibration: {
+      snapshots: 30,
+      undelivered_attempts: 0,
+      live: {
+        status: "reported",
+        excluded: 0,
+        brier: { value: 0.002, sample_size: 131 },
+        interval: { coverage: 0, mean_width: 0.06, sample_size: 131 },
+      },
+      backtest: {
+        brier: { value: 0.02, sample_size: 625 },
+        interval: { coverage: 0.5, mean_width: 0.11, sample_size: 625 },
+        forecasts: 625,
+      },
+      policy_version: "stage5-calibration-v1",
+    },
+    horizons: [
+      {
+        horizon: "PT1H",
+        prompts: { count: 10, eligible: 8, excluded: 2 },
+        restrictions: { by_class: {} },
+        dimensions: {
+          input_tokens: dimension(648),
+          output_tokens: dimension(120195),
+          reasoning_tokens: dimension(),
+          cache_read_tokens: dimension(65468836),
+          cache_write_tokens: dimension(2217259),
+        },
+        cost: { by_currency: {}, sample_size: 0, missing: 8 },
+        duration: {
+          p50: 158703,
+          p90: 448230.39999999997,
+          unit: "ms",
+          sample_size: 8,
+          missing: 0,
+          complete: true,
+        },
+        effective_sample_size: { value: 7.87, unit: "prompts" },
+        freshness: { as_of: "2026-01-02T03:04:10.000Z" },
+        by_model: [],
+      },
+      {
+        horizon: "P7D",
+        prompts: { count: 430, eligible: 418, excluded: 12 },
+        restrictions: { by_class: { rate_limit: 3 } },
+        dimensions: {
+          input_tokens: dimension(450174, 418),
+          output_tokens: dimension(15040750, 418),
+          reasoning_tokens: dimension(undefined, 418),
+          cache_read_tokens: dimension(5104351653, 418),
+          cache_write_tokens: dimension(93650724, 418),
+        },
+        cost: { by_currency: {}, sample_size: 0, missing: 418 },
+        duration: {
+          p50: 159559,
+          p90: 1458804.9000000004,
+          unit: "ms",
+          sample_size: 418,
+          missing: 0,
+          complete: true,
+        },
+        effective_sample_size: { value: 172.04, unit: "prompts" },
+        freshness: { as_of: "2026-01-02T03:04:10.000Z" },
+        by_model: [],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+test("stats compares its horizons down a column instead of along a sentence", () => {
+  // The old shape put every measurement for one horizon on one run-on line, so comparing an hour
+  // with a week meant reading two paragraphs and holding eight numbers. Horizons are rows because
+  // the comparison across them is the only question this report exists to answer.
+  const text = renderStats(statsFor(), { verbose: false });
+  const rows = text.split("\n");
+  const header = rows.findIndex((line) => /WINDOW +PROMPTS/u.test(line));
+
+  assert.ok(header >= 0, `no window table in:\n${text}`);
+  assert.match(
+    rows[header] ?? "",
+    /WINDOW +PROMPTS +COUNTED +REFUSED +SET ASIDE +COST +TYPICAL +SLOWEST 10%/u,
+  );
+  assert.match(rows[header + 1] ?? "", /^ {2}1h +10 +8 +— +2 /u);
+  assert.match(rows[header + 2] ?? "", /^ {2}7d +430 +418 +3 rate limit +12 /u);
+});
+
+test("stats says a duration the way a person says it", () => {
+  // `p50 158703ms p90 448230.39999999997ms` is a float that escaped, and no reader converts
+  // milliseconds to minutes in their head to find out whether a prompt is slow today.
+  const text = renderStats(statsFor(), { verbose: false });
+
+  assert.match(text, /\b2m39s\b/u);
+  assert.match(text, /\b7m28s\b/u);
+  assert.doesNotMatch(text, /ms\b/u);
+  assert.doesNotMatch(text, /\.39999/u);
+});
+
+test("token dimensions keep their own columns and their own names", () => {
+  // `docs/specification/observation.md` forbids summing token classes into one consumption score:
+  // human output may show subtotals, but a label must preserve its dimension. So the tokens get a
+  // second table rather than a folded "tokens in" column, and each column is named for exactly one
+  // stored dimension.
+  const text = renderStats(statsFor(), { verbose: false });
+  const rows = text.split("\n");
+  const header = rows.findIndex((line) => /WINDOW +INPUT/u.test(line));
+
+  assert.ok(header >= 0, `no token table in:\n${text}`);
+  assert.match(rows[header] ?? "", /WINDOW +INPUT +OUTPUT +REASONING +CACHE READ +CACHE WRITE/u);
+  // 5104351653 read at a glance, and a dimension with nothing sampled says so rather than showing
+  // a zero it never measured.
+  assert.match(rows[header + 2] ?? "", /^ {2}7d +450K +15\.0M +— +5\.10G +93\.7M/u);
+});
+
+test("stats states what calibration is worth without stating a Brier score", () => {
+  // `live brier 0.002 (sample 131, coverage 0.00)` is four statistics and no sentence, and the
+  // reader is a developer, not a modeller. The numbers keep every digit under `--verbose`; the
+  // default says how much has been checked, which is the part that decides whether to trust the
+  // estimate at all.
+  const plain = renderStats(statsFor(), { verbose: false });
+  const verbose = renderStats(statsFor(), { verbose: true });
+
+  assert.doesNotMatch(plain, /brier|coverage/iu);
+  assert.match(plain, /30 forecasts checked/u);
+  assert.match(verbose, /brier 0\.002/u);
+  assert.match(verbose, /stage5-calibration-v1/u);
+});
+
+test("--verbose breaks each window down by model", () => {
+  // Specification 11: the same token dimensions broken down by model, counting usage slices rather
+  // than prompts, because one prompt can span several models and counting it once per model would
+  // report more prompts than were made.
+  const first = statsFor().horizons[0];
+  const report = statsFor({
+    horizons: [
+      {
+        ...first,
+        by_model: [
+          {
+            model: "opus",
+            slices: { count: 6, unit: "usage slices" },
+            dimensions: {
+              input_tokens: { value: 600, unit: "tokens", sample_size: 6, missing: 0 },
+            },
+            cost: { by_currency: {}, sample_size: 0, missing: 6 },
+          },
+        ],
+      },
+    ],
+  });
+
+  const plain = renderStats(report, { verbose: false });
+  const verbose = renderStats(report, { verbose: true });
+
+  assert.doesNotMatch(plain, /opus/u);
+  assert.match(verbose, /^ {2}1h +opus +6 +600\b/mu);
+  assert.match(verbose, /usage slices/u);
+});
+
+test("the per-client comparison stays counts over denominators", () => {
+  // A refusal share printed as a percentage reads as a measurement of the provider's real
+  // behaviour, which is exactly the claim this product never makes. "87 of 1180 counted" says the
+  // same thing while showing how much evidence is behind it.
+  const report = statsFor({
+    by_client: {
+      groups: [
+        {
+          client: "opencode",
+          restricted: 3,
+          eligible: 418,
+          restriction_share: { lower: 0.002, upper: 0.021 },
+          difference: "not_detected",
+        },
+      ],
+      unattributed: { prompts: 2 },
+      reason: null,
+      policy_version: "stage8-client-v1",
+    },
+  });
+
+  const text = renderStats(report, { verbose: false });
+
+  const clientLine = text.split("\n").find((line) => line.includes("opencode")) ?? "";
+
+  assert.match(clientLine, /3 of 418 counted/u);
+  assert.match(clientLine, /difference not detected/u);
+  assert.match(text, /2 prompts could not be attributed/u);
+  // Scoped to the client line rather than the whole report, which legitimately carries a `10%` in
+  // the `SLOWEST 10%` heading. What must never appear is the refusal share as a percentage.
+  assert.doesNotMatch(
+    clientLine,
+    /%/u,
+    "a share printed as a percentage reads as a capacity claim",
+  );
 });
 
 test("no escape sequence survives when colour is off", () => {

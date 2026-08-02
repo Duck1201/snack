@@ -2138,8 +2138,10 @@ test("verbose stats report unknown dimensions without substituting zero", async 
   );
 
   assert.equal(exitCode, 0);
-  assert.match(fixture.stdout.value, /PT1H: 1 prompts \(1 eligible, 0 excluded\)/u);
-  assert.match(fixture.stdout.value, /input_tokens: 100 tokens \(sample 1, missing 0\)/u);
+  assert.match(fixture.stdout.value, /^ {2}1h +1 +1 +— +0 /mu, "prompt counts");
+  // Specification: every reported statistic carries its unit and its sample size, and is never a
+  // bare number whose meaning has to be inferred.
+  assert.match(fixture.stdout.value, /^ {2}1h +input_tokens +100 +tokens +1 +0$/mu);
 
   // A horizon with no observations reports unknown, never a fabricated zero.
   fixture.options.now = new Date("2026-01-10T00:00:00.000Z");
@@ -2149,9 +2151,9 @@ test("verbose stats report unknown dimensions without substituting zero", async 
     fixture.options,
   );
 
-  assert.match(fixture.stdout.value, /PT1H: 0 prompts/u);
-  assert.match(fixture.stdout.value, /input_tokens: unknown tokens \(sample 0, missing 0\)/u);
-  assert.doesNotMatch(fixture.stdout.value, /input_tokens: 0 /u);
+  assert.match(fixture.stdout.value, /^ {2}1h +0 +0 /mu);
+  assert.match(fixture.stdout.value, /^ {2}1h +input_tokens +unknown +tokens +0 +0$/mu);
+  assert.doesNotMatch(fixture.stdout.value, /^ {2}1h +input_tokens +0 /mu);
 });
 
 test("stats never emit prompt content", async () => {
@@ -2306,14 +2308,17 @@ test("concise stats report every field the specification requires", async () => 
 
   assert.equal(exitCode, 0);
   const output = fixture.stdout.value;
-  assert.match(output, /PT5H: 1 prompts \(1 eligible, 0 excluded\)/u, "prompt counts");
-  assert.match(output, /restrictions none/u, "restrictions by class");
-  assert.match(output, /input_tokens 100/u, "token dimensions stay separate");
-  assert.match(output, /output_tokens 25/u, "token dimensions stay separate");
-  assert.match(output, /cost unknown 0\.003/u, "observed cost with its currency");
-  assert.match(output, /duration p50 5000ms p90 5000ms/u, "duration percentiles");
+  const rows = output.split("\n");
+  const counts = rows[rows.findIndex((line) => /WINDOW +PROMPTS/u.test(line)) + 1] ?? "";
+  const tokens = rows[rows.findIndex((line) => /WINDOW +INPUT/u.test(line)) + 1] ?? "";
+
+  // The same fields the specification requires, read across a row instead of along a sentence.
+  assert.match(counts, /^ {2}5h +1 +1 +— +0 /u, "prompt counts and restrictions by class");
+  assert.match(counts, /0\.003 unknown/u, "observed cost with its currency, never converted");
+  assert.match(counts, /5\.0s +5\.0s$/u, "duration percentiles, in a unit a person reads");
+  assert.match(tokens, /^ {2}5h +100 +25 /u, "token dimensions stay separate and named");
   assert.match(output, /pressure \w+/u, "current pressure");
-  assert.match(output, /as_of 2026-01-02T03:04:10\.000Z/u, "freshness");
+  assert.match(output, /observed up to 2026-01-02T03:04:10\.000Z/u, "freshness");
 });
 
 test("prospective analysis sizes the next prompt from a file without retaining it", async () => {
@@ -2651,13 +2656,23 @@ test("human stats describe the same calibration the JSON document reports", asyn
   const { calibration } = JSON.parse(fixture.stdout.value).data;
   fixture.stdout.value = "";
   await run(["node", "snack", "stats", "--source", "personal-anthropic"], fixture.options);
+  const concise = fixture.stdout.value;
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--verbose"],
+    fixture.options,
+  );
   const human = fixture.stdout.value;
 
-  // Both renderings must state the same facts: how many snapshots exist, what the live
-  // score is with its sample size, and that backtesting is a separate stream.
-  assert.match(human, /calibration/iu);
-  assert.match(human, new RegExp(`${calibration.snapshots} snapshot`, "u"));
-  assert.match(human, new RegExp(`brier ${calibration.live.brier.value.toFixed(3)}`, "u"));
+  // The default reading says how much has been checked, which is what decides whether to trust the
+  // estimate; the score itself is a modeller's question and lives with the other statistics.
+  assert.match(concise, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.doesNotMatch(concise, /brier/iu);
+
+  // Under `--verbose` both renderings must state the same facts: how many snapshots exist, what the
+  // live score is with its sample size, and that backtesting is a separate stream.
+  assert.match(human, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.match(human, new RegExp(`brier ${calibration.live.brier.value}`, "u"));
   assert.match(human, new RegExp(`sample ${calibration.live.brier.sample_size}`, "u"));
   assert.match(human, /backtest/iu);
 });
@@ -2841,11 +2856,10 @@ test("verbose stats break usage down by model, as the flag promises", async () =
   );
 
   assert.equal(exitCode, 0);
-  // `--verbose` advertises per-model detail; before this it only repeated the dimensions.
-  assert.match(
-    fixture.stdout.value,
-    /model claude-sonnet: 1 usage slices; input_tokens 100, output_tokens 25/u,
-  );
+  // `--verbose` advertises per-model detail; before this it only repeated the dimensions. The
+  // window stays a column so the comparison the report is built around survives into the detail.
+  assert.match(fixture.stdout.value, /^ {2}5h +claude-sonnet +1 +100 +25\b/mu);
+  assert.match(fixture.stdout.value, /counted in usage slices/u);
 });
 
 test("verbose stats report per-model usage in the JSON contract too", async () => {
@@ -3263,8 +3277,18 @@ test("stats --by-client reports each client behind a shared source and what it c
   // printed as a percentage reads as a claim about the provider's real capacity.
   fixture.stdout.value = "";
   await run(["node", "snack", "stats", ...wide, "--by-client"], fixture.options);
-  assert.match(fixture.stdout.value, /by client (?:opencode|claude): restricted 0 of 1 eligible/u);
-  assert.doesNotMatch(fixture.stdout.value, /%/u);
+  const clientLines = fixture.stdout.value
+    .split("\n")
+    .filter((line) => /\b(?:opencode|claude)\b/u.test(line));
+
+  assert.ok(clientLines.length >= 2, `expected a line per client:\n${fixture.stdout.value}`);
+  for (const line of clientLines) {
+    assert.match(line, /0 of 1 counted/u);
+    // Scoped to the client lines: the report legitimately carries a `10%` in its `SLOWEST 10%`
+    // heading, while a refusal share printed as a percentage would read as a claim about the
+    // provider's real capacity.
+    assert.doesNotMatch(line, /%/u);
+  }
 });
 
 test("a prompt id one client reuses from another is reported instead of overwriting", async () => {
