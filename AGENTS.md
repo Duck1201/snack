@@ -7,7 +7,8 @@
   explicitly rejects.
 - Persist only content-free metadata. Prompt/response text, raw errors, credentials, and project
   paths/titles must not reach the database, spool, logs, snapshots, exports, or diagnostics.
-- Runtime behavior is local-only: no telemetry, network client, daemon, or service dependency.
+- Runtime behavior is local-only: no telemetry, daemon, or service dependency. `snack update` is the
+  only command that reaches the network, and only to install packages (ADR-0010).
 - The OpenCode plugin must fail open and never block/throw into the host. Source and spool readers
   fail closed on unknown schemas instead of guessing.
 
