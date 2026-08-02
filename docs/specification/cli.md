@@ -99,6 +99,11 @@ identifier; both may appear at once.
 overview exists to compare sources, and four more rows per source is a stack of panels wearing a
 table's header. Asking for the detail is asking for the shape with room for it.
 
+The uncertainty statements every source repeats are stated once beneath all the panels, the same
+rule the overview follows: a warning printed once per panel is a warning a reader learns to skip. A
+caveat only some sources carry stays in their panels, because moved to the foot it would claim every
+source. With one panel nothing is shared, so `--source <alias>` is unchanged.
+
 The requirement that an estimate always names its method is therefore met by two routes, the
 `--verbose` panel and the `--json` document, rather than by one.
 
