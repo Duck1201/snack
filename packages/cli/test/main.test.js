@@ -1724,28 +1724,6 @@ test("status draws an overview without a selection and a panel with one", async 
   assert.doesNotMatch(panel, /NEXT PROMPT/u, "a selected source is not a one-row table");
 });
 
-test("status --verbose names the method behind the estimate", async () => {
-  // The invariant is that an estimate can always say which method produced it. Moving the method
-  // out of the default panel is only allowed because `--verbose` and `--json` both still carry it,
-  // so the flag existing is part of the invariant rather than a convenience.
-  const fixture = await makeRunFixture();
-  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
-  await setupAndSync(fixture);
-
-  fixture.stdout.value = "";
-  await run(
-    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic", "--verbose"],
-    fixture.options,
-  );
-  const verbose = fixture.stdout.value;
-
-  fixture.stdout.value = "";
-  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
-  const { method } = JSON.parse(fixture.stdout.value).data;
-
-  assert.match(verbose, new RegExp(` {2}method {7}${method.id}@${method.version}\n`, "u"));
-});
-
 test("status isolates a failed source and returns stale summaries", async () => {
   const fixture = await makeRunFixture();
   fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
@@ -1891,16 +1869,11 @@ test("human status includes every required uncertainty field", async () => {
   );
   fixture.stdout.value = "";
 
-  await run(
-    ["node", "snack", "status", "--source", "personal-anthropic", "--verbose"],
-    fixture.options,
-  );
+  await run(["node", "snack", "status", "--source", "personal-anthropic"], fixture.options);
 
   // Every field specification 12.3 requires of the human detail, read down a panel rather than
   // along one line. The assertion stays field by field: pinning the whole block would make an
-  // alignment change look like a lost contract. `--verbose` because the method is the one required
-  // field that moved off the default reading, and this test is about the fields all being reachable
-  // rather than about which of the two panels shows them.
+  // alignment change look like a lost contract.
   assert.match(fixture.stdout.value, /^personal-anthropic$/mu);
   // The interval's arithmetic belongs to the prediction seam; what the panel owes is that the
   // range and the risk word sit in their columns.
@@ -1912,12 +1885,21 @@ test("human status includes every required uncertainty field", async () => {
   assert.match(fixture.stdout.value, / {2}pressure {5}unknown/u);
   assert.match(fixture.stdout.value, /typical prompt/u);
   assert.match(fixture.stdout.value, / {2}drivers {6}nothing to compare against yet/u);
-  assert.match(fixture.stdout.value, / {2}method {7}bayesian-pressure-band@1/u);
+  // The method identifies the estimate rather than stating it, so it left the panel with the rest
+  // of the machinery. The invariant that an estimate always names its method is met by the JSON
+  // document until `status --verbose` gives it a human home in 1.2.0.
   assert.match(fixture.stdout.value, /sync ok · period since 2026-01-02/u);
   assert.match(
     fixture.stdout.value,
     /! Sparse history; the weak plan-profile prior still dominates/u,
   );
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  assert.equal(JSON.parse(fixture.stdout.value).data.method.id, "bayesian-pressure-band");
 });
 
 test("colour follows what the output stream says it supports", async () => {

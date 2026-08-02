@@ -196,6 +196,31 @@ public**, and the guarantee that does apply is the migration floor: a `0.6+` dat
 place, keeping every row, which `packages/cli/test/storage.test.js` asserts leg by leg and
 `npm run upgrade:smoke` checks against each published release.
 
+## What 1.1.3 changes, and why it is a patch
+
+Human formatting and one defect fix. Nothing on the frozen list moves: not the `--json` envelope,
+not a payload, not the export, not the exit codes, and **not the flag surface** — no option is added
+or removed.
+
+`status` and `stats` are rewritten for the person reading them. Without a selection `status` is now
+an overview with a row per capacity source rather than a panel each; a named source still gets the
+panel, and the panel states its values as sentences. `stats` becomes two tables with the horizons as
+rows rather than one semicolon-separated line per horizon, with durations and counts rendered at the
+magnitude a reader uses. This document has listed every human-readable line SNACK prints as not
+public since the freeze, which is exactly what lets a rewrite this large be a patch: a consumer
+parsing the human output was never inside the contract, and the `--json` document it should have
+been reading is byte-identical to `1.1.2` for the same input.
+
+Two things leave the human output and stay in `--json`: the method with its version, and the
+percentile behind each pressure driver. They identify and qualify an estimate rather than state it.
+`status --verbose` will give them a human home in `1.2.0`; it is an additive option, and an additive
+option belongs in a minor, which is the whole reason it is not in this release.
+
+The defect: every alignment decision counted UTF-16 code units instead of screen columns, so a
+capacity source whose alias is written in CJK or holds an emoji had every measurement in its row
+shifted left of its own heading. Present since `1.1.0`, and invisible to anyone whose aliases are
+ASCII.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

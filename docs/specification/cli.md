@@ -48,19 +48,44 @@ snack status [--source <alias>] [--no-sync]
              [--prompt-file <path|->] [--json]
 ```
 
-Default human output is one panel per capacity source, laid out as an aligned label column with no box drawing — a box survives neither a narrow terminal nor a pipe, and this output is read through both. Each panel includes:
+Human output has two shapes, chosen by whether a source is named, because they answer two different
+questions. There is no box drawing in either: a box survives neither a narrow terminal nor a pipe,
+and this output is read through both.
 
-- source alias and active period;
-- viability interval and risk;
-- evidence and method;
-- pressure band, top contributors, and a usage-pressure sparkline over the recent windows;
-- expected prompt category;
-- data age and synchronization status;
-- explicit uncertainty statement.
+**Without a selection, an overview:** one row per capacity source under one header, carrying the
+alias, the viability interval, the risk label, the evidence level, the pressure band, the data age,
+and the synchronization status. The question without a selection is which source to reach for, and
+that is a comparison across sources rather than a reading of one. The alias column is left-aligned
+and fitted to the aliases; the measurements are centred under fixed-width headers, so a column does
+not move when a neighbouring source is renamed.
 
-The sparkline is drawn from `pressure.trend.scores`, the same window scores `--json` reports, mapped to Unicode block characters on a fixed `[0, 1]` scale. The scale does not rescale to the series: a score is already a percentile against the user's own history, and rescaling would make a flat week of light usage look identical to a flat week of heavy usage. A source with no drawable series — too few windows, or no baseline to rank them against — draws nothing rather than a placeholder.
+Column widths are counted in screen columns, not code units: an alias may hold characters that
+occupy two columns, and one counted as one slides every measurement in that row.
 
-With multiple sources and no selection, every configured source gets its own panel. Prospective text requires an unambiguous source.
+The overview drops columns to fit a narrow terminal, in a declared order of what the reader can most
+afford to lose rather than by position — the alias and the interval are never dropped. A dropped
+column may cost detail and never a warning: a synchronization that failed is restated as a footer
+line when its column is gone.
+
+The uncertainty statements every source repeats are stated once beneath the table rather than once
+per row.
+
+**With `--source <alias>`, a panel:** an aligned label column carrying the viability interval and
+what it is the probability of, the risk label, the evidence level with a plain statement of what
+that level supports, the pressure band with the reading behind it, the top pressure contributors,
+the expected prompt category, the active period, the data age, the synchronization status, and the
+uncertainty statement.
+
+The method and its version, the model policy version, the evidence gates, and the percentile each
+pressure contributor ranks at are **not** in the human output. They identify and qualify the
+estimate rather than state it, and the reader of a panel is a developer deciding whether to send a
+prompt. The requirement that an estimate always names its method is met by the `--json` document,
+which carries all of them.
+
+`status` draws no chart. The window scores remain in `pressure.trend` in `--json`; the drawing of
+them belongs to a surface with room for a series worth drawing.
+
+Prospective text requires an unambiguous source.
 
 ### 12.4 `snack stats`
 
@@ -70,6 +95,25 @@ snack stats [--source <alias>] [--horizon <duration|all>]
 ```
 
 Defaults to configured standard horizons and all sources when concise output remains readable. A source selection produces detail.
+
+Human output is two tables per source, with the analysis horizons as rows in both: comparing the
+horizons is the question the report exists to answer, and a shape that puts one horizon's
+measurements on one line makes that comparison a matter of holding eight numbers in the head.
+
+The first table carries the prompt counts, the restrictions named by class, the excluded count, the
+observed cost per currency, and the duration percentiles. The second carries the token dimensions,
+one column each. They are two tables rather than one because a row cannot hold both and stay inside
+a terminal, and the token columns are never folded into a subtotal that crosses dimensions.
+
+Durations and counts are rendered at the magnitude a reader uses — minutes rather than milliseconds,
+`5.10G` rather than ten digits — while `--json` keeps the stored precision.
+
+The default closes with how many forecasts have been checked against an outcome and how current the
+observations are. `--verbose` adds every statistic: each dimension with its unit, sample size and
+missing count; the per-model breakdown, counted in usage slices; both calibration streams with their
+Brier scores, sample sizes and interval coverage; and the policy versions. A statistic is never
+reported as a bare number without its unit and sample size, and those travel with it under
+`--verbose` rather than being dropped.
 
 `--by-client` compares the clients feeding each capacity source. It answers the one question a
 shared source invites: whether one client is refused more often than the others against the same

@@ -733,12 +733,12 @@ function isWide(code) {
  * real stream: command tests write into an injected sink, and a sink has no `hasColors()`.
  *
  * @param {SourceStatusView[]} statuses
- * @param {{color: boolean, verbose?: boolean}} options
+ * @param {{color: boolean}} options
  * @returns {string}
  */
 export function renderStatus(statuses, options) {
   const paint = painter(options.color);
-  return statuses.map((status) => renderSource(status, paint, options.verbose === true)).join("\n");
+  return statuses.map((status) => renderSource(status, paint)).join("\n");
 }
 
 /**
@@ -767,9 +767,8 @@ function painter(color) {
 /**
  * @param {SourceStatusView} status
  * @param {(value: string, style?: Style) => string} paint
- * @param {boolean} verbose
  */
-function renderSource(status, paint, verbose) {
+function renderSource(status, paint) {
   const band = SCALE[status.pressure.band];
   const lines = [
     status.source.alias,
@@ -800,15 +799,8 @@ function renderSource(status, paint, verbose) {
       ],
     ]),
     row(paint, "drivers", [
-      [describeContributors(status.pressure.contributors ?? [], verbose), undefined, 0],
+      [describeContributors(status.pressure.contributors ?? []), undefined, 0],
     ]),
-    // The method identifies the estimate rather than describing it, which is a question a reader
-    // who is not a statistician never asks -- and it sat in the middle of the panel displacing a
-    // line they do read. Kept behind `--verbose`, and present in every `--json` document, so the
-    // estimate can still always say what produced it.
-    ...(verbose
-      ? [row(paint, "method", [[`${status.method.id}@${status.method.version}`, undefined, 0]])]
-      : []),
     row(paint, "as of", [
       [
         [
@@ -885,26 +877,19 @@ function row(paint, label, cells) {
  * The two dimensions that moved the pressure band furthest. Specification 12.3 puts these in the
  * human detail, so a forecast whose drivers are only in `--json` would be two contracts.
  *
- * The default names them and stops there. `input_tokens 90th` asks the reader to know what a
- * percentile is before it tells them anything, and what they came for is which of their own habits
- * moved the reading -- so the rank goes with the rest of the statistics, behind `--verbose`.
+ * They are named and nothing more. `input_tokens 90th` asks the reader to know what a percentile is
+ * before it tells them anything, and what they came for is which of their own habits moved the
+ * reading. The rank stays in every `--json` document, where something parses it.
  *
  * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
- * @param {boolean} verbose
  */
-function describeContributors(contributors, verbose) {
+function describeContributors(contributors) {
   const ranked = contributors
     .filter((contributor) => contributor.contribution !== null)
     .sort((left, right) => Number(right.contribution) - Number(left.contribution))
     .slice(0, 2);
   if (ranked.length === 0) return "nothing to compare against yet";
-  return ranked
-    .map((contributor) =>
-      verbose
-        ? `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`
-        : plainly(contributor.dimension),
-    )
-    .join(", ");
+  return ranked.map((contributor) => plainly(contributor.dimension)).join(", ");
 }
 
 /**

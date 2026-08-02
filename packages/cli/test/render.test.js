@@ -63,7 +63,8 @@ test("a selected source is a panel written in words", () => {
   // a pipe, and this output is read through both -- and every value stated as a sentence rather
   // than as the quantity behind it. The reader is a developer deciding whether to send a prompt,
   // not a statistician auditing a model: `95-100%` still appears because it is the estimate, while
-  // the percentile, the method and the policy versions that produced it are `--verbose`.
+  // the percentile, the method and the policy versions identify it rather than state it, and stay
+  // in the `--json` document until `status --verbose` gives them a human home in 1.2.0.
   const text = renderStatus([statusFor()], { color: false });
 
   assert.equal(
@@ -208,18 +209,6 @@ test("a caveat every source repeats is stated once", () => {
 
   assert.equal(text.match(/Real provider capacity is unknown\./gu)?.length, 1);
   assert.match(text, / {2}! Sparse history; the prior dominates\.\n/u);
-});
-
-test("the panel names its method only when asked", () => {
-  // `bayesian-pressure-band@1` answers a question a reader who is not a statistician never asks,
-  // and it sits in the middle of the panel where it displaces something they do. It is not dropped:
-  // the estimate still has to be able to say which method produced it, so `--verbose` carries it,
-  // and so does every `--json` document.
-  const plain = renderStatus([statusFor()], { color: false });
-  const verbose = renderStatus([statusFor()], { color: false, verbose: true });
-
-  assert.doesNotMatch(plain, /bayesian-pressure-band/u);
-  assert.match(verbose, / {2}method {7}bayesian-pressure-band@1\n/u);
 });
 
 /**

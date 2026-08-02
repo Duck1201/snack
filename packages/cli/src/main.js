@@ -621,7 +621,6 @@ export async function run(argv, options = {}) {
     .option("--source <alias>", "capacity-source alias")
     .option("--no-sync", "use already synchronized observations")
     .option("--prompt-file <path>", "analyze an unsent prompt from a file, or - for stdin")
-    .option("--verbose", "add the method and the policy versions behind the estimate")
     .option("--json", "emit one versioned JSON document")
     .action(async function status(commandOptions) {
       /** @type {ReturnType<typeof createSourceStatus>[]} */
@@ -780,7 +779,7 @@ export async function run(argv, options = {}) {
         // reading that source, which wants the detail a row cannot hold.
         stdout.write(
           commandOptions.source
-            ? renderStatus(statuses, { color, verbose: commandOptions.verbose === true })
+            ? renderStatus(statuses, { color })
             : renderStatusTable(statuses, { color, columns: terminalColumns(stdout, env) }),
         );
         reportWarnings(stderr, reportedWarnings);

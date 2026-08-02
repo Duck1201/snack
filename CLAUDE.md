@@ -77,8 +77,10 @@ process. No daemon, no event bus, no DI container. Layering intent (files are fl
 - **Fail open in the host, fail closed on data.** The OpenCode plugin must never throw into or block
   OpenCode. Ingestion of an unknown schema/fingerprint must refuse rather than guess.
 - **Local only.** No network calls, no telemetry, no SNACK service.
-- **Never imply real capacity.** No "% of quota", no "N prompts remaining". Estimates carry an
-  interval, an evidence level, and a named method.
+- **Never imply real capacity.** No "% of quota", no "N prompts remaining". Every estimate carries
+  an interval, an evidence level, and a named method. The interval and the evidence level are on
+  every human surface; the method may be reachable only through `--json`, because it identifies the
+  estimate rather than stating it, but it is never absent from the record.
 - **Private permissions.** Config, DB, backups, and spool files are `0o600` (lock dirs `0o700`);
   `doctor` fails when it finds anything more permissive.
 - **Cursors advance only inside the committing transaction**, and spool segments are removed only
