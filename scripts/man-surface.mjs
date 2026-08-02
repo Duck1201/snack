@@ -90,14 +90,18 @@ function parseFlags(lines) {
   for (const line of lines) {
     // `  -V, --version`, `  --source <alias>`, `  --prompt-file <path>`. The short form is dropped:
     // the long form is the name the contract is written in, and `-h`/`-V` are Commander's own.
-    const declared = /^ {2}(?:-\w, )?(--[a-z][a-z-]*)(?: (<[^>]+>|\[[^\]]+\]))?\s{2,}(.*)$/u.exec(
-      line,
-    );
+    //
+    // The description is optional on this line. Commander puts it on the next one when the term is
+    // too long for the column, and a pattern that required both together would drop such a flag and
+    // then hand its description to the flag above -- one flag lost and another misdescribed, with
+    // nothing saying so.
+    const declared =
+      /^ {2}(?:-\w, )?(--[a-z][a-z-]*)(?: (<[^>]+>|\[[^\]]+\]))?(?:\s{2,}(.*))?$/u.exec(line);
     if (declared) {
       flags.push({
         flag: String(declared[1]),
         argument: declared[2] ?? null,
-        description: String(declared[3]).trim(),
+        description: (declared[3] ?? "").trim(),
       });
       continue;
     }
@@ -135,29 +139,32 @@ export async function commandSurface(help) {
     { name: "snack", usage: root.usage, description: root.description, flags: root.flags },
   ];
 
-  for (const command of root.commands) {
-    const parsed = parseHelp(await help([command]));
+  /**
+   * A group carries no action of its own, so it is replaced by its leaves rather than listed
+   * beside them: documenting `snack config` would name something nobody can run.
+   *
+   * Recursive rather than two passes over a fixed depth. SNACK is two levels deep today, and a walk
+   * that stopped there would not report that it had stopped -- it would list the group as a command
+   * and omit the leaves under it, which is the failure this replacement exists to prevent.
+   *
+   * @param {string[]} path
+   * @returns {Promise<void>}
+   */
+  const walk = async (path) => {
+    const parsed = parseHelp(await help(path));
     if (parsed.commands.length === 0) {
       surface.push({
-        name: command,
+        name: path.join(" "),
         usage: parsed.usage,
         description: parsed.description,
         flags: parsed.flags,
       });
-      continue;
+      return;
     }
-    // A group carries no action of its own, so it is replaced by its children rather than listed
-    // beside them: documenting `snack config` would name something nobody can run.
-    for (const child of parsed.commands) {
-      const leaf = parseHelp(await help([command, child]));
-      surface.push({
-        name: `${command} ${child}`,
-        usage: leaf.usage,
-        description: leaf.description,
-        flags: leaf.flags,
-      });
-    }
-  }
+    for (const child of parsed.commands) await walk([...path, child]);
+  };
+
+  for (const command of root.commands) await walk([command]);
   return surface;
 }
 

@@ -56,16 +56,19 @@ export function renderManPage(input) {
   // `setup opencode`, `config get` and the rest. The prose is written per section, so it is printed
   // per section: repeating §12.2 under both `setup opencode` and `setup claude` would put the same
   // six paragraphs on the page twice.
-  /** @type {string | null} */
-  let lastKey = null;
+  // Tracked as a set rather than as "the previous one": suppressing only consecutive repeats is
+  // correct exactly while a group's leaves stay adjacent in the walk, which is an accident of
+  // Commander's ordering rather than something this file controls.
+  /** @type {Set<string>} */
+  const printed = new Set();
   for (const command of input.surface) {
     if (command.name === "snack") continue;
     const key = proseKey(input.prose, command.name);
-    if (key !== null && key !== lastKey) {
+    if (key !== null && !printed.has(key)) {
+      printed.add(key);
       lines.push(`.SS ${roff(key)}`);
       lines.push(...paragraphs(input.prose[key].paragraphs));
     }
-    lastKey = key;
 
     lines.push(`.TP`);
     lines.push(`.B ${roff(command.usage)}`);

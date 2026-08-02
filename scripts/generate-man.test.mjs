@@ -335,3 +335,62 @@ test("every flag the CLI publishes is documented in the specification's synopsis
     "these flags exist and no synopsis in docs/specification/cli.md declares them",
   );
 });
+
+test("a flag whose name is too long for the description column is not dropped", () => {
+  // Commander puts the description on its own line when the term does not fit. A parser that
+  // requires the two on one line drops the flag entirely and then appends its description to
+  // whichever flag came before -- so the page loses one flag and misdescribes another, silently.
+  const help = [
+    "Usage: snack thing [options]",
+    "",
+    "Options:",
+    "  --short  a short one",
+    "  --an-extremely-long-flag-name-that-does-not-fit-the-column",
+    "           the description on its own line",
+    "  --after  another",
+    "",
+  ].join("\n");
+
+  assert.deepEqual(parseHelp(help).flags, [
+    { flag: "--short", argument: null, description: "a short one" },
+    {
+      flag: "--an-extremely-long-flag-name-that-does-not-fit-the-column",
+      argument: null,
+      description: "the description on its own line",
+    },
+    { flag: "--after", argument: null, description: "another" },
+  ]);
+});
+
+test("a command group nested more than one level deep is still walked to its leaves", async () => {
+  // SNACK is two levels deep today. A walk that stops there does not report that it stopped: it
+  // lists the group as though it were a command, which documents something nobody can run and
+  // omits the ones they can -- the exact failure the two-level walk was written to avoid.
+  /** @param {string[]} argv */
+  const help = async (argv) => {
+    const groups = {
+      "": ["outer"],
+      outer: ["middle"],
+      "outer middle": ["leaf"],
+    };
+    const key = argv.join(" ");
+    const children = groups[key];
+    return [
+      `Usage: snack ${key} [options]${children ? " [command]" : ""}`,
+      "",
+      `describes ${key || "root"}`,
+      "",
+      ...(children
+        ? ["Commands:", ...children.map((child) => `  ${child}`), "  help [command]"]
+        : []),
+      ...(children ? [] : ["Options:", "  --json    emit one versioned JSON document"]),
+    ].join("\n");
+  };
+
+  const surface = await commandSurface(help);
+
+  assert.deepEqual(
+    surface.map((entry) => entry.name),
+    ["snack", "outer middle leaf"],
+  );
+});
