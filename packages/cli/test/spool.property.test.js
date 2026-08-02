@@ -147,11 +147,11 @@ test("no spool segment, however broken, is read as more or fewer events than it 
 });
 
 test("every event the published schema accepts is an event this reader reads", async () => {
-  // The spool has three descriptions of what a valid event is: the schema both packages ship, the
-  // plugin's hand-written check on the way in, and this reader's on the way out. The schema is the
-  // contract; the other two are implementations of it. A reader stricter than the contract drops
-  // events a conforming plugin was entitled to write, and drops them as rejections -- so the count
-  // looks like corruption rather than like disagreement.
+  // The reader now validates the shipped schema directly, so this holds by construction on one
+  // side. What it still pins is the wiring: the reader compiles the file both packages publish, in
+  // the same strict mode, with a `date-time` format that accepts what the contract says it does. A
+  // reader stricter than the contract drops events a conforming plugin was entitled to write, and
+  // drops them as rejections -- so the count looks like corruption rather than like disagreement.
   const schema = JSON.parse(
     await readFile(new URL("../schemas/spool-event.schema.json", import.meta.url), "utf8"),
   );

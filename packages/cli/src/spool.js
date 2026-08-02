@@ -1,10 +1,44 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+import Ajv2020 from "ajv/dist/2020.js";
 
 const recentlyClosed = new Set();
+
+/**
+ * The published schema is the definition of a valid event, so it is also the check.
+ *
+ * Both packages ship `schemas/spool-event.schema.json` byte for byte and the plugin writes against
+ * it; a second, hand-written description of the same rules here was a third place for the three to
+ * disagree, and a reader stricter than the contract reports a conforming plugin's events as
+ * corruption rather than as disagreement.
+ *
+ * `date-time` is registered rather than pulled in from `ajv-formats`: the format is one predicate,
+ * and it has to accept exactly what the reader accepted before -- RFC 3339 with an offset or `Z`,
+ * in either case, and a date the calendar actually has.
+ */
+const ajv = new Ajv2020.default({
+  allErrors: false,
+  strict: true,
+  formats: {
+    "date-time": (value) =>
+      /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u.test(value) &&
+      !Number.isNaN(Date.parse(value)),
+  },
+});
+const isSpoolEvent = ajv.compile(
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL("../schemas/spool-event.schema.json", import.meta.url)),
+      "utf8",
+    ),
+  ),
+);
 
 /**
  * Read complete, validated events after independently committed segment offsets.
@@ -192,101 +226,14 @@ function emptyBatch() {
   };
 }
 
-/** @param {string} line */
+/** @param {string} line @returns {Record<string, unknown> | null} */
 function parseEvent(line) {
   try {
     const value = JSON.parse(line);
-    return isSpoolEvent(value) ? value : null;
+    return isSpoolEvent(value) ? /** @type {Record<string, unknown>} */ (value) : null;
   } catch {
     return null;
   }
-}
-
-/** @param {unknown} value */
-function isSpoolEvent(value) {
-  if (!isRecord(value) || value.schema_version !== 1) return false;
-  const allowed = new Set([
-    "schema_version",
-    "event_id",
-    "installation_id",
-    "event_type",
-    "source_prompt_id",
-    "source_session_id",
-    "revision",
-    "revision_domain",
-    "parser_version",
-    "occurred_at",
-    "provider",
-    "model",
-    "completion",
-    "outcome",
-    "usage_slices",
-    "restrictions",
-    "input_features",
-  ]);
-  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
-  return (
-    string(value.event_id) &&
-    string(value.installation_id) &&
-    oneOf(value.event_type, ["prompt_started", "session_idle", "session_error"]) &&
-    string(value.source_prompt_id) &&
-    string(value.source_session_id) &&
-    string(value.revision) &&
-    value.revision_domain === "opencode-plugin-v1" &&
-    value.parser_version === "opencode-plugin-v1" &&
-    timestamp(value.occurred_at) &&
-    nullableBoundedString(value.provider, 100) &&
-    nullableBoundedString(value.model, 200) &&
-    oneOf(value.completion, ["provisional", "completed"]) &&
-    oneOf(value.outcome, ["success", "restricted", "excluded"]) &&
-    Array.isArray(value.usage_slices) &&
-    Array.isArray(value.restrictions) &&
-    value.usage_slices.length <= 100 &&
-    value.restrictions.length <= 20 &&
-    value.usage_slices.length === 0 &&
-    value.restrictions.every(isRestriction) &&
-    validEventState(value) &&
-    (value.input_features === undefined || isInputFeatures(value.input_features))
-  );
-}
-
-/** @param {unknown} value @returns {value is Record<string, unknown>} */
-function isRestriction(value) {
-  return (
-    isRecord(value) &&
-    Object.keys(value).every((key) =>
-      ["class", "source_code", "observed_at", "classifier_version"].includes(key),
-    ) &&
-    oneOf(value.class, ["rate_limit", "usage_limit", "capacity_policy", "other_explicit_limit"]) &&
-    boundedString(value.source_code, 100) &&
-    timestamp(value.observed_at) &&
-    value.classifier_version === "opencode-plugin-error-v1"
-  );
-}
-
-/** @param {unknown} value */
-function isInputFeatures(value) {
-  return (
-    isRecord(value) &&
-    Object.keys(value).every((key) =>
-      [
-        "analyzer_version",
-        "estimated_input_tokens",
-        "line_count_bucket",
-        "code_block_count_bucket",
-        "attachment_count",
-      ].includes(key),
-    ) &&
-    value.analyzer_version === "opencode-input-v1" &&
-    Number.isSafeInteger(value.estimated_input_tokens) &&
-    typeof value.estimated_input_tokens === "number" &&
-    value.estimated_input_tokens >= 0 &&
-    oneOf(value.line_count_bucket, ["0", "1-10", "11-50", "51-200", "201+"]) &&
-    oneOf(value.code_block_count_bucket, ["0", "1", "2-4", "5+"]) &&
-    Number.isSafeInteger(value.attachment_count) &&
-    typeof value.attachment_count === "number" &&
-    value.attachment_count >= 0
-  );
 }
 
 /** @param {Record<string, unknown>} event @returns {import("./storage.js").Observation} */
@@ -327,58 +274,6 @@ function toObservation(event) {
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** @param {unknown} value @returns {value is string} */
-function string(value) {
-  return boundedString(value, 200);
-}
-
-/** @param {unknown} value @param {number} maximum */
-function boundedString(value, maximum) {
-  return typeof value === "string" && value.length > 0 && value.length <= maximum;
-}
-
-/** @param {unknown} value @param {number} maximum */
-function nullableBoundedString(value, maximum) {
-  return value === null || boundedString(value, maximum);
-}
-
-/** @param {unknown} value @returns {value is string} */
-function timestamp(value) {
-  return (
-    typeof value === "string" &&
-    /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u.test(value) &&
-    !Number.isNaN(Date.parse(value))
-  );
-}
-
-/** @param {Record<string, unknown>} event */
-function validEventState(event) {
-  const restrictions = /** @type {unknown[]} */ (event.restrictions);
-  if (event.event_type === "prompt_started") {
-    return (
-      event.completion === "provisional" &&
-      event.outcome === "excluded" &&
-      restrictions.length === 0
-    );
-  }
-  if (event.event_type === "session_idle") {
-    return (
-      event.completion === "completed" && event.outcome === "success" && restrictions.length === 0
-    );
-  }
-  return (
-    event.event_type === "session_error" &&
-    event.completion === "completed" &&
-    ((event.outcome === "restricted" && restrictions.length > 0) ||
-      (event.outcome === "excluded" && restrictions.length === 0))
-  );
-}
-
-/** @param {unknown} value @param {string[]} choices */
-function oneOf(value, choices) {
-  return typeof value === "string" && choices.includes(value);
 }
 
 /** @param {unknown} error */

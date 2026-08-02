@@ -130,6 +130,43 @@ test("spool failures do not escape an OpenCode hook", async () => {
   assert.deepEqual(warnings, ["SNACK live metadata capture is temporarily unavailable."]);
 });
 
+test("an identifier the host makes longer than the schema allows is never written", async () => {
+  // OpenCode bounds neither its session ids nor its message ids, and the published schema bounds
+  // both at 200. Writing the event anyway would put a line in the spool that `spool.js` validates
+  // against that same schema and rejects -- which reads as a corrupt segment rather than as a
+  // prompt this plugin could not represent. Refusing here is what keeps the two readings apart.
+  const root = await mkdtemp(join(tmpdir(), "snack-opencode-plugin-"));
+  temporaryRoots.push(root);
+  const spoolDirectory = join(root, "spool");
+  const hooks = await SnackOpenCodePlugin(
+    {},
+    { installation_id: "installation-1", spool_directory: spoolDirectory },
+  );
+
+  /** @type {string[]} */
+  const warnings = [];
+  const originalWarn = globalThis.console.warn;
+  globalThis.console.warn = (message) => warnings.push(String(message));
+  try {
+    await hooks["chat.message"](
+      {
+        sessionID: "s".repeat(201),
+        messageID: "prompt-1",
+        model: { providerID: "anthropic", modelID: "claude-sonnet" },
+      },
+      { message: { text: "" }, parts: [] },
+    );
+    await hooks.dispose();
+  } finally {
+    globalThis.console.warn = originalWarn;
+  }
+
+  assert.deepEqual(warnings, ["SNACK live metadata capture is temporarily unavailable."]);
+  await assert.rejects(readFile(join(spoolDirectory, "_pending", "current.open"), "utf8"), {
+    code: "ENOENT",
+  });
+});
+
 test("uses the official output message id when chat.message input omits it", async () => {
   const root = await mkdtemp(join(tmpdir(), "snack-opencode-plugin-"));
   temporaryRoots.push(root);
