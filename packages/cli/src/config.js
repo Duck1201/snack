@@ -6,9 +6,10 @@ import { fileURLToPath } from "node:url";
 
 import Ajv2020 from "ajv/dist/2020.js";
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser";
-import lockfile from "proper-lockfile";
 
 import { ExitCode, SnackError } from "./errors.js";
+import { acquirePrivateLock } from "./file-lock.js";
+import { isNotFound, isRecord } from "./guards.js";
 
 const schemaPath = fileURLToPath(new URL("../schemas/config.schema.json", import.meta.url));
 const schema = JSON.parse(await readFile(schemaPath, "utf8"));
@@ -45,7 +46,7 @@ const sourceIdentifierPatterns =
  *
  * @param {"alias" | "provider" | "profile" | "plan"} field
  */
-export function describeSourceIdentifier(field) {
+function describeSourceIdentifier(field) {
   return `must match ${sourceIdentifierPatterns[field]}`;
 }
 
@@ -323,13 +324,7 @@ export async function withConfigLock(configFile, operation) {
     try {
       await mkdir(parent, { recursive: true, mode: 0o700 });
       await chmod(parent, 0o700);
-      release = await lockfile.lock(configFile, {
-        realpath: false,
-        stale: 120_000,
-        update: 10_000,
-        retries: { retries: 20, minTimeout: 50, maxTimeout: 250 },
-      });
-      await chmod(`${configFile}.lock`, 0o700);
+      release = await acquirePrivateLock(configFile);
     } catch (error) {
       throw new SnackError("Configuration update lock could not be established.", {
         code: ExitCode.config,
@@ -437,16 +432,6 @@ function parseCommandValue(raw) {
   const errors = [];
   const value = parse(raw, errors, { allowTrailingComma: false });
   return errors.length === 0 && value !== undefined ? value : raw;
-}
-
-/** @param {unknown} value @returns {value is Record<string, unknown>} */
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** @param {unknown} error */
-function isNotFound(error) {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 /** @param {string} path */

@@ -39,7 +39,10 @@ severity, not a trade-off:
   `packages/cli/test/fixtures/privacy-canaries.json` holds strings that the tests drive through
   every command and assert are absent from every byte SNACK writes. A new capture path needs a new
   canary assertion.
-- **Local only.** No network calls, no telemetry, no service.
+- **Local only.** No telemetry, no service. `snack update` is the single exception, allowed to
+  install packages and nothing else
+  ([ADR-0010](./docs/adr/0010-snack-update-may-reach-the-network.md)); every command that observes,
+  stores, analyzes or reports stays offline.
 - **Fail open in the host, fail closed on data.** The plugin never throws into OpenCode; ingestion
   of an unknown schema refuses rather than guesses.
 - **Never imply real capacity.** No percentage of quota, no count of prompts remaining. Estimates

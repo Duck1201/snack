@@ -34,6 +34,8 @@ npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database eac
 
 Node 24 only (`engines: >=24 <25`), npm 11.16.0, ESM everywhere, JavaScript with JSDoc types — no
 TypeScript source. Tests are `node:test` + `node:assert/strict`; `fast-check` for property tests.
+`.prettierignore` exempts `AGENTS.md`, `CONTEXT.md`, `PLAN.md` and `docs/`; everything else `check`
+reaches is formatted — including `.claude/skills/**`, where one overlong line fails the gate.
 
 ## Documentation map — read before changing behavior
 
@@ -79,7 +81,9 @@ process. No daemon, no event bus, no DI container. Layering intent (files are fl
   add a canary assertion.
 - **Fail open in the host, fail closed on data.** The OpenCode plugin must never throw into or block
   OpenCode. Ingestion of an unknown schema/fingerprint must refuse rather than guess.
-- **Local only.** No network calls, no telemetry, no SNACK service.
+- **Local only.** No telemetry, no SNACK service. `snack update` is the one command permitted to
+  reach the network, and only to install packages (ADR-0010); nothing that observes, stores,
+  analyzes or reports opens a socket.
 - **Never imply real capacity.** No "% of quota", no "N prompts remaining". Every estimate carries
   an interval, an evidence level, and a named method. The interval and the evidence level are on
   every human surface; the method may be reachable only through `--json`, because it identifies the
@@ -111,8 +115,11 @@ and a row in `docs/claude-support.md`, which `contracts.test.js` asserts against
 ## Release
 
 Changesets. Both packages publish to `latest`. The stage version is the product version.
-`release:check` blocks publishing unless gate lines (`Trademark gate: passed`, npm trusted
-publisher, GitHub npm environment, WSL gate) are present in `docs/release/*.md` and
-`docs/opencode-support.md` is no longer `Status: in progress.`. `release:staging` stages the
-tarballs on an isolated registry so the chain is rehearsed before npm sees it. CI runs the full
+`release:check` blocks publishing unless seven `^… gate: passed$` lines are present — trademark, npm
+trusted publisher, GitHub npm environment, WSL, freeze, performance, artifact evidence, spread
+across `docs/release/*.md` and `docs/compatibility.md` — and both support matrices have cleared
+their `Status:` line. It then packs the tree and requires every digest it produces to appear in
+`docs/release/artifacts.md`, so a file named in a package's `files` array that changed after the
+evidence was written blocks the release instead of reaching the registry. `release:staging` stages
+the tarballs on an isolated registry so the chain is rehearsed before npm sees it. CI runs the full
 `check` + `pack:smoke` on ubuntu, macOS, and inside WSL2/Debian 13.

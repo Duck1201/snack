@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
-import lockfile from "proper-lockfile";
 
 import { ExitCode, SnackError } from "./errors.js";
+import { acquirePrivateLock } from "./file-lock.js";
 
 export const migrationDirectory = fileURLToPath(new URL("../migrations", import.meta.url));
 
@@ -25,13 +25,7 @@ export async function withStorageOperationLock(paths, callback) {
   await chmod(target, 0o600);
   let release;
   try {
-    release = await lockfile.lock(target, {
-      realpath: false,
-      stale: 120_000,
-      update: 10_000,
-      retries: { retries: 20, minTimeout: 50, maxTimeout: 250 },
-    });
-    await chmod(`${target}.lock`, 0o700);
+    release = await acquirePrivateLock(target);
   } catch (error) {
     throw new SnackError("Storage is locked by another operation; retry after it finishes.", {
       code: ExitCode.storage,
@@ -101,12 +95,7 @@ export async function initializeDatabase(paths, options = {}) {
     await seed.close();
     await chmod(paths.databaseFile, 0o600);
     try {
-      releaseLock = await lockfile.lock(paths.databaseFile, {
-        realpath: false,
-        stale: 120_000,
-        update: 10_000,
-        retries: { retries: 20, minTimeout: 50, maxTimeout: 250 },
-      });
+      releaseLock = await acquirePrivateLock(paths.databaseFile);
     } catch (error) {
       throw new SnackError("Storage is locked by another process; retry after it finishes.", {
         code: ExitCode.storage,
@@ -114,7 +103,6 @@ export async function initializeDatabase(paths, options = {}) {
         cause: error,
       });
     }
-    await chmod(`${paths.databaseFile}.lock`, 0o700);
     const opened = new Database(paths.databaseFile);
     database = opened;
     opened.pragma("foreign_keys = ON");
@@ -1811,7 +1799,7 @@ function mergeRestrictions(existing, incoming) {
  */
 
 /** @param {string} migrationsDir @returns {Promise<Migration[]>} */
-export async function loadMigrations(migrationsDir) {
+async function loadMigrations(migrationsDir) {
   const names = (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
   /** @type {Migration[]} */
   const migrations = [];
@@ -2441,7 +2429,7 @@ function writeTombstones(database, scope, now) {
  * @param {string} sourceAlias
  * @returns {{from_at: string | null, until_at: string | null}[]}
  */
-export function readPurgeTombstones(database, sourceAlias) {
+function readPurgeTombstones(database, sourceAlias) {
   return database
     .prepare(
       `SELECT from_at, until_at FROM purge_tombstone
@@ -2461,7 +2449,7 @@ export function readPurgeTombstones(database, sourceAlias) {
  * @param {{from_at: string | null, until_at: string | null}[]} tombstones
  * @param {string} startedAt
  */
-export function isTombstoned(tombstones, startedAt) {
+function isTombstoned(tombstones, startedAt) {
   return tombstones.some(
     (tombstone) =>
       (tombstone.from_at === null || startedAt >= tombstone.from_at) &&

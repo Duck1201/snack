@@ -2,15 +2,14 @@
 name: audit-snack-context-files
 description: >
   Settle SNACK doc claims against the code and fix every mirror in one pass. Use for any doc-vs-code
-  audit — "is CLAUDE.md still accurate", a README lying about a command, trimming the context files,
-  a post-release doc sweep. Also use before editing `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, or
-  any README, even when the task is "just fix this one line" and drift is never mentioned: the same
-  claim usually lives in two to six files here, and an enforcer in the code already settles most of
-  them.
+  audit in this repo, and whenever `/sync-context` is invoked here. Also use before editing
+  `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, or any README, even when the task is "just fix this
+  one line" and drift is never mentioned: the same claim usually lives in two to six files here, and
+  an enforcer in the code already settles most of them.
 license: MIT
 metadata:
   author: harvested from a /sync-context run on 1.1.3
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Audit SNACK's context files against the code
@@ -103,3 +102,10 @@ One finding is rarely one edit here.
 - **Auditing against the committed tree.** Four files were mid-sweep and uncommitted, and that diff
   already carried two of the fixes (the OpenCode fixture layering, the `upgrade:smoke` floors).
   Reading `HEAD` would have re-reported finished work as drift.
+
+## Related
+
+`~/.claude/skills/sync-context/SKILL.md` is the general form of this audit — the verdict vocabulary
+(correct / stale / wrong / noise / missing) and the report-then-stop protocol come from it. This
+skill is that procedure with SNACK's enforcer map and mirror set filled in, so prefer it here and
+read the general one only for a repo that has neither.
