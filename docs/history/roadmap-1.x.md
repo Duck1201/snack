@@ -105,7 +105,7 @@ was scoped here and deferred to `1.1.1` once the rebuild was priced: `capacity_p
 observations table as a child, so dropping its redundant constraint copies the user's whole history
 out and back, and no pragma that would avoid it survives the migration runner's transaction.
 
-### 1.1.1 - the two findings 1.1.0 did not carry — **built, not yet published**
+### 1.1.1 - the two findings 1.1.0 did not carry — **shipped**
 
 **Purpose:** close the last two open findings from the Phase 1 review. Both are P3 with a documented
 workaround, both were scoped into `1.1.0` and neither shipped there — one by choice, one after being
@@ -166,6 +166,15 @@ internal failure.
 **Exit, met.** Both fixes landed with a test that fails against `1.1.0` — `applied` missing from an
 applied setup's payload, and `SQLITE_CONSTRAINT_UNIQUE` from a rotation under a frozen clock. The
 optional gate was taken as well.
+
+**Shipped** as `@snack-ai/cli@1.1.1` on 2026-08-02, from commit `b9b1635`, tagged `v1.1.1`. The
+plugin stays at `1.0.2` and did not republish; the digest the registry already served for it was
+compared against this tree before the dispatch rather than reasoned about. One pull request and a
+release cut; the published artifact matches the recorded evidence exactly. Full record in
+[docs/release/identity.md](../release/identity.md).
+
+**With this the Phase 1 ledger closes.** Twelve findings, eleven real and one retracted, across four
+releases — `1.0.1`, `1.0.2`, `1.1.0` and `1.1.1`. Nothing from that review is outstanding.
 
 **Where the plan above was wrong.**
 

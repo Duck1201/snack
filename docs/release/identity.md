@@ -329,6 +329,52 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.1.1
+
+`@snack-ai/cli@1.1.1` was published from commit `b9b1635` by protected release run
+[30727100794](https://github.com/Duck1201/snack/actions/runs/30727100794), directly to `latest`.
+`stable` was moved by hand afterwards. Tagged `v1.1.1` on that same commit, released on GitHub as
+Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.1.1` | `1.1.1` | `1.1.1` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.2` | `1.0.2` | — | unchanged; publish step skipped |
+
+Verified against the registry rather than against the workflow's own status:
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '1.1.1', latest: '1.1.1' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.2' }`.
+
+**The published artifacts match the recorded evidence exactly.** Packed from the registry rather
+than from the tree, because the digest a consumer receives is the only one that settles it:
+
+```
+snack-ai-cli-1.1.1.tgz       sha256:7df55a890cc3d2542bcc171d855c6972acb2b8ca8c1081a7ae103f3ff1f5a028
+snack-ai-opencode-1.0.2.tgz  sha256:90b8740c9a43e5782f0e22632c5634bcbf62a50af01cc76dae12d25534103375
+```
+
+Both equal what `docs/release/artifacts.md` records.
+
+**The plugin did not republish, and the skip was checked rather than assumed.** No changeset named
+it because nothing inside its `files` array changed, and the digest the registry already serves for
+`1.0.2` was packed and compared against what this tree produces **before** the dispatch — the same
+`files` trap that made `1.0.0`'s evidence stale, caught this time by looking instead of reasoning.
+The workflow's verification step knows not to reassert a tag it did not set, so a green run does not
+claim the plugin was published when it was not.
+
+**What this release closes.** The Phase 1 end-to-end review's ledger has no open entry left: an
+applied `setup` no longer reports under a key naming the opposite of what happened, and two `setup`
+runs in the same millisecond rotate instead of raising `internal_error`. The second needed migration
+013, the largest rebuild this project has done — eight tables, because with foreign keys on the
+parent cannot be dropped while any child holds rows. It was priced against a real history before the
+approach was chosen, as the roadmap required: 1.8 s and 104 MB peak RSS at 100,000 prompts, with the
+cost worth naming being space rather than time. `docs/release/performance.md` carries the figures.
+
+**The rebuild also removes a testing trap, which is the reason it was worth more than the cheap
+fix.** Every command test injects a frozen clock, so before this no test could reach the rotation
+path at all — which is what hid finding 05, a P1 that shipped in `1.0.0`. The regression test is
+precisely the one nothing could write before.
+
 ## 1.1.0
 
 `@snack-ai/cli@1.1.0` and `@snack-ai/opencode@1.0.2` were published from commit `ba57aaa` by
