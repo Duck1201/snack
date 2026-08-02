@@ -76,19 +76,21 @@ fonte de capacidade, e o SNACK trata o uso deles como o pote único que de fato 
 
 ## Comandos
 
-| Comando                                       | O que faz                                                                          |
-| --------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo |
-| `snack sync`                                  | Importa histórico novo; `--full` relê e reconcilia tudo                            |
-| `snack status`                                | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base     |
-| `snack stats`                                 | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo      |
-| `snack doctor`                                | Diagnostica a instalação local sem alterá-la                                       |
-| `snack config`                                | Consulta ou atualiza a configuração local                                          |
-| `snack export`                                | Escreve suas observações e previsões em JSON ou CSV                                |
-| `snack data purge`                            | Apaga observações armazenadas, opcionalmente bloqueando a reimportação             |
-| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam entre si                |
+| Comando                                       | O que faz                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `snack setup claude` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo                                                    |
+| `snack sync`                                  | Importa histórico novo; `--full` relê e reconcilia tudo                                                                               |
+| `snack status`                                | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência e o método |
+| `snack stats`                                 | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                         |
+| `snack doctor`                                | Diagnostica a instalação local sem alterá-la                                                                                          |
+| `snack config`                                | Consulta ou atualiza a configuração local                                                                                             |
+| `snack export`                                | Escreve suas observações e previsões em JSON ou CSV                                                                                   |
+| `snack data purge`                            | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                |
+| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                   |
 
-Todo comando aceita `--json` e emite um documento versionado.
+Todo comando aceita `--json` e emite um documento versionado. Todo comando também está no
+`man snack`, gerado a partir da própria superfície de flags do CLI, então ele não descreve uma
+versão que você não está rodando.
 
 ## Como ele decide, em resumo
 

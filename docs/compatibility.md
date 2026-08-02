@@ -213,7 +213,7 @@ been reading is byte-identical to `1.1.2` for the same input.
 
 Two things leave the human output and stay in `--json`: the method identifier with its version, and
 the percentile behind each pressure driver. They identify and qualify an estimate rather than state
-it. `status --verbose` will give them a human home in `1.2.0`; it is an additive option, and an
+it. `status --verbose` gives them a human home in `1.2.0`; it is an additive option, and an
 additive option belongs in a minor, which is the whole reason it is not in this release.
 
 The exception is the one method the specification requires the interface itself to label: an
@@ -225,6 +225,30 @@ The defect: every alignment decision counted UTF-16 code units instead of screen
 capacity source whose alias is written in CJK or holds an emoji had every measurement in its row
 shifted left of its own heading. Present since `1.1.0`, and invisible to anyone whose aliases are
 ASCII.
+
+## What 1.2.0 adds, and why it is a minor
+
+**One new flag and no other movement on any frozen surface.** `status --verbose` is additive: no
+existing invocation changes meaning, no flag is removed or renamed, and a script that never passes
+it sees byte-identical output. That is precisely what strict SemVer allows into a minor, and it is
+why this could not have shipped in `1.1.3` — which is the release that made it necessary, by moving
+the method identifier, the model policy version, the evidence gates and the driver percentiles off
+the default panel with nowhere human to put them.
+
+**No schema, no envelope, no export, no exit code moves.** The envelope stays at `schema_version` 2,
+the export at 2, configuration at 1, spool events at 1. `status --json` is byte-identical with and
+without `--verbose`, and a test asserts exactly that: a flag that quietly widened the envelope would
+be a schema change arriving in a minor without a version move. Everything `--verbose` prints was
+already in the `--json` document; this release gives it a second route to a reader, not a new field.
+
+**What `--verbose` renders is human formatting, which this document has never held public.** The
+panel shape, the gate list, the wording of a percentile — all of it may change in any release. What
+is now public is that the option exists and that it is accepted where the frozen surface says it is.
+
+`contracts.test.js` gains `--verbose` in the `status` row of its literal flag map, and the surface
+that literal is compared against is now read by `scripts/man-surface.mjs`, which also generates the
+published `man snack`. The two cannot describe different CLIs, and a flag that reaches `main.js`
+without reaching `docs/specification/cli.md` fails `npm run check`.
 
 ## Upgrading from 0.6+
 

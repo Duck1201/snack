@@ -84,20 +84,22 @@ escreve.
 
 ## Os comandos
 
-| Comando                                       | O que faz                                                                                                                    |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Mapeia um cliente para uma fonte de capacidade. Mostra cada mudança antes, faz backup, não escreve nada sem sua confirmação. |
-| `snack status`                                | A avaliação do próximo prompt: faixa, risco, evidência, pressão e o que a puxou, atualidade dos dados.                       |
-| `snack stats`                                 | Como o seu uso realmente é ao longo de horizontes móveis, e como as previsões passadas se saíram.                            |
-| `snack sync`                                  | Importa histórico novo. `--full` relê e reconcilia tudo sem duplicar nada.                                                   |
-| `snack export`                                | Exporta tudo em JSON ou CSV com schema e proveniência. Os dados continuam seus.                                              |
-| `snack data purge`                            | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                 |
-| `snack config`                                | Lê e edita a configuração local.                                                                                             |
-| `snack doctor`                                | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                     |
-| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                     |
+| Comando                                       | O que faz                                                                                                                                                                                 |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `snack setup claude` | Mapeia um cliente para uma fonte de capacidade. Mostra cada mudança antes, faz backup, não escreve nada sem sua confirmação.                                                              |
+| `snack status`                                | A avaliação do próximo prompt: faixa, risco, evidência, pressão e o que a puxou, atualidade dos dados. `--verbose` acrescenta os portões de evidência, o método e as versões de política. |
+| `snack stats`                                 | Como o seu uso realmente é ao longo de horizontes móveis, e como as previsões passadas se saíram.                                                                                         |
+| `snack sync`                                  | Importa histórico novo. `--full` relê e reconcilia tudo sem duplicar nada.                                                                                                                |
+| `snack export`                                | Exporta tudo em JSON ou CSV com schema e proveniência. Os dados continuam seus.                                                                                                           |
+| `snack data purge`                            | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                                                                              |
+| `snack config`                                | Lê e edita a configuração local.                                                                                                                                                          |
+| `snack doctor`                                | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                                                                                  |
+| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                                                                                  |
 
 Todo comando aceita `--json` e responde com um documento versionado, então automatizar nunca
-significa fazer parsing de prosa.
+significa fazer parsing de prosa. Todo comando também está no `man snack`, que vem no pacote e é
+gerado a partir da própria superfície de flags do CLI — uma flag não documentada reprova o build em
+vez de chegar até você.
 
 Dois clientes podem dividir uma fonte de capacidade. Se OpenCode e Claude Code cobram da mesma
 conta, mapeie ambos para o mesmo alias e o SNACK vai tratar o uso deles como o pote único que ele de

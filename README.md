@@ -76,19 +76,20 @@ treat their usage as the single pool it really is.
 
 ## Commands
 
-| Command                                       | What it does                                                                     |
-| --------------------------------------------- | -------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Map a capacity source; optionally register the live-capture plugin               |
-| `snack sync`                                  | Import new history; `--full` re-reads and reconciles everything                  |
-| `snack status`                                | Assess the next prompt, with usage pressure against your own baseline            |
-| `snack stats`                                 | Describe observed usage over rolling horizons; `--verbose` adds per-model detail |
-| `snack doctor`                                | Diagnose the local installation without changing it                              |
-| `snack config`                                | Inspect or update local configuration                                            |
-| `snack export`                                | Write your observations and predictions to JSON or CSV                           |
-| `snack data purge`                            | Delete stored observations, optionally blocking their re-import                  |
-| `snack update`                                | Bring the CLI and the capture plugin to versions that belong together            |
+| Command                                       | What it does                                                                                                              |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `snack setup claude` | Map a capacity source; optionally register the live-capture plugin                                                        |
+| `snack sync`                                  | Import new history; `--full` re-reads and reconciles everything                                                           |
+| `snack status`                                | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates and the method |
+| `snack stats`                                 | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                          |
+| `snack doctor`                                | Diagnose the local installation without changing it                                                                       |
+| `snack config`                                | Inspect or update local configuration                                                                                     |
+| `snack export`                                | Write your observations and predictions to JSON or CSV                                                                    |
+| `snack data purge`                            | Delete stored observations, optionally blocking their re-import                                                           |
+| `snack update`                                | Bring the CLI and the capture plugin to versions that belong together                                                     |
 
-Every command takes `--json` and emits one versioned document.
+Every command takes `--json` and emits one versioned document. Every command is also in `man snack`,
+generated from the CLI's own flag surface so it cannot describe a version you are not running.
 
 ## How it decides, briefly
 
