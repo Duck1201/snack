@@ -89,6 +89,9 @@ The top-level command is `snack`.
 - `snack export`: explicitly export local metadata and predictions.
 - `snack data purge`: delete selected local history transactionally.
 - `snack config get|set|path`: inspect and change schema-validated configuration.
+- `snack dash` (from `1.6.0`): one interactive full-screen reading of every capacity source. Without
+  a TTY it is a usage error that points at `snack status`, which answers the same question through a
+  pipe.
 - `snack update` (from `1.1.0`): bring the CLI and the capture plugin to the versions that belong
   together, re-registering the plugin with the values already configured so no capacity period
   rotates. **The only command that reaches the network** — see
@@ -190,11 +193,17 @@ budgets, and the risks.
 | `1.1.0` | `snack update`, the status panel and colour, the documentation restructure | shipped |
 | `1.1.1` | The two Phase 1 findings `1.1.0` did not carry, both P3 | shipped |
 | `1.1.2` | The capacity-period boundary the 1.1.1 verification found | shipped |
-| `1.1.3` | The reading: `status` and `stats` written for a person, and screen-width alignment | planned |
-| `1.2.0` | `status --verbose`, `snack dash` — superseding `status --watch` — and a generated `man snack` | planned |
+| `1.1.3` | The reading: `status` and `stats` written for a person, and screen-width alignment | shipped |
+| `1.2.0` | `status --verbose` and a generated, gated `man snack` | planned |
 | `1.3.0` | Codex CLI adapter | planned |
 | `1.4.0` | `status --sequence N` | planned |
 | `1.5.0` | `reported_capacity_v1` prediction method | planned |
+| `1.6.0` | `snack dash` — superseding `status --watch` | planned |
+
+`snack dash` was specified as part of `1.2.0` and moved to the end of the line rather than pushing
+the three releases behind it down a version each. Renumbering commitments the roadmap has already
+published, in order to absorb a scope change, makes every one of them contingent on whatever arrives
+next; `1.1.3` established that and this is the first application of it.
 
 ## Compatibility Policy
 
@@ -266,6 +275,8 @@ Explicitly not on this roadmap. Each needs its own design and its own release de
 2. **Public source-plugin API** — only after the Codex adapter has proven the boundary with a third integration. Publishing the seam before that freezes a shape that two adapters happen to fit.
 3. **Advanced forecasting in optional Python adapters**, and promotion of any advanced model — only if temporal validation improves calibration and Brier score while preserving explainability and a JavaScript fallback.
 4. **A full-screen TUI application.** The 1.x work is colour, layout, and drawing in place; an alternate-buffer application with keyboard navigation is a different product surface and a dependency.
+
+   **Amended for `1.6.0`, and the item stays because half of it still holds.** The objection was two things joined by an "and", and only one of them survives scrutiny. **The dependency is answered:** `snack dash` is stdlib only — no `ink`, which needs JSX and therefore a build step, and this package publishes `src/` verbatim precisely so a reader can audit on GitHub exactly what runs on their machine. A screen buffer, pure `state → string[]` widgets and a per-line frame diff cover what a component renderer would have been imported for, and leave the widgets testable with no terminal. **The product surface is not answered; it is accepted deliberately.** An interactive screen is a second thing to keep working, and this line takes it on knowingly rather than by discovering it is already half-built. What remains outside the 1.x line is what this item was really guarding: a component framework, a build step, and a rendering dependency in a package whose whole distribution model is that there is nothing between the source and the run.
 5. **Team, organizational, or shared-account features.** Unchanged since the first plan.
 
 ## Principal Risks

@@ -5,7 +5,7 @@ status: accepted
 # `status --watch` writes a prediction snapshot only when the evidence changed
 
 > **The surface this names was renamed after this decision was accepted.** `status --watch` was
-> dropped from `1.2.0` and superseded by `snack dash`, a command of its own: the `1.1.3` interface
+> dropped and superseded by `snack dash`, a command of its own scheduled for `1.6.0`: the `1.1.3` interface
 > work established that `status` is a stream read through pipes and that a full-screen drawing
 > cannot be its stdout. Nothing below changes. The decision was always about a screen that redraws
 > faster than evidence arrives, and it applies to `snack dash` word for word — read `--watch` as
