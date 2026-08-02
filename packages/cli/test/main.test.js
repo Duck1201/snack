@@ -299,7 +299,7 @@ test("setup opencode configures an explicit source after a compatible dry-run", 
           family: "oc-sqlite-msgpart-v1",
           supported: true,
         },
-        dry_run: { observations: 1 },
+        dry_run: { observations: 1, applied: true },
       },
       configuredSources: [
         {
