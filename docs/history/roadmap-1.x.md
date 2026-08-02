@@ -343,7 +343,7 @@ while reviewing what the removed `method` row had been carrying: `docs/specifica
 puts that label on the interface, no version had ever met it, and the suite exercised the path
 through `--json` alone. Deleting something is a review technique this release found by accident.
 
-### 1.2.0 - `status --verbose` and `man snack`
+### 1.2.0 - `status --verbose` and `man snack` — **shipped**
 
 **Purpose:** finish the reading `1.1.3` started. That release moved the statistics off the default
 panel and had nowhere human to put them; this one adds the flag that holds them, and the gate that
@@ -375,10 +375,40 @@ already proven. It lands at [`1.6.0`](#160---snack-dash), behind the three relea
 promised before it, because the alternative is renumbering published commitments to absorb a scope
 change — which is what `1.1.3` established is backwards.
 
-**Exit:** `status --verbose` is covered by renderer tests that need no database, clock or terminal;
-`status --json` is byte-identical with and without `--verbose`; `snack.1` regenerates identically in
-CI and opens under `man -l`; a flag added to `main.js` and not to `docs/specification/cli.md` makes
-`npm run check` fail.
+**Exit, met.** `status --verbose` is covered by renderer tests that need no database, clock or
+terminal; `status --json` is byte-identical with and without `--verbose`; `snack.1` regenerates
+identically in CI and opens under `man -l`; a flag added to `main.js` and not to
+`docs/specification/cli.md` makes `npm run check` fail — proved by adding one and watching all three
+gates go red.
+
+**Shipped** as `@snack-ai/cli@1.2.0` on 2026-08-02, from commit `3298c91`, tagged `v1.2.0`. The
+plugin republished as `1.0.3`. The published artifacts match the recorded evidence exactly. Full
+record in [docs/release/identity.md](../release/identity.md).
+
+**Where the plan above was wrong.**
+
+**The gate found fifteen undocumented flags, and the plan expected none.** It was written to stop a
+*future* flag from shipping undocumented. Its first run found that `setup`'s value flags,
+`--install-plugin`, `--yes`, `--enable-prospective-analysis` and `export --json` had all been
+reachable and undeclared for releases. A gate written to prevent a class of defect found the class
+already present, which is the ordinary outcome and was not the expected one.
+
+**Most of `--verbose` was recovered rather than written.** The flag had been built, tested and
+reviewed during `1.1.3` and removed before that cut. The plan treated it as new work. What was
+actually new was two rows: the model policy version and the evidence gates.
+
+**Two defects reached `main` and were caught only by a real installation.** `--verbose` reprinted
+the shared caveats once per source — the defect `1.1.3` fixed, reintroduced by rendering panels
+without the rule that made the overview necessary — and the pressure line read `above 0% of your own
+history` for the lightest window on record. Neither is visible with one configured source, which is
+all the fixture suite had, and neither was caught by a suite green at 480 tests. This is the `1.1.2`
+lesson repeating: **a green gate says the code does what the tests describe, never that the tests
+describe what a user sees.**
+
+**A performance regression hid inside a release that changed no prediction code.** Compiling the
+spool event schema at module load cost every command about 65 ms, and `status` has a 250 ms budget.
+It was read as a flaky budget test for several runs before it was measured against the previous
+tree. The budget test was right; the reading of it was wrong.
 
 ### 1.3.0 - Codex CLI adapter
 

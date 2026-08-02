@@ -194,7 +194,7 @@ budgets, and the risks.
 | `1.1.1` | The two Phase 1 findings `1.1.0` did not carry, both P3 | shipped |
 | `1.1.2` | The capacity-period boundary the 1.1.1 verification found | shipped |
 | `1.1.3` | The reading: `status` and `stats` written for a person, and screen-width alignment | shipped |
-| `1.2.0` | `status --verbose` and a generated, gated `man snack` | planned |
+| `1.2.0` | `status --verbose` and a generated, gated `man snack` | shipped |
 | `1.3.0` | Codex CLI adapter | planned |
 | `1.4.0` | `status --sequence N` | planned |
 | `1.5.0` | `reported_capacity_v1` prediction method | planned |
