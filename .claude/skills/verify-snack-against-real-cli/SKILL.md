@@ -19,10 +19,11 @@ SNACK's command tests drive `run(argv, options)` with injected `stdout`/`stderr`
 `prompt`, and an injected `now`. That is the right seam for contracts, and it is blind to how the
 installed command actually behaves.
 
-**Failure pattern:** an injected-port test passes while the shipped command is broken. The fake sink
-never closes a pipe, the fake prompt resolves instantly and never closes stdin, an in-process call
-pays module-load cost once instead of every run, and a frozen `now` puts seeded data inside windows
-that the real clock puts outside.
+**Failure pattern: success-shaped silence** — an injected-port test passes while the shipped command
+is broken. The fake sink never closes a pipe, the fake prompt resolves instantly and never closes
+stdin, an in-process call pays module-load cost once instead of every run, and a frozen `now` puts
+seeded data inside windows that the real clock puts outside. Nothing fails; the seam was simply
+never crossed.
 
 **Verified by:** `npm run check` green at 295 tests while four defects it did not catch were found
 by driving the real binary — plugin registration landing under `$XDG_CONFIG_HOME`,
@@ -37,28 +38,23 @@ installed from npm.
 **And one finding was wrong**, which is why this skill carries "Prove the harness before believing
 it".
 
-## When to use this
+## Which path this run takes
 
-- After changing a command's output path, especially anything that streams (`export`) or prompts
-  (`setup`).
-- After changing anything that reads storage: a new query, a new command, a guard.
-- After changing analytics that depend on rolling windows — pressure, trend, horizons, freshness —
-  because these are computed against the real clock.
-- Before recording a performance budget as met.
-- Before telling the user a command works.
-- After writing or changing a **source adapter**, before believing its fixtures — read
+The procedure below is the common path. Four branches leave it:
+
+- **A source adapter changed** — its fixtures are not evidence about the real source; read
   `references/adapter-reconciliation.md`.
-- **Before recording a defect** you observed from a shell loop rather than from a test — see "Prove
-  the harness before believing it".
-- **Before and after a release**, against the published artifact rather than the tree — see "Verify
-  a released defect against the published artifact".
-- After changing the capture plugin, against the real OpenCode host — read
-  `references/opencode-host.md`. The packed-plugin host test is the harness; keep it runnable.
+- **The capture plugin changed** — drive the real OpenCode host; read `references/opencode-host.md`.
+  The packed-plugin host test is that harness; keep it runnable.
+- **You are about to record a defect** seen from a shell loop rather than from a test file — see
+  "Prove the harness before believing it".
+- **Anything claimed about a release** — go against the published artifact, not the tree; see
+  "Verify a released defect against the published artifact".
 
 ## Procedure
 
 - [ ] 1. Run the gate first: `npm run check` from the repo root. Green here is necessary, not
-      sufficient.
+      sufficient — a suite that never reaches the seam reports success-shaped silence.
 - [ ] 2. Build a throwaway environment. Every SNACK path is env-driven, so a temp root fully
       isolates the run — never point it at your real config.
 - [ ] 3. Seed data **anchored to `new Date()`**, not to a fixed historical date.
@@ -71,8 +67,9 @@ it".
 ### The isolated environment
 
 ```bash
-ROOT=$(mktemp -d /home/duck/.tmp_exec/snack-check-XXXX)
-CLI=/home/duck/Git/IA/AIQuota/packages/cli
+ROOT=$(mktemp -d "${TMPDIR:-/tmp}/snack-check-XXXXXX")
+CLI=$(git rev-parse --show-toplevel)/packages/cli   # the package dir; references/seeding.md wants it
+SNACK="node $CLI/src/cli.js"                        # the command; everything else wants this
 export XDG_CONFIG_HOME=$ROOT/config XDG_DATA_HOME=$ROOT/data \
        XDG_STATE_HOME=$ROOT/state XDG_CACHE_HOME=$ROOT/cache \
        HOME=$ROOT OPENCODE_DB=$ROOT/opencode.db
@@ -85,14 +82,14 @@ is unset, and a leaked real `HOME` would write into your own OpenCode configurat
 
 ### What the fakes cannot reach — check each
 
-| Path               | How to drive it                                                                                               | What it catches                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Closed pipe        | `node $CLI/src/cli.js export --format json --output - \| head -c 200`                                         | unhandled `EPIPE` replacing output with a stack trace          |
-| Interactive prompt | `script -qec "node $CLI/src/cli.js setup opencode" /dev/null < <(printf 'a\n'; sleep 0.3; printf 'b\n'; ...)` | stdin pausing between questions; a hang                        |
-| Interrupted prompt | same, but feed fewer answers than questions                                                                   | `Ctrl+D` surfacing as an internal failure                      |
-| Process start-up   | spawn the binary N times and take p95                                                                         | module-load cost hidden by in-process repetition               |
-| Real-clock windows | seed relative to `new Date()`                                                                                 | empty horizons, `insufficient_baseline`, saturated percentiles |
-| Permissions        | `find $ROOT -type f -exec stat -c '%a %n' {} +`                                                               | files created outside `0600`/`0700`                            |
+| Path               | How to drive it                                                                                 | What it catches                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Closed pipe        | `$SNACK export --format json --output - \| head -c 200`                                         | unhandled `EPIPE` replacing output with a stack trace          |
+| Interactive prompt | `script -qec "$SNACK setup opencode" /dev/null < <(printf 'a\n'; sleep 0.3; printf 'b\n'; ...)` | stdin pausing between questions; a hang                        |
+| Interrupted prompt | same, but feed fewer answers than questions                                                     | `Ctrl+D` surfacing as an internal failure                      |
+| Process start-up   | spawn the binary N times and take p95                                                           | module-load cost hidden by in-process repetition               |
+| Real-clock windows | seed relative to `new Date()`                                                                   | empty horizons, `insufficient_baseline`, saturated percentiles |
+| Permissions        | `find $ROOT -type f -exec stat -c '%a %n' {} +`                                                 | files created outside `0600`/`0700`                            |
 
 `script -qec` gives a pty, which is what makes `process.stdin.isTTY` true and the prompt wire up at
 all. Feed answers with a `sleep` between them: a pty delivers a whole buffer at once and readline
@@ -102,10 +99,10 @@ may consume it as one line.
 
 ```bash
 # WRONG — reports a hang for a command that cancels cleanly
-script -qec "$CLI setup claude" /dev/null < /dev/null
+script -qec "$SNACK setup claude" /dev/null < /dev/null
 
 # RIGHT — the pty stays up long enough for the command to print and exit
-script -qec "$CLI setup claude" /dev/null < <(sleep 2; printf '\004'; sleep 30)
+script -qec "$SNACK setup claude" /dev/null < <(sleep 2; printf '\004'; sleep 30)
 ```
 
 When `script`'s own stdin reaches EOF, `script` starts tearing the pty down while the child is still

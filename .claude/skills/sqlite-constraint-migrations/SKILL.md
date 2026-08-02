@@ -18,11 +18,12 @@ SQLite cannot `ALTER` a CHECK constraint, a PRIMARY KEY, a column type, or a NOT
 answer is the [12-step table-rebuild procedure](https://sqlite.org/lang_altertable.html#otherala),
 whose **first step is `PRAGMA foreign_keys = OFF`**.
 
-That step cannot work in this repo. `initializeDatabase` (`packages/cli/src/storage.js:104`) sets
-`foreign_keys = ON` and then runs every pending migration inside one transaction (`storage.js:123`,
-committed with `.immediate()` at `:148`). **`PRAGMA foreign_keys` is a no-op inside a transaction**
-— SQLite ignores it silently, no error. So a migration that opens with it runs with foreign keys
-still enforced and then does something destructive under the wrong assumption.
+That step cannot work in this repo. `initializeDatabase` in `packages/cli/src/storage.js` runs
+`opened.pragma("foreign_keys = ON")` and then applies every pending migration inside one
+`opened.transaction(...)`, committed with `apply.immediate()`. **`PRAGMA foreign_keys` is a no-op
+inside a transaction** — SQLite ignores it silently, no error. That is success-shaped silence at its
+purest: the statement runs, reports nothing, and does nothing, so the migration proceeds with
+foreign keys still enforced and does something destructive under the wrong assumption.
 
 ## The failure pattern this avoids
 
@@ -98,18 +99,17 @@ commits and leaves the schema pointing at a table that no longer exists.
 
 5. **Write the upgrade test first, before the SQL.** It is the only thing that proves the rebuild
    preserved data. The pattern is in `packages/cli/test/storage.test.js`: `copyMigrationsThrough(N)`
-   (`:417`) builds a database at the previous schema, `seedZeroSixDatabase` (`:365`) fills it with
-   the SQL an older binary would have written, and `tableCounts` (`:434`) compares every table
-   across the upgrade.
+   builds a database at the previous schema, `seedZeroSixDatabase` fills it with the SQL an older
+   binary would have written, and `tableCounts` compares every table across the upgrade.
 
    Seed with **raw SQL, not today's `storeObservations`** — see "What didn't work".
 
 6. **Bump the two migration-count assertions** or the suite fails for an unrelated-looking reason:
-   `packages/cli/test/main.test.js:41` (`document.data.storage.applied`) and the `upgrade.applied` /
-   `schema_migration` delta in the upgrade test.
+   the `document.data.storage.applied` literal in `packages/cli/test/main.test.js` (currently
+   `[1, ..., 13]`) and the `upgrade.applied` / `schema_migration` delta in the upgrade test.
 
-7. **Run the gate.** `npm run check`. The runner already runs `quick_check` and `foreign_key_check`
-   after applying (`storage.js:151-152`), so a rebuild that left a dangling reference fails there
+7. **Run the gate.** `npm run check`. `initializeDatabase` already runs `quick_check` and
+   `foreign_key_check` after applying, so a rebuild that left a dangling reference fails there
    rather than shipping.
 
 ## Gotchas
@@ -117,7 +117,9 @@ commits and leaves the schema pointing at a table that no longer exists.
 - **Migrations are append-only and checksum-verified** against `schema_migration` on open. Never
   edit a released migration — a changed file makes every existing database refuse to open with
   `migration_history_mismatch`. Add `NNN+1` instead.
-- A pre-migration backup is taken automatically (`storage.js:116`) — you do not need to add one.
+- A pre-migration backup is taken automatically — `initializeDatabase` writes
+  `snack-before-<stamp>-<uuid>.sqlite3` into `paths.backupDir` before applying. You do not need to
+  add one.
 - The tables SNACK rebuilds this way (`client_installation`, `source_binding`,
   `ambiguous_profile_mapping`, `pending_spool_observation`) hold a handful of rows each, so the
   copy-out/copy-in costs nothing. Check that assumption before applying this to a table holding

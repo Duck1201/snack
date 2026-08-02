@@ -18,10 +18,11 @@ SNACK's fail-closed-on-data invariant lives at four seams: two client adapters, 
 and argv. Each one is a place where input SNACK does not control becomes an observation, a stored
 row, or a published document. This is how to write a property test there that finds something.
 
-**Failure pattern:** a parser that neither refuses nor understands — it stores what it read
-verbatim. The row looks fine, `sync` reports it inserted, and every window, freshness figure and
-horizon computed over it is arithmetic on a string. The fixture suite stays green because fixtures
-only hold shapes someone already thought of.
+**Failure pattern: success-shaped silence** — a parser that neither refuses nor understands, and
+stores what it read verbatim. The row looks fine, `sync` reports it inserted, and every window,
+freshness figure and horizon computed over it is arithmetic on a string. The fixture suite stays
+green because fixtures only hold shapes someone already thought of. The test you write here fails
+the same way if you let it: a property that refuses everything is silence too.
 
 **Verified by:** four property tests written in one wave found three defects the suite had never
 seen — a Claude `timestamp` that was not a time reaching `prompt_execution.started_at` (found on the
@@ -29,13 +30,9 @@ seen — a Claude `timestamp` that was not a time reaching `prompt_execution.sta
 a rejected argv token published in the error envelope's `command` field. `npm run check` was green
 before and after each.
 
-## When to use this
-
-- A stage or issue asks for fuzz, property, or hardening work on ingestion or the CLI.
-- You changed a parser, an adapter, the spool reader, or argv handling.
-- You are about to claim a parser fails closed on the strength of a green fixture suite.
-- A new client adapter was written — see "Compare the two adapters" below, which is where the
-  highest-value finding of this kind came from.
+When a **new client adapter** is what changed, read "Compare the two adapters" below before writing
+anything — the highest-value finding of this kind was a difference between two readers, not a bug
+inside one.
 
 ## The property, stated once
 
@@ -66,9 +63,9 @@ Every one of these tests asserts the same sentence, and it is worth writing at t
       falling over rather than deciding.
 
 - [ ] 5. **Count how many inputs were read through, and fail if none were** — the snippet under "The
-      anti-vacuity counter" below. Without it the property passes by refusing everything, and a
-      fingerprint that later grows stricter silently turns a real test into a green one that reads
-      nothing.
+      anti-vacuity counter" below. It is the assertion that breaks success-shaped silence in your
+      own test: without it a fingerprint that later grows stricter turns a real property into a
+      green one that reads nothing.
 
 - [ ] 6. **Assert only what the seam owns.** See "Assert at the right seam" below — this is where
       both false positives came from.
