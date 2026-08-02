@@ -851,3 +851,26 @@ test(`\`stats --by-client\` over ${PROMPTS.toLocaleString("en-US")} mixed-client
   t.diagnostic(`stats --by-client over one dense window took ${(elapsedMs / 1000).toFixed(1)}s`);
   assert.ok(elapsedMs < 10_000, `stats --by-client took ${(elapsedMs / 1000).toFixed(1)}s`);
 });
+
+test("reading a spool segment is the only thing that loads the schema validator", async () => {
+  // `status --no-sync` has a 250 ms budget and never opens a spool segment, but `spool.js` is
+  // reachable from every command through `main.js`. Compiling the event schema at import time cost
+  // about 65 ms -- a quarter of the budget -- to build a validator that command never calls, and it
+  // took the p95 from roughly 195 ms to roughly 225 ms where the budget test only failed
+  // intermittently. Asserted structurally rather than by timing, because the timing version of this
+  // question is exactly the flaky one.
+  const script = [
+    "import { createRequire } from 'node:module';",
+    `await import(${JSON.stringify(fileURLToPath(new URL("../src/spool.js", import.meta.url)))});`,
+    "const cached = () => Object.keys(createRequire(import.meta.url).cache).some((key) => key.includes('ajv'));",
+    "process.stdout.write(JSON.stringify({ afterImport: cached() }));",
+  ].join("\n");
+
+  const { stdout } = await executeFile(process.execPath, ["--input-type=module", "-e", script]);
+
+  assert.deepEqual(
+    JSON.parse(stdout),
+    { afterImport: false },
+    "importing spool.js must not pull in ajv; compile the schema on the first event read",
+  );
+});
