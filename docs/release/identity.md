@@ -329,6 +329,57 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.2.0
+
+`@snack-ai/cli@1.2.0` and `@snack-ai/opencode@1.0.3` were published from commit `3298c91` by
+protected release run
+[30766287179](https://github.com/Duck1201/snack/actions/runs/30766287179), directly to `latest`.
+Tagged `v1.2.0` on that same commit, released on GitHub as Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.2.0` | `1.2.0` | `1.1.2` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.3` | `1.0.3` | — | publish + SLSA provenance |
+
+The registry is what this table records, not the intent: `npm view @snack-ai/cli dist-tags` answers
+`{ stable: '1.1.2', latest: '1.2.0' }` and `npm view @snack-ai/opencode dist-tags` answers
+`{ latest: '1.0.3' }`. `stable` did not move, because no release moves it.
+
+**The published tarballs were verified against the recorded evidence before the tag was created.**
+`npm pack` against the published specs reproduced `docs/release/artifacts.md` exactly:
+
+```
+@snack-ai/cli@1.2.0       sha256:e2c4b4f0279b463e34b42141d173ce02a5f4aea49b7e61eb688d9cc5eb2ba2f6
+@snack-ai/opencode@1.0.3  sha256:167f4f84162d4c4da6842b760e0d376ba71124626d45e14656a7ce881e583a2a
+```
+
+The artifact was then installed from the registry and driven: `--version` answers `1.2.0`, the help
+declares `--verbose`, `man/snack.1` is inside the tarball and opens under `man -l`, and
+`pluginPackageSpec` reads `@snack-ai/opencode@1.0.3` — a pin whose target exists, which is the
+failure Phase 1 found on `1.0.0` and the reason it is checked on the published build rather than on
+the tree.
+
+**The plugin republished, and that was forced rather than chosen.** Validating spool events against
+the schema both packages ship changed `packages/opencode/src/plugin.js`, which is inside that
+package's `files` array. The tree therefore packed a `1.0.2` whose digest differed from the
+published one, and a published version is immutable. Content that changed takes a new number; the
+spool event contract is untouched at version 1 and no event that was valid before is refused now.
+
+**Two defects were found after `1.2.0` was merged and before it was published, both by running the
+release against a real installation with four configured sources.** `status --verbose` printed
+twelve identical caveat lines where the overview prints three — precisely the defect `1.1.3` fixed,
+reintroduced by deciding that `--verbose` renders panels without carrying over the rule that made
+the overview necessary. And the pressure line read `above 0% of your own history` for the lightest
+window on record, which is true and empty. Neither could appear with one configured source, which is
+all the fixture suite had. Both were fixed and the `1.2.0` changelog entry amended rather than a
+patch version cut, because nothing had been published yet — a version number for our own review
+cycle would teach a reader that a release had shipped a defect they could have received.
+
+**The publish gate was armed in its own commit.** `release.yml` hardcodes the confirmation string
+and still read `publish-1.1.3`; dispatching `publish-1.2.0` against that guard would have skipped
+the job and reported success. It is the first item in the release skill's list of steps that fail as
+success-shaped silence, and it was caught by reading the file rather than by the dispatch.
+
 ## 1.1.3
 
 `@snack-ai/cli@1.1.3` was published from commit `32d23d8` by protected release run
