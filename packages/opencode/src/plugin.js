@@ -39,7 +39,7 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
   /** @param {Record<string, unknown>} event */
   /** @param {string} targetDirectory @param {Record<string, unknown>} event */
   const append = (targetDirectory, event) => {
-    if (!installationId || !targetDirectory || !isSpoolEvent(event)) {
+    if (!installationId || !targetDirectory || !withinSchemaBounds(event)) {
       warn();
       return;
     }
@@ -363,126 +363,32 @@ function recordOrNull(value) {
     : null;
 }
 
-/** @param {Record<string, unknown>} event */
-function isSpoolEvent(event) {
-  const allowed = new Set([
-    "schema_version",
-    "event_id",
-    "installation_id",
-    "event_type",
-    "source_prompt_id",
-    "source_session_id",
-    "revision",
-    "revision_domain",
-    "parser_version",
-    "occurred_at",
-    "provider",
-    "model",
-    "completion",
-    "outcome",
-    "usage_slices",
-    "restrictions",
-    "input_features",
-  ]);
+/**
+ * Refuse an event whose host-supplied identifiers do not fit the published schema.
+ *
+ * This is the whole of what a writer can get wrong. Every other field of an event -- the versions,
+ * the domains, the event type and the completion/outcome/restrictions triple the schema constrains
+ * per type -- is a literal written a few lines above, so re-deriving it from the assembled object
+ * only restated the constructor. What OpenCode supplies is different: session and message ids, a
+ * provider and a model name, none of them bounded by the host. An id longer than the schema allows
+ * cannot be written, because `spool.js` validates the same schema on the way back in and would
+ * report the line as corruption rather than as a prompt that was never representable.
+ *
+ * @param {Record<string, unknown>} event
+ */
+function withinSchemaBounds(event) {
   return (
-    Object.keys(event).every((key) => allowed.has(key)) &&
-    event.schema_version === 1 &&
-    boundedString(event.event_id, 200) &&
-    boundedString(event.installation_id, 200) &&
-    boundedString(event.source_prompt_id, 200) &&
-    boundedString(event.source_session_id, 200) &&
-    boundedString(event.revision, 200) &&
-    timestamp(event.occurred_at) &&
-    nullableBoundedString(event.provider, 100) &&
-    nullableBoundedString(event.model, 200) &&
-    Array.isArray(event.usage_slices) &&
-    event.usage_slices.length === 0 &&
-    Array.isArray(event.restrictions) &&
-    event.restrictions.length <= 20 &&
-    event.restrictions.every((restriction) => {
-      const record = recordOrNull(restriction);
-      return (
-        record !== null &&
-        Object.keys(record).every((key) =>
-          ["class", "source_code", "observed_at", "classifier_version"].includes(key),
-        ) &&
-        ["rate_limit", "usage_limit", "capacity_policy", "other_explicit_limit"].includes(
-          String(record.class),
-        ) &&
-        boundedString(record.source_code, 100) &&
-        timestamp(record.observed_at) &&
-        record.classifier_version === "opencode-plugin-error-v1"
-      );
-    }) &&
-    validEventState(event) &&
-    (event.input_features === undefined || isInputFeatures(event.input_features))
-  );
-}
-
-/** @param {unknown} value */
-function isInputFeatures(value) {
-  const record = recordOrNull(value);
-  return (
-    record !== null &&
-    Object.keys(record).every((key) =>
-      [
-        "analyzer_version",
-        "estimated_input_tokens",
-        "line_count_bucket",
-        "code_block_count_bucket",
-        "attachment_count",
-      ].includes(key),
-    ) &&
-    record.analyzer_version === "opencode-input-v1" &&
-    Number.isSafeInteger(record.estimated_input_tokens) &&
-    typeof record.estimated_input_tokens === "number" &&
-    record.estimated_input_tokens >= 0 &&
-    ["0", "1-10", "11-50", "51-200", "201+"].includes(String(record.line_count_bucket)) &&
-    ["0", "1", "2-4", "5+"].includes(String(record.code_block_count_bucket)) &&
-    Number.isSafeInteger(record.attachment_count) &&
-    typeof record.attachment_count === "number" &&
-    record.attachment_count >= 0
+    bounded(event.event_id, 200) &&
+    bounded(event.installation_id, 200) &&
+    bounded(event.source_prompt_id, 200) &&
+    bounded(event.source_session_id, 200) &&
+    bounded(event.revision, 200) &&
+    (event.provider === null || bounded(event.provider, 100)) &&
+    (event.model === null || bounded(event.model, 200))
   );
 }
 
 /** @param {unknown} value @param {number} maximum */
-function boundedString(value, maximum) {
+function bounded(value, maximum) {
   return typeof value === "string" && value.length > 0 && value.length <= maximum;
-}
-
-/** @param {unknown} value @param {number} maximum */
-function nullableBoundedString(value, maximum) {
-  return value === null || boundedString(value, maximum);
-}
-
-/** @param {unknown} value */
-function timestamp(value) {
-  return (
-    typeof value === "string" &&
-    /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u.test(value) &&
-    !Number.isNaN(Date.parse(value))
-  );
-}
-
-/** @param {Record<string, unknown>} event */
-function validEventState(event) {
-  const restrictions = /** @type {unknown[]} */ (event.restrictions);
-  if (event.event_type === "prompt_started") {
-    return (
-      event.completion === "provisional" &&
-      event.outcome === "excluded" &&
-      restrictions.length === 0
-    );
-  }
-  if (event.event_type === "session_idle") {
-    return (
-      event.completion === "completed" && event.outcome === "success" && restrictions.length === 0
-    );
-  }
-  return (
-    event.event_type === "session_error" &&
-    event.completion === "completed" &&
-    ((event.outcome === "restricted" && restrictions.length > 0) ||
-      (event.outcome === "excluded" && restrictions.length === 0))
-  );
 }
