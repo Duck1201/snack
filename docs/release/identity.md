@@ -349,8 +349,9 @@ The registry is what this table records, not the intent: `npm view @snack-ai/cli
 it and cannot: trusted publishing authorizes a publish request and not a `dist-tag` call, so
 `--tag` on the publish itself is the only channel a release can reach. From `1.0` the newest release
 is also the one whose contracts are held, so `stable` tracking `latest` is the ordinary outcome —
-but it is still a separate act by a person, which is why this paragraph exists and why the table
-above was written `1.1.2` for the minutes between the publish and that command.
+but it is still a separate act by a person, which is why this paragraph exists and why commit
+`3a42eb0` wrote this table with `stable` at `1.1.2`, for the minutes between the publish and that
+command.
 
 **The published tarballs were verified against the recorded evidence before the tag was created.**
 `npm pack` against the published specs reproduced `docs/release/artifacts.md` exactly:
@@ -373,14 +374,12 @@ published one, and a published version is immutable. Content that changed takes 
 spool event contract is untouched at version 1 and no event that was valid before is refused now.
 
 **Two defects were found after `1.2.0` was merged and before it was published, both by running the
-release against a real installation with four configured sources.** `status --verbose` printed
-twelve identical caveat lines where the overview prints three — precisely the defect `1.1.3` fixed,
-reintroduced by deciding that `--verbose` renders panels without carrying over the rule that made
-the overview necessary. And the pressure line read `above 0% of your own history` for the lightest
-window on record, which is true and empty. Neither could appear with one configured source, which is
-all the fixture suite had. Both were fixed and the `1.2.0` changelog entry amended rather than a
-patch version cut, because nothing had been published yet — a version number for our own review
-cycle would teach a reader that a release had shipped a defect they could have received.
+release against a real installation with four configured sources.** Both were fixed and the `1.2.0`
+changelog entry amended rather than a patch version cut, because nothing had been published yet — a
+version number for our own review cycle would teach a reader that a release had shipped a defect
+they could have received. What the two defects were, and what they say about a suite green at 480
+tests, is in
+[the `1.2.0` post-mortem](../history/roadmap-1.x.md#120---status---verbose-and-man-snack--shipped).
 
 **The publish gate was armed in its own commit.** `release.yml` hardcodes the confirmation string
 and still read `publish-1.1.3`; dispatching `publish-1.2.0` against that guard would have skipped
