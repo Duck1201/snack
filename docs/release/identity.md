@@ -329,6 +329,53 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.1.0
+
+`@snack-ai/cli@1.1.0` and `@snack-ai/opencode@1.0.2` were published from commit `ba57aaa` by
+protected release run
+[30724046781](https://github.com/Duck1201/snack/actions/runs/30724046781), directly to `latest`.
+Tagged `v1.1.0` on that same commit, released on GitHub as Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.1.0` | `1.1.0` | `1.1.0` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.2` | `1.0.2` | — | publish + SLSA provenance |
+
+**The published artifacts match the recorded evidence exactly.** Packed from the registry rather
+than from the tree, because the digest a consumer receives is the only one that settles it:
+
+```
+snack-ai-cli-1.1.0.tgz       sha256:55f2762250389f240ee7dd63d41ab0915ee4b7e1736b61b6328c238ed1cb2fc8
+snack-ai-opencode-1.0.2.tgz  sha256:90b8740c9a43e5782f0e22632c5634bcbf62a50af01cc76dae12d25534103375
+```
+
+Both equal what `docs/release/artifacts.md` records. At `1.0.0` this same check found a mismatch
+within minutes of publishing; here there is none.
+
+`stable` was moved by hand after that verification, which is the order that makes the check worth
+running: `latest` and `stable` both point at an artifact somebody compared against the evidence
+first. The registry is the source consulted for this table —
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '1.1.0', latest: '1.1.0' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.2' }`.
+
+**The plugin republished with no behavioural change**, which is the opposite case to `1.0.2` and was
+taken deliberately rather than discovered. Its README was split by language and both files now ship,
+so the contents of its tarball changed even though its source did not. Leaving it at `1.0.1` would
+have made the artifact evidence record a plugin tarball nobody would ever receive, since
+`release:check` compares what the tree packs against what the evidence claims. The CLI's
+`pluginPackageSpec` moved with it, and the test tying the two together is what says so.
+
+**`docs/opencode-support.md` went stale on that bump**, which is the `1.0.0` P1 one level out: a
+version written by hand in a second place with nothing tying it to the first. It now carries the
+same gate the constant does, and the gate was shown to fail before it was trusted to pass.
+
+**The release turned `main` red once, on macOS, and it was not a regression.** `backfill took 30.2s`
+against a 30 s budget, from a commit whose diff touches no ingestion file at all, which had passed
+macOS minutes earlier on its own pull request, and against 14.5 s on the machine whose measurement
+is the gate. The assertion was measuring the runner: `status --no-sync` p95 already carried an
+exemption for exactly that and the two backfill assertions did not. Recorded in
+`docs/release/performance.md` with the proof that the exemption still fails where it must.
+
 ## 1.0.2
 
 `@snack-ai/cli@1.0.2` was published from commit `45a7a95` by protected release run
