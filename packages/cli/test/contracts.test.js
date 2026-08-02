@@ -156,10 +156,10 @@ test("an applied setup says so under the key that names the opposite", async () 
   // the applied run, which is the one case where the surrounding name is actively wrong.
   const fixture = await makeConfiguredFixture();
 
-  for (const [client, alias] of [
+  for (const [client, alias] of /** @type {[string, string][]} */ ([
     ["opencode", "work"],
     ["claude", "personal"],
-  ]) {
+  ])) {
     fixture.stdout.value = "";
     await run(
       ["node", "snack", "setup", client, ...setupFlags(`${alias}-preview`), "--dry-run", "--json"],

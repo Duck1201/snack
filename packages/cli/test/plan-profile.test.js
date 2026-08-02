@@ -141,6 +141,44 @@ test("switching to another plan profile starts a new capacity period", async () 
   ]);
 });
 
+test("a rotation at the instant the previous period started is still a rotation", async () => {
+  // A period boundary is one instant, recorded as `ended_at` on the closing row and `started_at`
+  // on the opening one, so the two rows carry the same timestamp whenever the clock does not move
+  // between them. `capacity_period` was `UNIQUE (source_alias, started_at)` until migration 013 and
+  // the pair collided, which surfaced as `internal_error` and exit 10 -- the worst code SNACK has,
+  // for a caller that retried a millisecond too fast.
+  //
+  // It is also why no test ever reached the rotation path: every command test injects a frozen
+  // clock, so re-running `setup` under one could not rotate at all. That is what hid finding 05.
+  const databaseFile = await makeDatabase();
+  const instant = new Date("2026-01-02T00:00:00.000Z");
+  ensureCapacityPeriod(databaseFile, makeSource(), instant, {
+    id: "anthropic-pro",
+    version: "1.0.0",
+  });
+
+  const rotation = ensureCapacityPeriod(databaseFile, makeSource({ plan: "max" }), instant, {
+    id: "anthropic-max",
+    version: "1.0.0",
+  });
+
+  assert.equal(rotation.rotated, true);
+  assert.deepEqual(readPeriods(databaseFile), [
+    {
+      plan: "pro",
+      plan_profile_id: "anthropic-pro",
+      plan_profile_version: "1.0.0",
+      ended_at: "2026-01-02T00:00:00.000Z",
+    },
+    {
+      plan: "max",
+      plan_profile_id: "anthropic-max",
+      plan_profile_version: "1.0.0",
+      ended_at: null,
+    },
+  ]);
+});
+
 test("a bundled plan profile version bump keeps the active capacity period", async () => {
   const databaseFile = await makeDatabase();
   ensureCapacityPeriod(databaseFile, makeSource(), new Date("2026-01-02T00:00:00.000Z"), {

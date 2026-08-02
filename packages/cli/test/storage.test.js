@@ -385,7 +385,11 @@ test("upgrading a 0.7 database to 0.8 keeps every row it already held", async ()
   seedZeroSixDatabase(paths.databaseFile);
   const before = tableCounts(paths.databaseFile);
 
-  const upgrade = await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+  const upgrade = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(12),
+    applicationVersion: "0.8.0",
+    now,
+  });
 
   assert.deepEqual(upgrade.applied, [12]);
   assert.equal(upgrade.backupCreated, true);
@@ -395,14 +399,18 @@ test("upgrading a 0.7 database to 0.8 keeps every row it already held", async ()
   assert.deepEqual(await inspectDatabase(paths.databaseFile), {
     exists: true,
     integrity: "ok",
-    migrations: "current",
+    migrations: "pending",
   });
 });
 
-test("a 0.6 database reaches 0.8 through 0.7 without a reset", async () => {
+test("a 0.6 database reaches 1.1.1 one release at a time, without a reset", async () => {
   // 0.6 is the guaranteed migration baseline, and the promise is that it stays reachable as the
   // chain grows rather than only from whichever release last thought about it. An install that
-  // skipped 0.7 entirely takes the same path, one upgrade at a time.
+  // skipped a release entirely takes the same path, one upgrade at a time.
+  //
+  // The last leg is the one that earns its keep: migration 013 rebuilds `capacity_period` and every
+  // table that cascades from it, which is the largest rebuild this project has done. A row lost
+  // there is a row of the user's own history.
   const { paths } = await makeStorage();
   await initializeDatabase(paths, {
     migrationsDir: await copyMigrationsThrough(9),
@@ -417,12 +425,18 @@ test("a 0.6 database reaches 0.8 through 0.7 without a reset", async () => {
     applicationVersion: "0.7.0",
     now,
   });
-  const toZeroEight = await initializeDatabase(paths, { applicationVersion: "0.8.0", now });
+  const toZeroEight = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(12),
+    applicationVersion: "0.8.0",
+    now,
+  });
+  const toOneOneOne = await initializeDatabase(paths, { applicationVersion: "1.1.1", now });
 
   assert.deepEqual(toZeroSeven.applied, [10, 11]);
   assert.deepEqual(toZeroEight.applied, [12]);
+  assert.deepEqual(toOneOneOne.applied, [13]);
   const after = tableCounts(paths.databaseFile);
-  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 3);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 4);
   assert.deepEqual({ ...after, schema_migration: 0 }, { ...before, schema_migration: 0 });
   // The cursor is what makes it an upgrade rather than a reset: a database that forgot where its
   // reader stopped would re-ingest a whole history and describe usage that never happened.
@@ -555,7 +569,7 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // follows is measuring the upgrade rather than an upgrade plus an ingestion.
   const upgrade = await document("config", "set", "analysis.horizons", '["PT1H"]');
   assert.equal(upgrade.exitCode, 0, JSON.stringify(upgrade.document.errors));
-  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12]);
+  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12, 13]);
   assert.equal(upgrade.document.data.storage.backup_created, true);
 
   const status = await document("status", "--no-sync");
@@ -581,7 +595,7 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // two prediction tables grow by exactly that one -- growing is the command working, and any other
   // table moving at all would be the upgrade losing or inventing history.
   const after = tableCounts(fixture.paths.databaseFile);
-  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 3);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 4);
   assert.equal(after.prediction_attempt, (before.prediction_attempt ?? 0) + 1);
   assert.equal(after.prediction_delivery, (before.prediction_delivery ?? 0) + 1);
   const unchanged = (/** @type {Record<string, number>} */ counts) => ({
