@@ -58,22 +58,23 @@ function statusFor(overrides = {}) {
   };
 }
 
-test("a source is a panel with an aligned label column", () => {
-  // One panel per capacity source, labels in a fixed-width column, and no box drawing: a box
-  // survives neither a narrow terminal nor a pipe, and this output is read through both. The
-  // sparkline ends its line because its width varies with how many windows were observed, and a
-  // variable-width cell in the middle of a row is what breaks an aligned column.
+test("a selected source is a panel written in words", () => {
+  // Labels in a fixed-width column, no box drawing -- a box survives neither a narrow terminal nor
+  // a pipe, and this output is read through both -- and every value stated as a sentence rather
+  // than as the quantity behind it. The reader is a developer deciding whether to send a prompt,
+  // not a statistician auditing a model: `95-100%` still appears because it is the estimate, while
+  // the percentile, the method and the policy versions that produced it are `--verbose`.
   const text = renderStatus([statusFor()], { color: false });
 
   assert.equal(
     text,
     [
       "work",
-      "  viability  95-100%   risk low          evidence moderate",
-      "  pressure   high      category typical  ▁▄▅▇█",
-      "  drivers    prompts 100th, input_tokens 90th",
-      "  method     bayesian-pressure-band@1",
-      "  as of      40s ago · sync ok · period since 2026-01-02",
+      "  next prompt  95-100% chance it goes through · risk low",
+      "  evidence     moderate — some history, but few refusals seen yet",
+      "  pressure     high · above 90% of your own history · typical prompt",
+      "  drivers      prompt count, input tokens",
+      "  as of        40s ago · sync ok · period since 2026-01-02",
       "  ! Real provider capacity is unknown.",
       "",
     ].join("\n"),
@@ -209,6 +210,18 @@ test("a caveat every source repeats is stated once", () => {
   assert.match(text, / {2}! Sparse history; the prior dominates\.\n/u);
 });
 
+test("the panel names its method only when asked", () => {
+  // `bayesian-pressure-band@1` answers a question a reader who is not a statistician never asks,
+  // and it sits in the middle of the panel where it displaces something they do. It is not dropped:
+  // the estimate still has to be able to say which method produced it, so `--verbose` carries it,
+  // and so does every `--json` document.
+  const plain = renderStatus([statusFor()], { color: false });
+  const verbose = renderStatus([statusFor()], { color: false, verbose: true });
+
+  assert.doesNotMatch(plain, /bayesian-pressure-band/u);
+  assert.match(verbose, / {2}method {7}bayesian-pressure-band@1\n/u);
+});
+
 test("no escape sequence survives when colour is off", () => {
   // The load-bearing assertion for a captured log, a pipe, and NO_COLOR. Asserted over the whole
   // document rather than per field, so a colour added later to a line nobody thought about fails
@@ -254,7 +267,7 @@ test("a source with nothing ranked says so rather than showing an empty row", ()
     color: false,
   });
 
-  assert.match(text, / {2}drivers {4}none ranked/u);
+  assert.match(text, / {2}drivers {6}nothing to compare against yet/u);
 });
 
 test("two sources are two panels separated by a blank line", () => {

@@ -13,14 +13,12 @@ import { styleText } from "node:util";
 const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /**
- * Column widths, counted in characters from the start of the line.
+ * The panel's label column, counted in screen columns from the start of the line.
  *
- * A panel is read by scanning down the label column, so the widths are fixed rather than fitted to
- * the content: fitting them would move every value whenever one alias got longer.
+ * A panel is read by scanning down the label column, so the width is fixed rather than fitted to
+ * the content: fitting it would move every value whenever one label got longer.
  */
-const LABEL = 11;
-const COLUMN_A = 10;
-const COLUMN_B = 18;
+const LABEL = 13;
 
 /**
  * What the renderer reads, stated as its own shape rather than as `createSourceStatus`'s return.
@@ -35,7 +33,7 @@ const COLUMN_B = 18;
  * @property {{label: string}} risk
  * @property {{level: string}} evidence
  * @property {{id: string, version: string}} method
- * @property {{band: string, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[], trend?: {scores: number[]} | null}} pressure
+ * @property {{band: string, score?: number, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[], trend?: {scores: number[]} | null}} pressure
  * @property {string} expected_prompt_category
  * @property {{age_seconds: number | null}} freshness
  * @property {{status: string}} synchronization
@@ -291,12 +289,12 @@ function isWide(code) {
  * real stream: command tests write into an injected sink, and a sink has no `hasColors()`.
  *
  * @param {SourceStatusView[]} statuses
- * @param {{color: boolean}} options
+ * @param {{color: boolean, verbose?: boolean}} options
  * @returns {string}
  */
 export function renderStatus(statuses, options) {
   const paint = painter(options.color);
-  return statuses.map((status) => renderSource(status, paint)).join("\n");
+  return statuses.map((status) => renderSource(status, paint, options.verbose === true)).join("\n");
 }
 
 /**
@@ -325,30 +323,48 @@ function painter(color) {
 /**
  * @param {SourceStatusView} status
  * @param {(value: string, style?: Style) => string} paint
+ * @param {boolean} verbose
  */
-function renderSource(status, paint) {
-  const scores = status.pressure.trend?.scores ?? [];
+function renderSource(status, paint, verbose) {
   const band = SCALE[status.pressure.band];
   const lines = [
     status.source.alias,
-    row(paint, "viability", [
-      [`${bare(status.viability.lower)}-${percent(status.viability.upper)}`, undefined, COLUMN_A],
+    row(paint, "next prompt", [
+      [
+        `${bare(status.viability.lower)}-${percent(status.viability.upper)} chance it goes through · `,
+        undefined,
+        0,
+      ],
       // The label is a word first and a colour second, so a colourblind reader, a NO_COLOR
       // terminal and a captured log all read the same sentence.
-      [`risk ${status.risk.label}`, SCALE[status.risk.label], COLUMN_B],
-      [`evidence ${status.evidence.level}`, undefined, 0],
+      [`risk ${status.risk.label}`, SCALE[status.risk.label], 0],
+    ]),
+    row(paint, "evidence", [
+      [status.evidence.level, undefined, 0],
+      [
+        ` — ${EVIDENCE_MEANS[status.evidence.level] ?? "how far the local history reaches"}`,
+        "dim",
+        0,
+      ],
     ]),
     row(paint, "pressure", [
-      [status.pressure.band, band, COLUMN_A],
-      [`category ${status.expected_prompt_category}`, undefined, COLUMN_B],
-      // The sparkline is the pressure, so it carries the pressure's colour rather than one of
-      // its own.
-      [sparkline(scores), band, 0],
+      [status.pressure.band, band, 0],
+      [
+        ` · ${describePercentile(status.pressure.score)} · ${status.expected_prompt_category} prompt`,
+        undefined,
+        0,
+      ],
     ]),
     row(paint, "drivers", [
-      [describeContributors(status.pressure.contributors ?? []), undefined, 0],
+      [describeContributors(status.pressure.contributors ?? [], verbose), undefined, 0],
     ]),
-    row(paint, "method", [[`${status.method.id}@${status.method.version}`, undefined, 0]]),
+    // The method identifies the estimate rather than describing it, which is a question a reader
+    // who is not a statistician never asks -- and it sat in the middle of the panel displacing a
+    // line they do read. Kept behind `--verbose`, and present in every `--json` document, so the
+    // estimate can still always say what produced it.
+    ...(verbose
+      ? [row(paint, "method", [[`${status.method.id}@${status.method.version}`, undefined, 0]])]
+      : []),
     row(paint, "as of", [
       [
         [
@@ -368,6 +384,38 @@ function renderSource(status, paint) {
 }
 
 /**
+ * What each rung of the evidence ladder means, said without naming a statistic.
+ *
+ * The ladder itself is the domain term and stays on the line: `CONTEXT.md` defines `evidence level`
+ * with those four values, and replacing them with prose would invent a second vocabulary. What is
+ * added is the sentence that tells a reader who has never seen the ladder what the rung buys them.
+ * None of these say "confidence", "accuracy" or "certainty" -- the glossary's _Avoid_ list for this
+ * term -- because each would promise something a level does not.
+ *
+ * @type {Record<string, string>}
+ */
+const EVIDENCE_MEANS = {
+  very_low: "barely any history yet — mostly a starting assumption",
+  low: "a little history, still thin",
+  moderate: "some history, but few refusals seen yet",
+  high: "enough of your own history to lean on",
+};
+
+/**
+ * Say where a percentile sits without using the word.
+ *
+ * A usage-pressure score already **is** a rank against the user's own history, so "above 90% of
+ * your own history" is the literal reading. It is deliberately not "90% used": there is no total
+ * here, and a share of an unknown capacity is the one claim this product never makes.
+ *
+ * @param {number} [score]
+ */
+function describePercentile(score) {
+  if (typeof score !== "number") return "no baseline to compare against yet";
+  return `above ${(score * 100).toFixed(0)}% of your own history`;
+}
+
+/**
  * One indented row: a dimmed label, then its cells.
  *
  * Padding is applied outside the colour rather than through `padEnd`, because an escape sequence
@@ -383,31 +431,49 @@ function row(paint, label, cells) {
   const body = cells
     .map(
       ([value, style, width]) =>
-        paint(value, style) + " ".repeat(Math.max(0, width - value.length)),
+        paint(value, style) + " ".repeat(Math.max(0, width - measure(value))),
     )
     .join("");
   return `  ${paint(label.padEnd(LABEL), "dim")}${body}`.trimEnd();
 }
 
 /**
- * The two dimensions that moved the pressure band furthest, with where each ranks against the
- * user's own history. Specification 12.3 puts these in the default human detail, so a forecast
- * whose drivers are only in `--json` would be two contracts.
+ * The two dimensions that moved the pressure band furthest. Specification 12.3 puts these in the
+ * human detail, so a forecast whose drivers are only in `--json` would be two contracts.
+ *
+ * The default names them and stops there. `input_tokens 90th` asks the reader to know what a
+ * percentile is before it tells them anything, and what they came for is which of their own habits
+ * moved the reading -- so the rank goes with the rest of the statistics, behind `--verbose`.
  *
  * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
+ * @param {boolean} verbose
  */
-function describeContributors(contributors) {
+function describeContributors(contributors, verbose) {
   const ranked = contributors
     .filter((contributor) => contributor.contribution !== null)
     .sort((left, right) => Number(right.contribution) - Number(left.contribution))
     .slice(0, 2);
-  if (ranked.length === 0) return "none ranked";
+  if (ranked.length === 0) return "nothing to compare against yet";
   return ranked
-    .map(
-      (contributor) =>
-        `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`,
+    .map((contributor) =>
+      verbose
+        ? `${contributor.dimension} ${(Number(contributor.percentile) * 100).toFixed(0)}th`
+        : plainly(contributor.dimension),
     )
     .join(", ");
+}
+
+/**
+ * A stored dimension name, said the way it would be spoken.
+ *
+ * The stored names are column names -- `cache_write_tokens` -- and they are the right names in the
+ * database, the export and the `--json` document, all of which are read by something that wants a
+ * stable key. A panel is read by a person, and the underscore is the tell that a row escaped.
+ *
+ * @param {string} dimension
+ */
+function plainly(dimension) {
+  return dimension === "prompts" ? "prompt count" : dimension.replaceAll("_", " ");
 }
 
 /** @param {number} value */
