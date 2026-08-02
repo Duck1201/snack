@@ -39,6 +39,31 @@ async function makeDatabase() {
   return paths.databaseFile;
 }
 
+/**
+ * The two timestamps a period is bounded by, in insertion order rather than clock order — which is
+ * the whole point when the question is whether the clock ran backwards.
+ *
+ * @param {string} databaseFile
+ * @returns {{plan: string, started_at: string, ended_at: string | null}[]}
+ */
+function readPeriodBounds(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    return /** @type {{plan: string, started_at: string, ended_at: string | null}[]} */ (
+      database
+        .prepare(
+          `SELECT plan, started_at, ended_at
+           FROM capacity_period
+           WHERE source_alias = 'work'
+           ORDER BY id`,
+        )
+        .all()
+    );
+  } finally {
+    database.close();
+  }
+}
+
 /** @param {string} databaseFile */
 function readPeriods(databaseFile) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
@@ -177,6 +202,46 @@ test("a rotation at the instant the previous period started is still a rotation"
       ended_at: null,
     },
   ]);
+});
+
+test("a rotation whose clock reads earlier than the open period cannot end it before it started", async () => {
+  // Every command reads the clock once on entry and only then queues for the storage lock, so two
+  // processes write their periods in lock order and not in clock order. The one that waited can
+  // hold the earlier reading, and it was closing the open period with it: a row whose `ended_at`
+  // precedes its own `started_at`, which is a false statement about the database. Observed on a
+  // real installation by racing four `setup` runs on one alias.
+  //
+  // The boundary is one instant and it belongs to the period being closed, so it can never be
+  // earlier than that period's own start. Clamping it here rather than in any caller is what makes
+  // it hold: the transaction is the only place that can see both values.
+  const databaseFile = await makeDatabase();
+  ensureCapacityPeriod(databaseFile, makeSource(), new Date("2026-01-02T00:00:00.500Z"), {
+    id: "anthropic-pro",
+    version: "1.0.0",
+  });
+
+  // A millisecond earlier than the period it is about to close -- the losing process's reading.
+  ensureCapacityPeriod(
+    databaseFile,
+    makeSource({ plan: "max" }),
+    new Date("2026-01-02T00:00:00.499Z"),
+    {
+      id: "anthropic-max",
+      version: "1.0.0",
+    },
+  );
+
+  const [closed, opened] = readPeriodBounds(databaseFile);
+  assert.ok(closed && opened);
+  assert.equal(closed.ended_at, "2026-01-02T00:00:00.500Z");
+  assert.ok(
+    closed.ended_at !== null && closed.ended_at >= closed.started_at,
+    `period ended ${closed.ended_at} having started ${closed.started_at}`,
+  );
+  // One boundary, so the period that opens carries the same instant the closing one ended on, and
+  // never a start earlier than the regime it replaces.
+  assert.equal(opened.started_at, closed.ended_at);
+  assert.equal(opened.ended_at, null);
 });
 
 test("a bundled plan profile version bump keeps the active capacity period", async () => {
