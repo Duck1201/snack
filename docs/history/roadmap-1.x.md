@@ -208,7 +208,7 @@ nothing in the shipped source opens a socket. The two gates are complementary an
 alone: the runtime denial covers dependencies but only executed paths, the static walk covers
 unexecuted first-party code but no dependency.
 
-### 1.1.2 - the period boundary the 1.1.1 verification found
+### 1.1.2 - the period boundary the 1.1.1 verification found — **shipped**
 
 **Purpose:** one defect, found the only way it could be. Nothing here adds a command or a flag.
 
@@ -238,8 +238,21 @@ and no single-process test could have produced it: the defect needs two processe
 is the Phase 1 lesson repeating one release later — a green gate says the code does what the tests
 describe, never that the tests describe what a user does.
 
-**Exit:** the fix carries a test that fails against `1.1.1`; racing `setup` runs on one alias
-produce no period ending before it started, and starts that never decrease.
+**Exit, met.** The fix carries a test that fails against `1.1.1`, and racing six `setup` runs on one
+alias against the **published** `1.1.2` binary — on the same machine that found the defect — gives
+zero periods ending before they started, starts that never decrease, one open period, every run
+exit 0.
+
+**Shipped** as `@snack-ai/cli@1.1.2` on 2026-08-02, from commit `edabb04`, tagged `v1.1.2`. The
+plugin stays at `1.0.2`. The published artifact matches the recorded evidence exactly. Full record
+in [docs/release/identity.md](../release/identity.md).
+
+**What this release changes about how the next one is verified.** `1.1.1` passed every gate this
+project has and shipped a defect that a single-process test cannot reach. The thing that found it
+was updating a real installation and using it, which is what Phase 1 concluded and what this
+repeated. Racing a command against itself now belongs in the verification of anything that writes a
+capacity period, and the `verify-snack-against-real-cli` skill is where that belongs rather than in
+a release note nobody reads twice.
 
 ### 1.2.0 - `status --watch` and `man snack`
 

@@ -329,6 +329,49 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.1.2
+
+`@snack-ai/cli@1.1.2` was published from commit `edabb04` by protected release run
+[30728482185](https://github.com/Duck1201/snack/actions/runs/30728482185), directly to `latest`.
+`stable` was moved by hand afterwards. Tagged `v1.1.2` on that same commit, released on GitHub as
+Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.1.2` | `1.1.2` | `1.1.2` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.2` | `1.0.2` | — | unchanged; publish step skipped |
+
+Verified against the registry rather than against the workflow's own status:
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '1.1.2', latest: '1.1.2' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.2' }`.
+
+**The published artifacts match the recorded evidence exactly**, packed from the registry rather
+than from the tree:
+
+```
+snack-ai-cli-1.1.2.tgz       sha256:6955b3401839aa951a597ef094ca225bf3c98d9e0de809cdd0ea0af62d780277
+snack-ai-opencode-1.0.2.tgz  sha256:90b8740c9a43e5782f0e22632c5634bcbf62a50af01cc76dae12d25534103375
+```
+
+**This release exists because `1.1.1` was verified on a real machine and not only in CI.** The
+maintainer's own installation was updated to `1.1.1` and six `setup` runs were raced on one alias,
+which produced a capacity period whose `ended_at` preceded its own `started_at`. Every command reads
+the clock once on entry and only then queues for the storage lock, so two processes write in lock
+order rather than clock order; the one that waited can hold the earlier reading. `status` takes the
+active period's start as the origin of its pressure windows, so the inversion reached a forecast and
+not only a stored row.
+
+`npm run check` was green throughout — 454 tests — because the defect needs two processes and a
+lock, and no single-process test can produce it. This is the Phase 1 lesson repeating one release
+later, and it is recorded here rather than treated as a one-off: **the machine a release is verified
+on matters as much as the gate it passed.** The fix was then confirmed against the published
+`1.1.2` binary on the same machine, by re-running the same race.
+
+**The fix is only representable because `1.1.1` shipped.** The clamp turns a negative period into a
+zero-length one, and both a zero-length period and two periods sharing a start instant need the
+`UNIQUE (source_alias, started_at)` that migration 013 dropped one release earlier. The two fixes
+fit together, which was not planned.
+
 ## 1.1.1
 
 `@snack-ai/cli@1.1.1` was published from commit `b9b1635` by protected release run
