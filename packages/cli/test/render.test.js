@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderStatus, sparkline } from "../src/render.js";
+import { renderStatus, renderStatusTable, sparkline } from "../src/render.js";
 
 test("a series of scores draws one block per window, low to high", () => {
   // Scores are percentiles in [0, 1] -- `computeUsagePressure().score` -- so the mapping is fixed
@@ -78,6 +78,68 @@ test("a source is a panel with an aligned label column", () => {
       "",
     ].join("\n"),
   );
+});
+
+test("the overview is one header and one row per source", () => {
+  // Without a selection the question is which source to reach for, and that is a comparison across
+  // sources rather than a reading of one. A row per source answers it in one glance; four panels
+  // make the reader hold four numbers in their head. `SOURCE` stays left because a column of names
+  // aligned on their left edge is the anchor the eye scans down; every measurement is centred under
+  // the word that names it.
+  const text = renderStatusTable([statusFor()], { color: false, columns: 80 });
+
+  assert.equal(
+    text,
+    [
+      "  SOURCE  NEXT PROMPT   RISK   EVIDENCE  PRESSURE  LAST SEEN   SYNC",
+      "  work      95-100%     low    moderate    high     40s ago     ok",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("an alias whose characters are double-width still lines its row up", () => {
+  // An alias comes from the user's configuration, so it can hold anything they can type. `工作` is
+  // two code points and four columns on a terminal, and padding it by `String.length` pads it two
+  // short -- which slides every measurement in that row two characters left of its own header,
+  // silently, and only for the people who name things in their own script.
+  const text = renderStatusTable(
+    [statusFor(), statusFor({ source: { alias: "工作", active_period: { started_at: null } } })],
+    { color: false, columns: 80 },
+  );
+  const [, ascii, wide] = text.split("\n");
+
+  // Asserted as one row against the other rather than by index: an index into the string is a count
+  // of code units, which is the very unit that gets this wrong. Two aliases of equal screen width
+  // must produce rows that differ in nothing but the alias.
+  assert.equal(wide, ascii?.replace("work", "工作"));
+});
+
+test("an alias that looks like an escape sequence is still counted as text", () => {
+  // The width count has to ignore escape sequences, and the cheap way to write that is to match the
+  // bracket-and-letter tail. An alias is typed by the user, so that tail can arrive as ordinary
+  // characters that do occupy the screen -- and a width counted as zero collapses the column for
+  // every other source in the table.
+  const text = renderStatusTable(
+    [statusFor({ source: { alias: "[31m", active_period: { started_at: null } } }), statusFor()],
+    { color: false, columns: 80 },
+  );
+  const [, escapeish, ascii] = text.split("\n");
+
+  assert.equal(escapeish, ascii?.replace("work", "[31m"));
+});
+
+test("colour never moves a column in the overview", () => {
+  // The panel learned this the hard way: an escape sequence has width in a string and none on a
+  // screen, so padding a painted cell aligns the bytes and misaligns the column. A table makes the
+  // failure worse than a panel did -- one painted risk label pushes every column after it out of
+  // true on that row alone, so the misalignment reads as a data difference.
+  const plain = renderStatusTable([statusFor()], { color: false, columns: 80 });
+  const coloured = renderStatusTable([statusFor()], { color: true, columns: 80 });
+
+  assert.notEqual(coloured, plain, "colour: true produced no colour");
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.equal(coloured.replace(/\u001B\[[0-9;]*m/gu, ""), plain);
 });
 
 test("no escape sequence survives when colour is off", () => {

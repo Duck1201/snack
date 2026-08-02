@@ -58,6 +58,147 @@ const SCALE = {
 };
 
 /**
+ * The overview columns, in reading order.
+ *
+ * `SOURCE` is fitted to the aliases and every other column is fixed: a name is what the eye scans
+ * down, so it must start at one x; a measurement is read against its own header, so it must not
+ * move when a neighbouring source is renamed.
+ *
+ * @type {{header: string, width: number, align: "left" | "center", read: (status: SourceStatusView) => string, style?: (status: SourceStatusView) => Style | undefined}[]}
+ */
+const OVERVIEW = [
+  { header: "SOURCE", width: 0, align: "left", read: (status) => status.source.alias },
+  {
+    header: "NEXT PROMPT",
+    width: 11,
+    align: "center",
+    read: (status) => `${bare(status.viability.lower)}-${percent(status.viability.upper)}`,
+  },
+  {
+    header: "RISK",
+    width: 6,
+    align: "center",
+    read: (status) => status.risk.label,
+    style: (status) => SCALE[status.risk.label],
+  },
+  { header: "EVIDENCE", width: 8, align: "center", read: (status) => status.evidence.level },
+  {
+    header: "PRESSURE",
+    width: 8,
+    align: "center",
+    read: (status) => status.pressure.band,
+    style: (status) => SCALE[status.pressure.band],
+  },
+  {
+    header: "LAST SEEN",
+    width: 9,
+    align: "center",
+    // `never` rather than the dash the pressure column uses for an absent band: one symbol standing
+    // for two different absences is how a reader learns to skip both.
+    read: (status) =>
+      status.freshness.age_seconds === null ? "never" : `${age(status.freshness.age_seconds)} ago`,
+  },
+  {
+    header: "SYNC",
+    width: 6,
+    align: "center",
+    read: (status) => status.synchronization.status,
+    // The word is `failed` before it is red, the same rule the panel follows: colour never carries
+    // meaning on its own.
+    style: (status) => (status.synchronization.status === "ok" ? undefined : "red"),
+  },
+];
+
+/**
+ * Render every capacity source as one row under one header.
+ *
+ * @param {SourceStatusView[]} statuses
+ * @param {{color: boolean, columns: number}} options
+ * @returns {string}
+ */
+export function renderStatusTable(statuses, options) {
+  const paint = painter(options.color);
+  const widths = OVERVIEW.map((column) =>
+    Math.max(column.width, ...[column.header, ...statuses.map(column.read)].map(measure)),
+  );
+  const lines = [
+    OVERVIEW.map((column, index) =>
+      place(column.header, widths[index] ?? 0, column.align, paint, "dim"),
+    ),
+    ...statuses.map((status) =>
+      OVERVIEW.map((column, index) =>
+        place(column.read(status), widths[index] ?? 0, column.align, paint, column.style?.(status)),
+      ),
+    ),
+  ];
+  return `${lines.map((cells) => `  ${cells.join("  ")}`.trimEnd()).join("\n")}\n`;
+}
+
+/**
+ * Pad `value` to `width`, centred or left-aligned, painting the value but never its padding.
+ *
+ * The padding is measured from the bare value and applied outside the paint, because an escape
+ * sequence has width in a string and none on a screen: padding a painted cell aligns the bytes and
+ * misaligns the column. A centred cell splits an odd remainder to the right, so a column of values
+ * one character apart does not shift its left edge every other row.
+ *
+ * @param {string} value
+ * @param {number} width
+ * @param {"left" | "center"} align
+ * @param {(value: string, style?: Style) => string} paint
+ * @param {Style} [style]
+ */
+function place(value, width, align, paint, style) {
+  const padding = Math.max(0, width - measure(value));
+  const before = align === "center" ? Math.floor(padding / 2) : 0;
+  return " ".repeat(before) + paint(value, style) + " ".repeat(padding - before);
+}
+
+/**
+ * How wide `value` is on a screen, which is not how long it is in memory.
+ *
+ * `String.length` counts UTF-16 code units, so an alias holding an emoji or a CJK name -- both of
+ * which a user is free to type into their configuration -- reports a width no terminal agrees with,
+ * and every column after it in the row slides. Escape sequences are the mirror case: they occupy
+ * the string and nothing on the screen.
+ *
+ * @param {string} value
+ */
+function measure(value) {
+  let width = 0;
+  // eslint-disable-next-line no-control-regex -- an escape sequence is exactly what is being removed
+  for (const character of value.replace(/\u001B\[[0-9;]*m/gu, "")) {
+    const code = character.codePointAt(0) ?? 0;
+    width += isWide(code) ? 2 : 1;
+  }
+  return width;
+}
+
+/**
+ * The East Asian Wide and Fullwidth ranges, plus the emoji blocks that render double-width.
+ *
+ * Kept as explicit ranges rather than pulled from a dependency: the whole table is what the CLI
+ * needs, it never changes between Unicode revisions in a way that moves a column, and a chart
+ * library is not worth adding to a package that ships five dependencies.
+ *
+ * @param {number} code
+ */
+function isWide(code) {
+  return (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1f64f) ||
+    (code >= 0x1f900 && code <= 0x1f9ff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  );
+}
+
+/**
  * Render one panel per capacity source.
  *
  * `color` is decided by the caller rather than sniffed here, because the renderer never sees the
@@ -68,8 +209,18 @@ const SCALE = {
  * @returns {string}
  */
 export function renderStatus(statuses, options) {
-  /** @type {(value: string, style?: Style) => string} */
-  const paint = options.color
+  const paint = painter(options.color);
+  return statuses.map((status) => renderSource(status, paint)).join("\n");
+}
+
+/**
+ * Build the one function that decides whether a value is painted.
+ *
+ * @param {boolean} color
+ * @returns {(value: string, style?: Style) => string}
+ */
+function painter(color) {
+  return color
     ? (value, style) =>
         // `validateStream: false` because the decision was already made. Left at its default,
         // `styleText` consults `process.stdout` -- not the stream this text is going to -- and
@@ -83,7 +234,6 @@ export function renderStatus(statuses, options) {
           ? value
           : styleText(style, value, { validateStream: false })
     : (value) => value;
-  return statuses.map((status) => renderSource(status, paint)).join("\n");
 }
 
 /**
