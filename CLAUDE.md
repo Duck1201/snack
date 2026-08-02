@@ -20,15 +20,16 @@ npm run check          # format:check + lint + typecheck + test — the gate CI 
 npm run format         # prettier --write .
 npm run lint           # eslint .
 npm run typecheck      # tsc --project jsconfig.json (checkJs on plain JS, strict)
-npm test               # node --test in every workspace
+npm test               # node --test in every workspace, plus scripts/*.test.mjs
 
 node --test packages/cli/test/spool.test.js                      # one file
 node --test --test-name-pattern "full sync converges" packages/cli/test/main.test.js  # one test
 
 npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs clean, runs the bin
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
-npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — installs the published 0.6.1, upgrades its
-                       # database with the candidate. Needs the network; not part of `check`.
+npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
+                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0; argv narrows to one) with
+                       # the candidate. Needs the network; not part of `check`.
 ```
 
 Node 24 only (`engines: >=24 <25`), npm 11.16.0, ESM everywhere, JavaScript with JSDoc types — no
@@ -58,8 +59,10 @@ process. No daemon, no event bus, no DI container. Layering intent (files are fl
 
 - `cli.js` → `main.js`: Commander wiring, one action per command. No SQL, no source parsing, no
   thresholds here.
-- `opencode-adapter.js`: read-only SQLite backfill from OpenCode's own DB, gated on schema
-  fingerprints. `spool.js`: reads/validates the plugin's NDJSON spool segments.
+- `claude-adapter.js`: read-only backfill from the JSONL transcripts Claude Code already writes, no
+  hook installed (ADR-0006). `opencode-adapter.js`: read-only SQLite backfill from OpenCode's own
+  DB. Both are gated on schema fingerprints. `spool.js`: reads/validates the plugin's NDJSON spool
+  segments.
 - `storage.js`: better-sqlite3, migrations, transactions, repository queries. Does not classify
   errors or compute pressure.
 - `status.js` / prediction code: consumes domain-shaped query results, never touches SQLite.
@@ -98,15 +101,18 @@ copy). Change both together.
 
 Command tests drive `run(argv, options)` directly with injected `stdout`/`stderr` sinks, a temp
 `XDG_*` env, and an injected `now` — never the real home directory or real clock. `makeRunFixture()`
-in `packages/cli/test/main.test.js` is the pattern. OpenCode adapter tests build DBs from
-`packages/cli/test/fixtures/opencode/version-*.sql`; add a fixture when claiming support for a new
-OpenCode schema family and record it in `docs/opencode-support.md`.
+in `packages/cli/test/fixtures/run-fixture.js` is the pattern. OpenCode adapter tests build DBs from
+`packages/cli/test/fixtures/opencode/supported-v1.sql`; the `version-*.sql` files are one-line
+overlays layered on top of it. Add a sanitized fixture when claiming support for a new OpenCode
+schema family and record it in `docs/opencode-support.md`. Claude adapter tests read JSONL from
+`packages/cli/test/fixtures/claude/`; a new Claude schema family needs a `version-*.jsonl` fixture
+and a row in `docs/claude-support.md`, which `contracts.test.js` asserts against.
 
 ## Release
 
-Changesets. Releases before 0.6.0 published to the `next` dist-tag; from the 0.6.0 MVP both packages
-publish to `latest`. The stage version is the product version. `release:check` blocks publishing
-unless gate lines (`Trademark gate: passed`, npm trusted publisher, GitHub npm environment, WSL
-gate) are present in `docs/release/*.md` and `docs/opencode-support.md` is no longer
-`Status: in progress.`. CI runs the full `check` + `pack:smoke` on ubuntu, macOS, and inside
-WSL2/Debian 13.
+Changesets. Both packages publish to `latest`. The stage version is the product version.
+`release:check` blocks publishing unless gate lines (`Trademark gate: passed`, npm trusted
+publisher, GitHub npm environment, WSL gate) are present in `docs/release/*.md` and
+`docs/opencode-support.md` is no longer `Status: in progress.`. `release:staging` stages the
+tarballs on an isolated registry so the chain is rehearsed before npm sees it. CI runs the full
+`check` + `pack:smoke` on ubuntu, macOS, and inside WSL2/Debian 13.

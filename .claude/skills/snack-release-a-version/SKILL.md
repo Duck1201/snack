@@ -74,9 +74,8 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
    publishes under before `latest` is moved by hand; `stable` is never set by a release. Read it
    rather than assuming — it changed at 0.7.0, again when `next` was retired, and again at 1.0.
 
-   **For a major, publish to `candidate`, never straight to `latest`.** Publishing to `latest`
-   immediately is not faster, it just removes the only window in which a bad artifact harms nobody.
-   See step 7.
+   **For a major, publish to `candidate` and read `references/promoting-a-major.md`** — the
+   `candidate` window and the hand-run promotion that closes it are the whole of that branch.
 
 5. **Clear `npm run release:check`.** It blocks on gate lines in `docs/release/*.md` and on a
    `Status:` line in each client support matrix. Record the evidence when you clear one — the CI run
@@ -146,25 +145,6 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
 10. **Verify the registry against the docs.** `npm view @snack-ai/cli dist-tags` must match what
     `docs/release/identity.md` claims. Update the doc to what is true, and only after the registry
     actually says so.
-
-### Promoting a major, after step 7 passes
-
-Hand these to the user; every one is a dist-tag call the workflow cannot make. Order matters —
-`latest` and `stable` are added before `candidate` is removed, so the version is never unreachable
-by any tag:
-
-```bash
-npm dist-tag add @snack-ai/cli@1.0.0 latest
-npm dist-tag add @snack-ai/cli@1.0.0 stable
-npm dist-tag add @snack-ai/opencode@1.0.0 latest
-npm dist-tag rm @snack-ai/cli candidate
-npm dist-tag rm @snack-ai/opencode candidate
-```
-
-`stable` moves at 1.0 and only at 1.0 — before then it held the MVP, because the newest release
-could still evolve flags and JSON shapes, and from 1.0 the newest release is also the one whose
-contracts are held. The previous `stable` version stays installable by exact version; it just stops
-being what the tag resolves to.
 
 ## Gotchas
 
@@ -241,32 +221,19 @@ being what the tag resolves to.
 
 ## Verified by
 
-Stage 7 shipped through this exact sequence: `@snack-ai/cli@0.7.0` published from `7379c02` by run
+Stage 7 shipped through this exact sequence: `@snack-ai/cli@0.7.0` from `7379c02` by run
 [30672396220](https://github.com/Duck1201/snack/actions/runs/30672396220), CI green on all three
-platforms, tag `v0.7.0`, GitHub release Latest, and `npm view @snack-ai/cli dist-tags` ending at
-`{ latest: '0.7.0', stable: '0.6.1' }` — matching `docs/release/identity.md`. The `--tag latest`
-defect was caught before the dispatch; had it shipped, every default install would have moved to a
-pre-1.0 preview, which republishing does not undo.
+platforms, tag `v0.7.0`, and `npm view dist-tags` ending at `{ latest: '0.7.0', stable: '0.6.1' }` —
+matching `docs/release/identity.md`. The `--tag latest` defect was caught before the dispatch; had
+it shipped, every default install would have moved to a pre-1.0 preview, which republishing does not
+undo. `1.0.0` then shipped through the `candidate` path and step 7 caught a stale-evidence defect
+within minutes — the walkthrough is in `references/promoting-a-major.md`.
 
-**1.0.0 shipped through the `candidate` path**, and step 7 caught a defect within minutes of
-publishing. `@snack-ai/cli@1.0.0` and `@snack-ai/opencode@1.0.0` published from `6a59791` by run
-[30700312799](https://github.com/Duck1201/snack/actions/runs/30700312799) under `candidate`.
-Comparing the registry's tarballs against `docs/release/artifacts.md` found the plugin matching and
-the CLI not:
+## Reference
 
-```
-recorded  sha256:ef37befdaa246d436d5e2082b9b6f0d800b7a7326ed0c4a4830c83b34eef702a
-served    sha256:cc8c52392302d5c9ba044eab2914202a00fe7bed5caaeda22e87c17f3337fd6e
-```
-
-Packing `origin/main` reproduced the served digest exactly — the artifact was right and the evidence
-was stale, the `files` trap in Gotchas. `latest` still pointed at `0.9.0` throughout, so nothing
-installable was ever wrong; then `latest` and `stable` moved to `1.0.0` by hand, `candidate` was
-removed, and `npm view` was the only source consulted before writing `identity.md`.
-
-## Related
-
-`.claude/skills/snack-release-a-version/references/staging-registry.md` when the release stages its
-tarballs on an isolated registry first — four traps, each of which costs a run.
-`.claude/skills/sqlite-constraint-migrations/SKILL.md` when the release carries a schema change.
-`.claude/skills/verify-snack-against-real-cli/SKILL.md` before claiming a command works.
+- `references/promoting-a-major.md` — the `candidate` window and hand-run promotion, at step 4 of a
+  major release.
+- `references/staging-registry.md` — when the release stages its tarballs on an isolated registry
+  first; four traps, each of which costs a run.
+- `.claude/skills/sqlite-constraint-migrations/SKILL.md` when the release carries a schema change.
+- `.claude/skills/verify-snack-against-real-cli/SKILL.md` before claiming a command works.

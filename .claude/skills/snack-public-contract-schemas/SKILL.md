@@ -21,11 +21,12 @@ exit-code categories, JSON output schemas, and export schemas. From `0.8.0` they
 `packages/cli/schemas/{envelope,export}.schema.json` plus `packages/cli/test/contracts.test.js`.
 This is how to change one without silently breaking it.
 
-**Failure pattern:** a breaking change to a published document shipped under the old version number,
-because the schema was written _after_ the change and therefore blessed it. The compatibility
+**Failure pattern: success-shaped silence** — a breaking change to a published document ships under
+the old version number, because the schema was written _after_ the change and therefore blessed it.
+Nothing refuses; the suite is green; the contract simply stopped being checked. The compatibility
 fixtures that would have caught it can no longer be produced, since the released binary's code is
-gone from the working tree. **Verified by:** `node --test packages/cli/test/contracts.test.js` — 10
-tests pass, and the 0.7 fixtures actively failed when `source_bindings` and
+gone from the working tree. **Verified by:** `node --test packages/cli/test/contracts.test.js`
+passes whole, and the 0.7 fixtures actively failed when `source_bindings` and
 `prompts.installation_id` were made required, which is what forced `EXPORT_SCHEMA_VERSION` from
 `"1"` to `"2"`.
 
@@ -112,8 +113,9 @@ the change was breaking.
   one type it really carries.
 - **A schema referenced by `$id` from another file must be `addSchema`'d before the referring schema
   compiles.** Register the whole `schemas/commands/` directory once, then compile the envelope.
-- **Compile every schema the repo ships, in a test.** A published schema nobody compiles is a
-  contract nobody can use; that is exactly how the spool schema shipped broken.
+- **Compile every schema the repo ships, in a test.** A published schema nobody compiles is
+  success-shaped silence in file form — a contract nobody can use, shipping release after release.
+  That is exactly how the spool schema shipped broken.
 
 - **Ajv strict rejects `"format": "date-time"`** with `unknown format "date-time" ignored`.
   `ajv-formats` is not a dependency and adding one for a timestamp is not worth it. Use a pattern:

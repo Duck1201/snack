@@ -17,8 +17,9 @@
   `snack` executable, ingestion, SQLite storage, status calculation, and output. `packages/opencode`
   is a minimal capture plugin and must not import the CLI or open SQLite.
 - The CLI source is intentionally flat. `cli.js` delegates to `main.js`; `opencode-adapter.js` reads
-  OpenCode SQLite in read-only/query-only mode; `spool.js` validates NDJSON; `storage.js` owns SNACK
-  SQLite and transactions; `status.js` consumes query results rather than SQLite.
+  OpenCode SQLite in read-only/query-only mode; `claude-adapter.js` backfills from Claude Code's
+  JSONL history; `spool.js` validates NDJSON; `storage.js` owns SNACK SQLite and transactions;
+  `status.js` consumes query results rather than SQLite.
 - Source is JavaScript with JSDoc types, not TypeScript. `jsconfig.json` runs strict `checkJs` with
   NodeNext resolution.
 
@@ -61,7 +62,7 @@ never in a follow-up:
   exactly as it would for a code change. The question is never "did the behavior change?" but
   "did anything named in `files` change?"
 - `README.md` at the repository root — what GitHub serves.
-- Both languages. Every one of the three carries an English and a Portuguese section, kept in sync;
+- Both languages. Every one of the three sits beside a `README.pt-BR.md` sibling, kept in sync;
   updating one and not the other leaves half the readers with the old product.
 - The reference documents under `docs/` that the change touches, and `CHANGELOG.md` via a changeset.
 
@@ -71,7 +72,8 @@ assertions, and delivery principle 9 rejects those.
 ## Test Fixtures
 
 - Command tests call `run(argv, options)` with injected stdout/stderr, clock, and temporary `XDG_*`
-  roots. Follow `makeRunFixture()` in `packages/cli/test/main.test.js`; never touch real user state.
+  roots. Follow `makeRunFixture()` in `packages/cli/test/fixtures/run-fixture.js`; never touch real
+  user state.
 - OpenCode compatibility is structural, not version-string based. To support a new schema family,
   add a sanitized SQL fixture under `packages/cli/test/fixtures/opencode/` and update
   `docs/opencode-support.md`.
