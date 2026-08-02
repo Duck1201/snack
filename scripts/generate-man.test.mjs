@@ -116,6 +116,7 @@ test("the walk over the real CLI reaches every command with a description and fl
     "--source",
     "--no-sync",
     "--prompt-file",
+    "--verbose",
     "--json",
     "--help",
   ]);

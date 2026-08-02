@@ -63,8 +63,8 @@ test("a selected source is a panel written in words", () => {
   // a pipe, and this output is read through both -- and every value stated as a sentence rather
   // than as the quantity behind it. The reader is a developer deciding whether to send a prompt,
   // not a statistician auditing a model: `95-100%` still appears because it is the estimate, while
-  // the percentile, the method and the policy versions identify it rather than state it, and stay
-  // in the `--json` document until `status --verbose` gives them a human home in 1.2.0.
+  // the percentile, the method and the policy versions identify it rather than state it, and live
+  // behind `--verbose` and in the `--json` document.
   const text = renderStatus([statusFor()], { color: false });
 
   assert.equal(
@@ -100,7 +100,8 @@ test("an estimate the prior alone produced is labelled as the heuristic it is", 
 
   assert.match(heuristic, / {2}method {7}initial heuristic — /u);
   assert.doesNotMatch(heuristic, /initial-generic/u, "a reader is owed the label, not the key");
-  // The learned method identifies the estimate rather than warning about it, and stays in `--json`.
+  // The learned method identifies the estimate rather than warning about it, so the default panel
+  // does not carry it; `--verbose` and every `--json` document do.
   assert.doesNotMatch(learned, / {2}method/u);
 });
 
@@ -546,4 +547,73 @@ test("two sources are two panels separated by a blank line", () => {
   // A source configured but never synchronized has no period to name, and says so rather than
   // printing an empty tail after `period since`.
   assert.match(text, /period since unknown/u);
+});
+
+test("the verbose panel names the method and both policy versions", () => {
+  // The invariant is that an estimate can always say which method produced it. `1.1.3` moved that
+  // off the default panel, which is only allowed because `--verbose` and `--json` both carry it --
+  // so this flag existing is part of the invariant rather than a convenience.
+  const plain = renderStatus([statusFor()], { color: false });
+  const verbose = renderStatus([statusFor({ model_policy_version: "stage5-model-v1" })], {
+    color: false,
+    verbose: true,
+  });
+
+  assert.doesNotMatch(plain, /bayesian-pressure-band/u);
+  assert.match(verbose, / {2}method {7}bayesian-pressure-band@1 · model stage5-model-v1\n/u);
+});
+
+test("the verbose panel names every evidence gate and marks the limiting one", () => {
+  // Which gate is holding the level down is the actionable half of the evidence ladder: a reader
+  // whose estimate is capped by `completeness` has a synchronization problem, and one capped by
+  // `restrictions` simply has not been refused enough times yet. Naming the level alone says
+  // neither.
+  const verbose = renderStatus(
+    [
+      statusFor({
+        evidence: {
+          level: "low",
+          policy_version: "1",
+          gates: [
+            { id: "sample", level: "high", limiting: false },
+            { id: "restrictions", level: "low", limiting: true },
+            { id: "relevance", level: "moderate", limiting: false },
+            { id: "completeness", level: "low", limiting: true },
+          ],
+        },
+      }),
+    ],
+    { color: false, verbose: true },
+  );
+
+  assert.match(verbose, / {2}gates {8}sample high · restrictions low \(limiting\)/u);
+  assert.match(verbose, /completeness low \(limiting\)/u);
+});
+
+test("the verbose panel ranks each driver without ever claiming a share of a capacity", () => {
+  // The percentile is what `--verbose` adds to the drivers, and it is said the way the panel says
+  // every other percentile: a rank against the reader's own history. `input_tokens 90th` asks the
+  // reader to know what a percentile is; "above 90% of your own history" is the literal reading,
+  // and pointedly not "90% used", which would be a share of a capacity nobody can see.
+  const verbose = renderStatus([statusFor()], { color: false, verbose: true });
+
+  assert.match(verbose, /prompt count above 100% of your own history/u);
+  assert.match(verbose, /input tokens above 90% of your own history/u);
+  assert.doesNotMatch(verbose, /\bused\b/u);
+  // The default still names them and stops there.
+  const plain = renderStatus([statusFor()], { color: false });
+  assert.match(plain, / {2}drivers {6}prompt count, input tokens\n/u);
+});
+
+test("a verbose panel still labels an estimate the prior alone produced", () => {
+  // The heuristic warning and the method identifier are two different requirements, and `--verbose`
+  // is where both are visible at once. The warning carries no identifier by design; the method row
+  // carries nothing else.
+  const verbose = renderStatus([statusFor({ method: { id: "initial-generic", version: "1" } })], {
+    color: false,
+    verbose: true,
+  });
+
+  assert.match(verbose, /initial heuristic/u);
+  assert.match(verbose, / {2}method {7}initial-generic@1/u);
 });

@@ -298,7 +298,13 @@ The uncertainty statements every source repeats are stated once beneath the tabl
 .PP
 With --source <alias>, a panel: an aligned label column carrying the viability interval and what it is the probability of, the risk label, the evidence level with a plain statement of what that level supports, the pressure band with the reading behind it, the top pressure contributors, the expected prompt category, the active period, the data age, the synchronization status, and the uncertainty statement.
 .PP
-The method identifier and its version, the model policy version, the evidence gates, and the percentile each pressure contributor ranks at are not in the human output. They identify and qualify the estimate rather than state it, and the reader of a panel is a developer deciding whether to send a prompt. The requirement that an estimate always names its method is met by the --json document, which carries all of them.
+The method identifier and its version, the model policy version, the evidence gates, and the percentile each pressure contributor ranks at are not in the default human output. They identify and qualify the estimate rather than state it, and the reader of a panel is a developer deciding whether to send a prompt.
+.PP
+With --verbose, a panel carrying all of them. The evidence gates are listed with the limiting one marked, because which gate holds the level down is the actionable half of the ladder: an estimate capped by completeness has a synchronization problem the reader can fix, and one capped by restrictions has simply not been refused often enough yet. Each pressure driver gains its rank, stated the way this panel states every rank - "above 90% of your own history", never a share of a capacity nobody can see. The method row names the method, its version and the model policy version, and is separate from the initial-heuristic label below, which is a warning and carries no identifier; both may appear at once.
+.PP
+--verbose renders panels even without a source selection, rather than a wider overview. The overview exists to compare sources, and four more rows per source is a stack of panels wearing a table's header. Asking for the detail is asking for the shape with room for it.
+.PP
+The requirement that an estimate always names its method is therefore met by two routes, the --verbose panel and the --json document, rather than by one.
 .PP
 One method is named on the human surface, and named rather than identified. An estimate the plan-profile prior alone produced - the backoff that reports initial-generic - is labelled an initial heuristic in the panel and warned about per source beneath the overview. That is a separate requirement from naming the method: an interval built from no observation of this source is not a measurement of it, and an interface that let it pass beside a calibrated one would be relabelling a weak prior as a calibrated probability. The label carries no identifier and no version, because it exists to be read rather than parsed.
 .PP
@@ -322,6 +328,11 @@ use already synchronized observations
 .TP
 .BR --prompt-file " " <path>
 analyze an unsent prompt from a file, or - for stdin
+.RE
+.RS
+.TP
+.BR --verbose
+add the evidence gates, the method and the policy versions
 .RE
 .RS
 .TP

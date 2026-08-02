@@ -31,8 +31,9 @@ const LABEL = 13;
  * @property {{alias: string, active_period: {started_at: string | null}}} source
  * @property {{lower: number, upper: number}} viability
  * @property {{label: string}} risk
- * @property {{level: string}} evidence
+ * @property {{level: string, gates?: {id: string, level: string, limiting: boolean}[]}} evidence
  * @property {{id: string, version: string}} method
+ * @property {string} [model_policy_version]
  * @property {{band: string, score?: number, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[], trend?: {scores: number[]} | null}} pressure
  * @property {string} expected_prompt_category
  * @property {{age_seconds: number | null}} freshness
@@ -748,12 +749,12 @@ function isWide(code) {
  * real stream: command tests write into an injected sink, and a sink has no `hasColors()`.
  *
  * @param {SourceStatusView[]} statuses
- * @param {{color: boolean}} options
+ * @param {{color: boolean, verbose?: boolean}} options
  * @returns {string}
  */
 export function renderStatus(statuses, options) {
   const paint = painter(options.color);
-  return statuses.map((status) => renderSource(status, paint)).join("\n");
+  return statuses.map((status) => renderSource(status, paint, options.verbose === true)).join("\n");
 }
 
 /**
@@ -782,8 +783,9 @@ function painter(color) {
 /**
  * @param {SourceStatusView} status
  * @param {(value: string, style?: Style) => string} paint
+ * @param {boolean} verbose
  */
-function renderSource(status, paint) {
+function renderSource(status, paint, verbose) {
   const band = SCALE[status.pressure.band];
   const lines = [
     status.source.alias,
@@ -814,8 +816,25 @@ function renderSource(status, paint) {
       ],
     ]),
     row(paint, "drivers", [
-      [describeContributors(status.pressure.contributors ?? []), undefined, 0],
+      [describeContributors(status.pressure.contributors ?? [], verbose), undefined, 0],
     ]),
+    // What `--verbose` adds is what identifies and qualifies the estimate rather than states it:
+    // which gate is holding the evidence level down, and which method and policy versions produced
+    // the number. A reader deciding whether to send a prompt does not ask either question, which is
+    // why the default panel does not answer them -- and an estimate that could never answer them on
+    // a human surface would leave the invariant met by one route instead of two.
+    ...(verbose
+      ? [
+          row(paint, "gates", [[describeGates(status.evidence.gates ?? []), undefined, 0]]),
+          row(paint, "method", [
+            [
+              `${status.method.id}@${status.method.version} · model ${status.model_policy_version ?? "unknown"}`,
+              undefined,
+              0,
+            ],
+          ]),
+        ]
+      : []),
     // Specification: the interface explicitly labels the method as an initial heuristic, and must
     // not relabel a weak prior as a calibrated probability. Only that one method is named, and it
     // is named rather than identified -- `initial-generic@1` is a key for something that parses,
@@ -920,19 +939,45 @@ function row(paint, label, cells) {
  * The two dimensions that moved the pressure band furthest. Specification 12.3 puts these in the
  * human detail, so a forecast whose drivers are only in `--json` would be two contracts.
  *
- * They are named and nothing more. `input_tokens 90th` asks the reader to know what a percentile is
- * before it tells them anything, and what they came for is which of their own habits moved the
- * reading. The rank stays in every `--json` document, where something parses it.
+ * The default names them and stops there. `input_tokens 90th` asks the reader to know what a
+ * percentile is before it tells them anything, and what they came for is which of their own habits
+ * moved the reading. `--verbose` adds the rank, said the way this panel says every other rank --
+ * "above 90% of your own history", never "90% used", which would be a share of a capacity nobody
+ * can see. The number itself stays in every `--json` document, where something parses it.
  *
  * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
+ * @param {boolean} verbose
  */
-function describeContributors(contributors) {
+function describeContributors(contributors, verbose) {
   const ranked = contributors
     .filter((contributor) => contributor.contribution !== null)
     .sort((left, right) => Number(right.contribution) - Number(left.contribution))
     .slice(0, 2);
   if (ranked.length === 0) return "nothing to compare against yet";
-  return ranked.map((contributor) => plainly(contributor.dimension)).join(", ");
+  return ranked
+    .map((contributor) =>
+      verbose
+        ? `${plainly(contributor.dimension)} ${describePercentile(contributor.percentile ?? undefined)}`
+        : plainly(contributor.dimension),
+    )
+    .join(", ");
+}
+
+/**
+ * Every evidence gate, with the ones holding the level down marked.
+ *
+ * The level alone says how much history is behind an estimate; the limiting gate says what to do
+ * about it. An estimate capped by `completeness` has a synchronization problem the reader can fix,
+ * and one capped by `restrictions` simply has not been refused often enough yet, which no action
+ * reaches. More than one gate can tie for weakest, and each of them is marked.
+ *
+ * @param {{id: string, level: string, limiting: boolean}[]} gates
+ */
+function describeGates(gates) {
+  if (gates.length === 0) return "not assessed";
+  return gates
+    .map((gate) => `${plainly(gate.id)} ${gate.level}${gate.limiting ? " (limiting)" : ""}`)
+    .join(" · ");
 }
 
 /**

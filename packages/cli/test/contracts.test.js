@@ -534,7 +534,12 @@ test("the published command and flag surface has not changed", async () => {
       "--help",
     ],
     stats: ["--source", "--horizon", "--verbose", "--by-client", "--json", "--help"],
-    status: ["--source", "--no-sync", "--prompt-file", "--json", "--help"],
+    // `--verbose` is additive, which `docs/compatibility.md` allows in a minor: no existing script
+    // changes meaning, and what it uncovers -- the evidence gates, the method, the policy versions,
+    // the percentile behind each pressure driver -- is what moving those off the default reading in
+    // `1.1.3` required. The same flag already existed on `stats`, so the two commands spell the
+    // same idea the same way.
+    status: ["--source", "--no-sync", "--prompt-file", "--verbose", "--json", "--help"],
     sync: ["--source", "--full", "--json", "--help"],
     // `--finish` is deliberately absent: it is internal, hidden from help, and therefore invisible
     // to this test, which reads the help text rather than Commander's object graph. The test below

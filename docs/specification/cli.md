@@ -50,7 +50,7 @@ The plan label and the plan profile are asked as two separate questions, because
 
 ```text
 snack status [--source <alias>] [--no-sync]
-             [--prompt-file <path|->] [--json]
+             [--prompt-file <path|->] [--verbose] [--json]
 ```
 
 Human output has two shapes, chosen by whether a source is named, because they answer two different
@@ -82,10 +82,25 @@ the expected prompt category, the active period, the data age, the synchronizati
 uncertainty statement.
 
 The method identifier and its version, the model policy version, the evidence gates, and the
-percentile each pressure contributor ranks at are **not** in the human output. They identify and
-qualify the estimate rather than state it, and the reader of a panel is a developer deciding whether
-to send a prompt. The requirement that an estimate always names its method is met by the `--json`
-document, which carries all of them.
+percentile each pressure contributor ranks at are **not** in the default human output. They identify
+and qualify the estimate rather than state it, and the reader of a panel is a developer deciding
+whether to send a prompt.
+
+**With `--verbose`, a panel carrying all of them.** The evidence gates are listed with the limiting
+one marked, because which gate holds the level down is the actionable half of the ladder: an
+estimate capped by completeness has a synchronization problem the reader can fix, and one capped by
+restrictions has simply not been refused often enough yet. Each pressure driver gains its rank,
+stated the way this panel states every rank — "above 90% of your own history", never a share of a
+capacity nobody can see. The method row names the method, its version and the model policy version,
+and is separate from the initial-heuristic label below, which is a warning and carries no
+identifier; both may appear at once.
+
+`--verbose` renders panels even without a source selection, rather than a wider overview. The
+overview exists to compare sources, and four more rows per source is a stack of panels wearing a
+table's header. Asking for the detail is asking for the shape with room for it.
+
+The requirement that an estimate always names its method is therefore met by two routes, the
+`--verbose` panel and the `--json` document, rather than by one.
 
 **One method is named on the human surface, and named rather than identified.** An estimate the
 plan-profile prior alone produced — the backoff that reports `initial-generic` — is labelled an
