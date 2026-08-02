@@ -2,13 +2,15 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import Ajv2020 from "ajv/dist/2020.js";
-
 const recentlyClosed = new Set();
+
+/** @type {((value: unknown) => boolean) | null} */
+let compiledSpoolEvent = null;
 
 /**
  * The published schema is the definition of a valid event, so it is also the check.
@@ -21,24 +23,43 @@ const recentlyClosed = new Set();
  * `date-time` is registered rather than pulled in from `ajv-formats`: the format is one predicate,
  * and it has to accept exactly what the reader accepted before -- RFC 3339 with an offset or `Z`,
  * in either case, and a date the calendar actually has.
+ *
+ * Loaded and compiled on the first event read rather than on import. Ajv costs about 20 ms to load
+ * and another 45 ms to compile this schema, and `spool.js` is reachable from every command --
+ * including `status`, which never opens a spool segment and whose whole budget is 250 ms. Paying
+ * two thirds of a command's latency budget to build a validator it will not call is the kind of
+ * cost that arrives at import time and is invisible at the call site.
  */
-const ajv = new Ajv2020.default({
-  allErrors: false,
-  strict: true,
-  formats: {
-    "date-time": (value) =>
-      /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u.test(value) &&
-      !Number.isNaN(Date.parse(value)),
-  },
-});
-const isSpoolEvent = ajv.compile(
-  JSON.parse(
-    readFileSync(
-      fileURLToPath(new URL("../schemas/spool-event.schema.json", import.meta.url)),
-      "utf8",
+function spoolEventValidator() {
+  const cached = compiledSpoolEvent;
+  if (cached !== null) return cached;
+
+  const Ajv2020 = createRequire(import.meta.url)("ajv/dist/2020.js");
+  const compiled = new Ajv2020({
+    allErrors: false,
+    strict: true,
+    formats: {
+      "date-time": (/** @type {string} */ candidate) =>
+        /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u.test(
+          candidate,
+        ) && !Number.isNaN(Date.parse(candidate)),
+    },
+  }).compile(
+    JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL("../schemas/spool-event.schema.json", import.meta.url)),
+        "utf8",
+      ),
     ),
-  ),
-);
+  );
+  compiledSpoolEvent = compiled;
+  return compiled;
+}
+
+/** @param {unknown} value */
+function isSpoolEvent(value) {
+  return spoolEventValidator()(value);
+}
 
 /**
  * Read complete, validated events after independently committed segment offsets.
