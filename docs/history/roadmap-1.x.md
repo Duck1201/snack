@@ -208,6 +208,39 @@ nothing in the shipped source opens a socket. The two gates are complementary an
 alone: the runtime denial covers dependencies but only executed paths, the static walk covers
 unexecuted first-party code but no dependency.
 
+### 1.1.2 - the period boundary the 1.1.1 verification found
+
+**Purpose:** one defect, found the only way it could be. Nothing here adds a command or a flag.
+
+**A capacity period could be recorded as ending before it started.** Every command reads the clock
+once on entry (`main.js`) and only then queues for the storage lock, so two processes write their
+periods in **lock order and not in clock order** — the one that waited can be holding the earlier
+reading. Closing the open period with it wrote `ended_at` before that row's own `started_at`, and
+opened the next period earlier than the regime it replaced.
+
+It is not cosmetic. `status` takes the active period's `started_at` as the **origin of its pressure
+windows** (`status.js`), so an inverted boundary reaches a forecast and not only a stored row.
+
+**The fix is one clamp, in the transaction.** The boundary is one instant and it belongs to the
+period being closed, so it can never fall before that period started. It is clamped there rather
+than in any caller because the transaction is the only place that can see both values — and moving
+the clock read closer to the write would not help, since the race is between processes and not
+inside one. A period closed by a late process reads as zero-length instead of negative, which is
+the honest shape.
+
+**This is only representable because `1.1.1` shipped.** A zero-length period and two periods sharing
+a start instant both need the `UNIQUE (source_alias, started_at)` that migration 013 dropped. The
+two fixes fit together, which was not planned.
+
+**How it was found, and why that is the point.** By updating the maintainer's own installation to
+`1.1.1` and racing six `setup` runs on one alias. `npm run check` was green throughout, 454 tests,
+and no single-process test could have produced it: the defect needs two processes and a lock. This
+is the Phase 1 lesson repeating one release later — a green gate says the code does what the tests
+describe, never that the tests describe what a user does.
+
+**Exit:** the fix carries a test that fails against `1.1.1`; racing `setup` runs on one alias
+produce no period ending before it started, and starts that never decrease.
+
 ### 1.2.0 - `status --watch` and `man snack`
 
 - `snack status --watch[=SECONDS]`, default 30 s, floor 5 s, not a config key — an AI prompt takes minutes, so 30 s already outpaces the reality it observes;

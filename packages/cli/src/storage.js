@@ -1125,7 +1125,7 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
 
   let period = database
     .prepare(
-      `SELECT id, provider, profile, plan, plan_profile_id
+      `SELECT id, provider, profile, plan, plan_profile_id, started_at
        FROM capacity_period
        WHERE source_alias = ? AND ended_at IS NULL`,
     )
@@ -1159,13 +1159,33 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
         ).count,
       );
     }
+    // The boundary is one instant, and it belongs to the period being closed, so it can never fall
+    // before that period started. Every command reads the clock once on entry and only then queues
+    // for the storage lock, so two processes write in lock order and not in clock order: the one
+    // that waited can be holding the earlier reading. Closing with it produced a row whose
+    // `ended_at` preceded its own `started_at` -- a period that ended before it began, which is a
+    // false statement about the database and the kind this project does not ship.
+    //
+    // Clamped here rather than in any caller because the transaction is the only place that can see
+    // both values, and moving the clock read closer to the write would not help: the race is
+    // between processes, not inside one. What the clamp costs is that a period closed by a late
+    // process reads as zero-length rather than negative, which is the honest shape -- and it is
+    // representable at all only because migration 013 stopped requiring distinct start instants.
+    const boundary =
+      typeof period === "object" &&
+      period !== null &&
+      "started_at" in period &&
+      typeof period.started_at === "string" &&
+      period.started_at > timestamp
+        ? period.started_at
+        : timestamp;
     database
       .prepare(
         `UPDATE capacity_period
          SET ended_at = ?
          WHERE source_alias = ? AND ended_at IS NULL`,
       )
-      .run(timestamp, source.alias);
+      .run(boundary, source.alias);
     const inserted = database
       .prepare(
         `INSERT INTO capacity_period
@@ -1178,7 +1198,7 @@ function ensureSourceBindingAndPeriod(database, source, timestamp, planProfile) 
         source.provider,
         source.profile,
         source.plan,
-        timestamp,
+        boundary,
         planProfile?.id ?? null,
         planProfile?.version ?? null,
       );
