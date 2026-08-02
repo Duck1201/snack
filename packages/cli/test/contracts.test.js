@@ -5,6 +5,7 @@ import { afterEach, test } from "node:test";
 
 import Ajv2020 from "ajv/dist/2020.js";
 
+import { commandSurface as readCommandSurface, flagMap } from "../../../scripts/man-surface.mjs";
 import { ExitCode } from "../src/errors.js";
 import { EXPORT_TABLES } from "../src/export.js";
 import { run } from "../src/main.js";
@@ -558,45 +559,20 @@ test("update --finish stays out of the help, because it is not a flag anyone sho
  * promised. Reading them out of Commander instead would test the object graph rather than the
  * contract, and would still pass if the help stopped mentioning a flag entirely.
  *
+ * The walk itself lives in `scripts/man-surface.mjs`, because the generated `snack.1` describes
+ * this same surface and a man page that read it separately would be a second contract. Reading it
+ * from one place is what lets `npm run check` fail on a flag that exists and is undocumented.
+ *
  * @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture
  */
 async function commandSurface(fixture) {
-  /** @param {string[]} argv */
-  const help = async (argv) => {
-    fixture.stdout.value = "";
-    fixture.stderr.value = "";
-    await run(["node", "snack", ...argv, "--help"], fixture.options);
-    return `${fixture.stdout.value}${fixture.stderr.value}`;
-  };
-  /** @param {string} text */
-  const flagsIn = (text) => {
-    const options = text.split(/^Options:$/mu)[1]?.split(/^Commands:$/mu)[0] ?? "";
-    return [...options.matchAll(/^\s+(?:-\w, )?(--[a-z-]+)/gmu)].map((match) => String(match[1]));
-  };
-  /** @param {string} text */
-  const commandsIn = (text) => {
-    const listed = text.split(/^Commands:$/mu)[1] ?? "";
-    return [...listed.matchAll(/^ {2}(\w[\w-]*)/gmu)].map((match) => String(match[1]));
-  };
-
-  const root = await help([]);
-  /** @type {Record<string, string[]>} */
-  const surface = { snack: flagsIn(root) };
-  for (const command of commandsIn(root)) {
-    if (command === "help") continue;
-    const text = await help([command]);
-    const children = commandsIn(text);
-    if (children.length === 0) {
-      surface[command] = flagsIn(text);
-      continue;
-    }
-    for (const child of children) {
-      if (child === "help") continue;
-      surface[`${command} ${child}`] = flagsIn(await help([command, child]));
-    }
-  }
-  return Object.fromEntries(
-    Object.entries(surface).sort(([left], [right]) => (left < right ? -1 : 1)),
+  return flagMap(
+    await readCommandSurface(async (argv) => {
+      fixture.stdout.value = "";
+      fixture.stderr.value = "";
+      await run(["node", "snack", ...argv, "--help"], fixture.options);
+      return `${fixture.stdout.value}${fixture.stderr.value}`;
+    }),
   );
 }
 

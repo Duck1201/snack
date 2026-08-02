@@ -11,7 +11,9 @@
   "bin": {
     "snack": "src/cli.js"
   },
+  "man": "man/snack.1",
   "files": [
+    "man",
     "migrations",
     "profiles",
     "schemas",

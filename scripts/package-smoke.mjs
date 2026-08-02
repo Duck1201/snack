@@ -49,6 +49,9 @@ try {
     "NOTICE",
     "README.md",
     "README.pt-BR.md",
+    // The man page is generated and committed rather than built on install, so the only thing that
+    // can drop it from a user's machine is `files` -- which is what this list watches.
+    "man/snack.1",
     "migrations/001_initialize.sql",
     "migrations/002_open_code_tracer.sql",
     "package.json",

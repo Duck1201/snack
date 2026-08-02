@@ -20,6 +20,11 @@ Human warnings go to stderr. Primary human output goes to stdout. JSON mode writ
 
 ```text
 snack setup <opencode|claude> [--dry-run] [--non-interactive] [--json]
+                              [--source <alias>] [--provider <id>]
+                              [--profile <name>] [--plan <label>]
+                              [--plan-profile <name>]
+                              [--enable-prospective-analysis]
+snack setup opencode          [--install-plugin] [--yes]
 ```
 
 Responsibilities:
@@ -176,7 +181,7 @@ Doctor never prints credentials, prompt text, response text, or raw sensitive so
 ```text
 snack export --format json --output <path|->
 snack export --format csv  --output <directory>
-             [--source <alias>] [--since <time>] [--until <time>]
+             [--source <alias>] [--since <time>] [--until <time>] [--json]
 ```
 
 Export is the only intentional path for data to leave SNACK storage. JSON includes schema version and sufficient plan/model provenance to interpret predictions. CSV is a flattened usage/prediction representation and may require separate files when one-to-many relationships cannot be represented safely.
