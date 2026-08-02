@@ -107,6 +107,12 @@ source. With one panel nothing is shared, so `--source <alias>` is unchanged.
 The requirement that an estimate always names its method is therefore met by two routes, the
 `--verbose` panel and the `--json` document, rather than by one.
 
+A pressure reading is always stated as a rank against the reader's own history and never as a share
+of a capacity. The two ends of that scale are stated as sentences rather than as percentages: a rank
+of zero means no window in the history sat at or below this one, so it is the lightest on record,
+and "above 0% of your own history" would be true and empty. A rank that is small but real is
+reported as the lowest or highest one per cent rather than borrowing an end's sentence.
+
 **One method is named on the human surface, and named rather than identified.** An estimate the
 plan-profile prior alone produced — the backoff that reports `initial-generic` — is labelled an
 initial heuristic in the panel and warned about per source beneath the overview. That is a separate
