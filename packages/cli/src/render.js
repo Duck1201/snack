@@ -824,31 +824,9 @@ function renderSource(status, paint, verbose) {
     // why the default panel does not answer them -- and an estimate that could never answer them on
     // a human surface would leave the invariant met by one route instead of two.
     ...(verbose
-      ? [
-          row(paint, "gates", [[describeGates(status.evidence.gates ?? []), undefined, 0]]),
-          row(paint, "method", [
-            [
-              `${status.method.id}@${status.method.version} · model ${status.model_policy_version ?? "unknown"}`,
-              undefined,
-              0,
-            ],
-          ]),
-        ]
+      ? [row(paint, "gates", [[describeGates(status.evidence.gates ?? []), undefined, 0]])]
       : []),
-    // Specification: the interface explicitly labels the method as an initial heuristic, and must
-    // not relabel a weak prior as a calibrated probability. Only that one method is named, and it
-    // is named rather than identified -- `initial-generic@1` is a key for something that parses,
-    // and this line exists for someone who has just configured a source and is looking at a number
-    // that describes no history of theirs at all. The learned method identifies an estimate rather
-    // than warning about it, and stays in the `--json` document.
-    ...(isInitialHeuristic(status)
-      ? [
-          row(paint, "method", [
-            ["initial heuristic", "yellow", 0],
-            [" — no history of your own is behind this yet", "dim", 0],
-          ]),
-        ]
-      : []),
+    ...methodRows(status, paint, verbose),
     row(paint, "as of", [
       [
         [
@@ -964,6 +942,37 @@ function describeContributors(contributors, verbose) {
 }
 
 /**
+ * The method block: a warning when one is owed, an identifier when one was asked for.
+ *
+ * Two statements about the same estimate, and they are not interchangeable. Specification: the
+ * interface explicitly labels the method as an initial heuristic and must not relabel a weak prior
+ * as a calibrated probability -- that is the warning, it is owed on the default panel, and it
+ * carries no identifier because `initial-generic@1` is a key for something that parses rather than
+ * a statement to a reader. The identifier is the other statement, it identifies rather than warns,
+ * and it appears only under `--verbose` and in every `--json` document.
+ *
+ * When both apply they share one label. Two rows both claiming `method` in an aligned label column
+ * defeats the column: a label is there so the eye can find the row it names.
+ *
+ * @param {SourceStatusView} status
+ * @param {(value: string, style?: Style) => string} paint
+ * @param {boolean} verbose
+ */
+function methodRows(status, paint, verbose) {
+  const identifier = `${status.method.id}@${status.method.version} · model ${status.model_policy_version ?? "unknown"}`;
+  if (!isInitialHeuristic(status)) {
+    return verbose ? [row(paint, "method", [[identifier, undefined, 0]])] : [];
+  }
+  return [
+    row(paint, "method", [
+      ["initial heuristic", "yellow", 0],
+      [" — no history of your own is behind this yet", "dim", 0],
+    ]),
+    ...(verbose ? [row(paint, "", [[identifier, undefined, 0]])] : []),
+  ];
+}
+
+/**
  * Every evidence gate, with the ones holding the level down marked.
  *
  * The level alone says how much history is behind an estimate; the limiting gate says what to do
@@ -976,7 +985,7 @@ function describeContributors(contributors, verbose) {
 function describeGates(gates) {
   if (gates.length === 0) return "not assessed";
   return gates
-    .map((gate) => `${plainly(gate.id)} ${gate.level}${gate.limiting ? " (limiting)" : ""}`)
+    .map((gate) => `${gate.id} ${gate.level}${gate.limiting ? " (limiting)" : ""}`)
     .join(" · ");
 }
 

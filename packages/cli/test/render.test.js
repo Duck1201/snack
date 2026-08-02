@@ -39,6 +39,10 @@ function statusFor(overrides = {}) {
     risk: { label: "low", policy_version: "1" },
     evidence: { level: "moderate", policy_version: "1", gates: [] },
     method: { id: "bayesian-pressure-band", version: "1" },
+    // `createSourceStatus` always sets this from the forecast, so the fixture does too: a fixture
+    // that omits a field the product cannot omit renders `model unknown` and tests a shape nobody
+    // can reach.
+    model_policy_version: "stage5-prediction-v2",
     pressure: {
       horizon: "PT1H",
       score: 0.9,
@@ -615,5 +619,26 @@ test("a verbose panel still labels an estimate the prior alone produced", () => 
   });
 
   assert.match(verbose, /initial heuristic/u);
-  assert.match(verbose, / {2}method {7}initial-generic@1/u);
+  assert.match(verbose, /initial-generic@1/u);
+});
+
+test("a verbose heuristic panel labels one method row, not two", () => {
+  // The warning and the identifier are two different statements about the same estimate, and both
+  // belong on a verbose panel. Printed as two rows they both claim the label `method`, and an
+  // aligned label column exists so that a label identifies its row. The identifier becomes an
+  // unlabelled continuation of the row the warning already owns.
+  const verbose = renderStatus(
+    [
+      statusFor({
+        method: { id: "initial-generic", version: "1" },
+        evidence: { level: "very_low", policy_version: "1", gates: [] },
+      }),
+    ],
+    { color: false, verbose: true },
+  );
+
+  const labelled = verbose.split("\n").filter((line) => /^ {2}method {7}\S/u.test(line));
+  assert.equal(labelled.length, 1, verbose);
+  assert.match(verbose, / {2}method {7}initial heuristic — /u);
+  assert.match(verbose, /\n {15}initial-generic@1 · model /u);
 });

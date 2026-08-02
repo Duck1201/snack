@@ -140,9 +140,15 @@ async function importGraph(entry) {
     const file = queue.pop();
     if (file === undefined || graph.has(file)) continue;
     const source = await readFile(file, "utf8");
-    const specifiers = [...source.matchAll(/(?:\bfrom|\bimport)\s*\(?\s*["']([^"']+)["']/gu)].map(
-      (match) => /** @type {string} */ (match[1]),
-    );
+    // `createRequire(...)("x")` counts as an edge. `spool.js` loads Ajv that way so a command that
+    // reads no spool event never pays to compile the schema, and a walk that only read `import`
+    // would stop seeing whatever a module pulls in through it -- which is the half of this file's
+    // guarantee that covers code the tests never execute.
+    const specifiers = [
+      ...source.matchAll(
+        /(?:\bfrom|\bimport)\s*\(?\s*["']([^"']+)["']|\bcreateRequire\s*\([^)]*\)\s*\(\s*["']([^"']+)["']/gu,
+      ),
+    ].map((match) => /** @type {string} */ (match[1] ?? match[2]));
     graph.set(file, specifiers);
     for (const specifier of specifiers) {
       if (specifier.startsWith(".")) queue.push(resolve(dirname(file), specifier));
@@ -197,6 +203,29 @@ test("the import walk finds a networking builtin behind a relative hop", async (
     const graph = await importGraph(join(root, "entry.js"));
 
     assert.equal(graph.size, 2);
+    assert.deepEqual(networkingImports(graph), [`${join(root, "deep.js")} imports node:https`]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the import walk finds a networking builtin loaded through createRequire", async () => {
+  // The second control, for the second kind of edge. `createRequire` is invisible to an `import`
+  // regex, so a module could reach a socket through it and the walk above would report nothing --
+  // which is worse than not having the walk, because it reads as a clean bill of health.
+  const root = await mkdtemp(join(tmpdir(), "snack-import-graph-require-"));
+  try {
+    await writeFile(join(root, "entry.js"), 'import { thing } from "./deep.js";\nthing();\n');
+    await writeFile(
+      join(root, "deep.js"),
+      [
+        'import { createRequire } from "node:module";',
+        'export const thing = () => createRequire(import.meta.url)("node:https");',
+      ].join("\n"),
+    );
+
+    const graph = await importGraph(join(root, "entry.js"));
+
     assert.deepEqual(networkingImports(graph), [`${join(root, "deep.js")} imports node:https`]);
   } finally {
     await rm(root, { recursive: true, force: true });
