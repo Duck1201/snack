@@ -175,6 +175,27 @@ and colours the risk label, the pressure band and the sparkline. `--json` is nev
 consumer parsing the human output was already outside the contract, and the `--json` document it
 should have been reading is unchanged but for the field named above.
 
+## What 1.1.1 fixes, and why it is a patch
+
+Two defect fixes, neither of which removes, renames, or changes the meaning of anything documented.
+
+`setup --json` now emits `dry_run.applied` on **both** paths instead of only on the dry run. The
+field was already declared in `setup-opencode.schema.json` and `setup-claude.schema.json` and was
+already emitted on the preview, so filling it on the applied run is additive: a consumer pinned to
+`1.0` sees a field it was already told about. It stays **optional** in the schemas on purpose — the
+frozen `0.9` corpus carries setup documents without it, and those documents must keep validating, so
+making it required would break the freeze this document exists to hold.
+
+**`dry_run` is still the wrong name for a key an applied run reports under, and renaming it needs a
+major.** It is recorded here as a candidate for whenever one is cut, rather than staying an
+unrecorded wart. The shape it should take then is a `setup` payload that names the outcome directly.
+
+The database schema changes — migration 013 rebuilds `capacity_period` so a rotation can record the
+instant the previous period started. The SQLite layout and the migrations are listed above as **not
+public**, and the guarantee that does apply is the migration floor: a `0.6+` database upgrades in
+place, keeping every row, which `packages/cli/test/storage.test.js` asserts leg by leg and
+`npm run upgrade:smoke` checks against each published release.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a
