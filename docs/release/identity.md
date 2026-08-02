@@ -329,6 +329,49 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## 1.1.3
+
+`@snack-ai/cli@1.1.3` was published from commit `32d23d8` by protected release run
+[30732584878](https://github.com/Duck1201/snack/actions/runs/30732584878), directly to `latest`.
+Tagged `v1.1.3` on that same commit, released on GitHub as Latest.
+
+| Package | Version | `latest` | `stable` | Attestations |
+| --- | --- | --- | --- | --- |
+| `@snack-ai/cli` | `1.1.3` | `1.1.3` | `1.1.2` | publish + SLSA provenance |
+| `@snack-ai/opencode` | `1.0.2` | `1.0.2` | — | publish + SLSA provenance |
+
+The registry is what this table records, not the intent: `npm view @snack-ai/cli dist-tags` answers
+`{ stable: '1.1.2', latest: '1.1.3' }` and `npm view @snack-ai/opencode dist-tags` answers
+`{ latest: '1.0.2' }`. `stable` did not move, because no release moves it.
+
+**The published tarballs were verified against the recorded evidence before anything else was
+touched**, which is the step the whole ceremony exists for. `npm pack` against the published specs
+reproduced `docs/release/artifacts.md` exactly:
+
+```
+@snack-ai/cli@1.1.3       sha256:79f5d4ca9e80cb7fd978ed4679d7be96b64d5a0ce3dc7e72555e78788f64cb47
+@snack-ai/opencode@1.0.2  sha256:90b8740c9a43e5782f0e22632c5634bcbf62a50af01cc76dae12d25534103375
+```
+
+The plugin's publish step skipped, as intended: no changeset names `@snack-ai/opencode`, its version
+did not move, and nothing inside its `files` array changed. Its digest matching the record is the
+evidence for that rather than an assumption — the same check that caught `1.0.0`'s stale CLI
+evidence is what makes an unchanged digest mean something here.
+
+**This release adds no flag, and that was a decision rather than an oversight.** `status --verbose`
+was written, tested and then removed before the cut: an additive public option belongs in a minor
+under the compatibility policy this project publishes, and shipping one in a patch would have
+contradicted that rule in the same release that documents it. It is the first item of `1.2.0`. Until
+then the method identifier, the policy versions and the driver percentiles are reachable through
+`--json`, and `CLAUDE.md`'s invariant was amended to say so plainly rather than be quietly half met.
+
+**Reviewing what that removal left behind found a defect older than the release.**
+`docs/specification/analysis.md` requires the interface — not the JSON document — to label an
+estimate produced by the plan-profile prior alone as an initial heuristic. Nothing did, on any
+version. It is reachable on the first screen a source ever shows and again whenever a plan change
+rotates the capacity period, a path the suite already exercised through `--json` alone. Removing a
+line is what made the requirement legible; the fix shipped in the same release.
+
 ## 1.1.2
 
 `@snack-ai/cli@1.1.2` was published from commit `edabb04` by protected release run
