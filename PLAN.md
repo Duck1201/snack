@@ -188,7 +188,7 @@ budgets, and the risks.
 | `1.0.1` | The three P1s that review found | shipped |
 | `1.0.2` | The review's remaining P2/P3 findings | shipped |
 | `1.1.0` | `snack update`, the status panel and colour, the documentation restructure | shipped |
-| `1.1.1` | The two Phase 1 findings `1.1.0` did not carry, both P3 | planned |
+| `1.1.1` | The two Phase 1 findings `1.1.0` did not carry, both P3 | shipped |
 | `1.2.0` | `status --watch` and a generated `man snack` | planned |
 | `1.3.0` | Codex CLI adapter | planned |
 | `1.4.0` | `status --sequence N` | planned |
