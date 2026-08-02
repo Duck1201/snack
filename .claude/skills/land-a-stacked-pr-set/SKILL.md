@@ -8,6 +8,10 @@ description: >
   when a branch cut at a commit drags in unrelated history, or when reordering commits makes a
   generated-evidence file conflict. Reach for it BEFORE the first `gh pr merge`: the damage is done
   by a flag on that command and is not reversible afterwards.
+license: MIT
+metadata:
+  author: Duck
+  version: "1.0"
 ---
 
 # Land a stacked PR set without losing a PR
