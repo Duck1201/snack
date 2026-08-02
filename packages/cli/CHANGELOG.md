@@ -18,7 +18,8 @@
   gains its rank, stated the way the panel states every rank — "above 90% of your own history",
   never a share of a capacity nobody can see. `--verbose` renders panels even without a source
   selection, because the overview exists to compare sources and four more rows per source is not a
-  comparison.
+  comparison. The uncertainty statements every source repeats are stated once beneath all the
+  panels, the same rule the overview follows; a caveat only some sources carry stays in its panel.
 
   `--json` is byte-identical with and without `--verbose`. Nothing was added to any document.
 

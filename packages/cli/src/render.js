@@ -754,7 +754,32 @@ function isWide(code) {
  */
 export function renderStatus(statuses, options) {
   const paint = painter(options.color);
-  return statuses.map((status) => renderSource(status, paint, options.verbose === true)).join("\n");
+  // A caveat every source repeats is stated once beneath them all, which is the rule the overview
+  // already follows and the reason it exists: four sources printed twelve identical lines, and a
+  // warning repeated per panel is a warning a reader learns to skip. A caveat only some sources
+  // carry is not shared and stays in their panels -- moved to the foot it would claim every source.
+  // With one panel nothing is shared, so `status --source <alias>` is unchanged.
+  const shared =
+    statuses.length > 1
+      ? statuses
+          .flatMap((status) => status.caveats)
+          .filter(
+            (caveat, index, all) =>
+              all.indexOf(caveat) === index &&
+              statuses.every((status) => status.caveats.includes(caveat)),
+          )
+      : [];
+  const panels = statuses.map((status) =>
+    renderSource(
+      shared.length === 0
+        ? status
+        : { ...status, caveats: status.caveats.filter((caveat) => !shared.includes(caveat)) },
+      paint,
+      options.verbose === true,
+    ),
+  );
+  const footer = shared.map((caveat) => `  ${paint("!", "gray")} ${caveat}`);
+  return footer.length === 0 ? panels.join("\n") : `${panels.join("\n")}\n${footer.join("\n")}\n`;
 }
 
 /**

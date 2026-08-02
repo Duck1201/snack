@@ -642,3 +642,36 @@ test("a verbose heuristic panel labels one method row, not two", () => {
   assert.match(verbose, / {2}method {7}initial heuristic — /u);
   assert.match(verbose, /\n {15}initial-generic@1 · model /u);
 });
+
+test("panels state a caveat every source repeats once, and keep the ones that differ", () => {
+  // The defect `1.1.3` fixed, reintroduced by `--verbose` rendering panels: four sources printed
+  // twelve identical caveat lines under four panels. A warning repeated per panel is a warning a
+  // reader learns to skip. A caveat only one source carries is not shared and stays with it, or the
+  // footer would claim it of every source.
+  const text = renderStatus(
+    [
+      statusFor({
+        source: { alias: "one", active_period: { started_at: null } },
+        caveats: ["shared one", "shared two", "only one"],
+      }),
+      statusFor({
+        source: { alias: "two", active_period: { started_at: null } },
+        caveats: ["shared one", "shared two"],
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.equal(text.split("\n").filter((line) => line.includes("shared one")).length, 1);
+  assert.equal(text.split("\n").filter((line) => line.includes("shared two")).length, 1);
+  // The one-source caveat stays inside that source's panel, above the shared block.
+  assert.match(text, /^one$[\s\S]*^ {2}! only one$[\s\S]*^two$/mu);
+  assert.match(text, /^two$[\s\S]*^ {2}! shared one$/mu);
+});
+
+test("a single panel keeps its caveats, because there is nothing to share them with", () => {
+  // `status --source <alias>` is the shape this must not change: one panel, its caveats under it.
+  const text = renderStatus([statusFor()], { color: false });
+
+  assert.match(text, / {2}! Real provider capacity is unknown\.\n$/u);
+});
