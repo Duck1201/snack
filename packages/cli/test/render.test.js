@@ -601,7 +601,9 @@ test("the verbose panel ranks each driver without ever claiming a share of a cap
   // and pointedly not "90% used", which would be a share of a capacity nobody can see.
   const verbose = renderStatus([statusFor()], { color: false, verbose: true });
 
-  assert.match(verbose, /prompt count above 100% of your own history/u);
+  // The top of the scale is a statement rather than `above 100%`, which reads as a share of
+  // something rather than as a rank against the reader's own past.
+  assert.match(verbose, /prompt count higher than every window in your own history/u);
   assert.match(verbose, /input tokens above 90% of your own history/u);
   assert.doesNotMatch(verbose, /\bused\b/u);
   // The default still names them and stops there.
@@ -674,4 +676,51 @@ test("a single panel keeps its caveats, because there is nothing to share them w
   const text = renderStatus([statusFor()], { color: false });
 
   assert.match(text, / {2}! Real provider capacity is unknown\.\n$/u);
+});
+
+test("the ends of the pressure scale are statements, not percentages", () => {
+  // `above 0% of your own history` is true and says nothing. A score of 0 means no baseline window
+  // ranked at or below the observed one -- `percentileRank` counts ties as half -- so the window is
+  // the lightest on record, and that is what a reader is owed. Same at the top.
+  const floor = renderStatus(
+    [statusFor({ pressure: { band: "low", score: 0, contributors: [] } })],
+    {
+      color: false,
+    },
+  );
+  const ceiling = renderStatus(
+    [statusFor({ pressure: { band: "high", score: 1, contributors: [] } })],
+    { color: false },
+  );
+
+  assert.match(floor, /lower than every window in your own history/u);
+  assert.doesNotMatch(floor, /above 0%/u);
+  assert.match(ceiling, /higher than every window in your own history/u);
+  assert.doesNotMatch(ceiling, /above 100%/u);
+});
+
+test("a small but real rank does not borrow the sentence reserved for the floor", () => {
+  // Contributions are weighted, so a rank of 1/60 on a quarter-weighted dimension lands near 0.004
+  // and rounds to `0%`. Printing the floor's sentence there would claim the window was the lightest
+  // on record when it was not. The same holds just under the ceiling.
+  const low = renderStatus(
+    [statusFor({ pressure: { band: "low", score: 0.004, contributors: [] } })],
+    {
+      color: false,
+    },
+  );
+  const high = renderStatus(
+    [statusFor({ pressure: { band: "high", score: 0.998, contributors: [] } })],
+    { color: false },
+  );
+
+  assert.match(low, /in the lowest 1% of your own history/u);
+  assert.doesNotMatch(low, /lower than every window/u);
+  assert.match(high, /in the highest 1% of your own history/u);
+  assert.doesNotMatch(high, /higher than every window/u);
+});
+
+test("an ordinary rank still reads as a rank against your own history", () => {
+  const text = renderStatus([statusFor()], { color: false });
+  assert.match(text, /above 90% of your own history/u);
 });

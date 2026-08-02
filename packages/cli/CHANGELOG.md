@@ -16,10 +16,13 @@
   half of the ladder: an estimate capped by completeness has a synchronization problem you can fix,
   and one capped by restrictions has simply not been refused often enough yet. Each pressure driver
   gains its rank, stated the way the panel states every rank — "above 90% of your own history",
-  never a share of a capacity nobody can see. `--verbose` renders panels even without a source
-  selection, because the overview exists to compare sources and four more rows per source is not a
-  comparison. The uncertainty statements every source repeats are stated once beneath all the
-  panels, the same rule the overview follows; a caveat only some sources carry stays in its panel.
+  never a share of a capacity nobody can see. The ends of that scale are now sentences rather than
+  percentages: a window no other window in the history sits at or below reads "lower than every
+  window in your own history" instead of "above 0% of your own history", which was true and empty.
+  `--verbose` renders panels even without a source selection, because the overview exists to compare
+  sources and four more rows per source is not a comparison. The uncertainty statements every source
+  repeats are stated once beneath all the panels, the same rule the overview follows; a caveat only
+  some sources carry stays in its panel.
 
   `--json` is byte-identical with and without `--verbose`. Nothing was added to any document.
 

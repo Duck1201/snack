@@ -913,7 +913,20 @@ function isInitialHeuristic(status) {
  */
 function describePercentile(score) {
   if (typeof score !== "number") return "no baseline to compare against yet";
-  return `above ${(score * 100).toFixed(0)}% of your own history`;
+  // The ends are statements rather than percentages. `percentileRank` is the fraction of baseline
+  // windows at or below the observed one, counting ties as half, so a score of 0 means no window in
+  // the history ranked at or below this one: it is the lightest on record. "Above 0% of your own
+  // history" is true and says nothing, which is the one thing a reading meant to be read must not
+  // do. The same at the top of the scale.
+  if (score <= 0) return "lower than every window in your own history";
+  if (score >= 1) return "higher than every window in your own history";
+  // A rank can be small and real: contributions are weighted, so a rank of 1/60 on a
+  // quarter-weighted dimension lands near 0.004 and rounds to `0%`. It must not borrow the floor's
+  // sentence and claim to be the lightest window on record.
+  const rank = Math.round(score * 100);
+  if (rank === 0) return "in the lowest 1% of your own history";
+  if (rank === 100) return "in the highest 1% of your own history";
+  return `above ${rank}% of your own history`;
 }
 
 /**

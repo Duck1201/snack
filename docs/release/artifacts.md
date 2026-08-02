@@ -16,7 +16,7 @@ published artifact is not the one that passed the gates, and the release restart
 
 | Package | Tarball | sha256 |
 | --- | --- | --- |
-| `@snack-ai/cli` | `snack-ai-cli-1.2.0.tgz` | `sha256:b93a066750c88360352574c89d8d93d54190fd022d93ad406d615eb04a511933` |
+| `@snack-ai/cli` | `snack-ai-cli-1.2.0.tgz` | `sha256:e2c4b4f0279b463e34b42141d173ce02a5f4aea49b7e61eb688d9cc5eb2ba2f6` |
 | `@snack-ai/opencode` | `snack-ai-opencode-1.0.3.tgz` | `sha256:167f4f84162d4c4da6842b760e0d376ba71124626d45e14656a7ce881e583a2a` |
 
 ## Reproducible build
