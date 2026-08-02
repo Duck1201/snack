@@ -1,7 +1,8 @@
 # 12 — Two `setup` runs in the same millisecond raise `internal_error`
 
-Status: `ready-for-agent` Severity: **P3** Owner: unassigned Found in: while writing the failing
-test for [05](./05-second-setup-discards-the-forecast-evidence.md) Target: `1.1.1`
+Status: `fixed` in `1.1.1`, commit 3a1b5fb Severity: **P3** Owner: unassigned Found in: while
+writing the failing test for [05](./05-second-setup-discards-the-forecast-evidence.md) Target:
+`1.1.1`
 
 ## What happens
 
@@ -85,3 +86,28 @@ constraint makes rotation reachable under a frozen clock, which is what hid
 [finding 05](./05-second-setup-discards-the-forecast-evidence.md) — and classifying the collision as
 a config-level error, which is a few lines, fixes the reported symptom, and leaves the testing trap
 in place. Price the rebuild against a real history before choosing.
+
+## What `1.1.1` did, and what the price turned out to be
+
+**The rebuild**, in `packages/cli/migrations/013_capacity_period_start_not_unique.sql`. Priced
+first, as this file asked: on a seeded 100,000-prompt history the whole upgrade is **1.8 s and 104
+MB peak RSS**, with every row in every rebuilt table preserved. The estimate that made this look
+expensive was about the copy, and the copy is cheap; the cost that is actually worth naming is
+space, because the file grows about 1.7x and keeps the freed pages rather than returning them to the
+filesystem. No `VACUUM` — it cannot run inside the runner's transaction, and a second full-file
+rewrite is not worth reclaiming space SQLite will reuse anyway.
+
+**The cascade is eight tables, not two.** `prompt_usage_slice`, `prompt_source_outcome`,
+`restriction_observation`, `prediction_delivery` and `prediction_evaluation` all cascade from the
+two children named above and cannot survive their parent being dropped with foreign keys on. Five
+triggers are recreated with them, in the shape migration 009 left them — recreating `007`'s
+unconditional `BEFORE DELETE` pair instead would have quietly made `data purge` unable to delete the
+snapshots it previews.
+
+**The constraint was doing less than it looked.** `capacity_period_active_idx` already enforces one
+open period per capacity source, and it is recreated unchanged. Two closed periods sharing a start
+instant describe a regime that lasted no time, which is a true statement about a source someone
+reconfigured twice in the same breath.
+
+The regression test is the one nothing could write before, in
+`packages/cli/test/plan-profile.test.js`: a rotation with the injected clock held still.

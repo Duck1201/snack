@@ -24,6 +24,52 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.1.1
+
+- Date: 2026-08-01
+- Commit: `fix/1.1.1-remaining-findings`, after migration 013 rebuilt `capacity_period`
+- Machine: Linux 6.12.63+deb13-amd64, 12 cores, load average 1.38 at the start of the run
+- Toolchain: Node `24.18.1`, npm `11.16.0`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+| Budget | PLAN.md | Measured | `1.1.0` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **198 ms** (p50 187 ms, min 182 ms) | 212 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **198 ms** (p50 192 ms, min 188 ms) | 192 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **446 ms** (categorize 45 ms + write 401 ms) | 414 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **15.1 s** | 14.5 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.5 s** | 13.6 s |
+| Steady-state memory | under 150 MB | **passes both readings** | passes both readings |
+
+Every assertion ran; none stepped aside. Nothing here is expected to move: migration 013 changes the
+schema `1.1.0` already had by exactly one dropped unique index, and every read path is unchanged.
+
+### What migration 013 costs the person upgrading
+
+This is the expensive migration in this project and the only one whose price scales with how much
+someone has used SNACK. Dropping `UNIQUE (source_alias, started_at)` from `capacity_period` needs a
+table rebuild, and with foreign keys enforced the parent cannot be dropped while a child holds rows,
+so `prompt_execution` and everything that cascades from it are copied out and back — eight tables in
+total. The roadmap asked for this to be priced against a real history before the approach was
+chosen, so it was, on the same machine and the same 100,000-prompt scale as the budgets above:
+
+| | Measured |
+| --- | --- |
+| Wall clock for the whole upgrade | **1.8 s** |
+| Peak process RSS during it | **104 MB** |
+| Database file, before | 47.6 MB |
+| Database file, after | 79.4 MB |
+| Rows in every rebuilt table, before and after | identical |
+
+Two things are worth naming rather than leaving to be discovered. The **file grows by about 1.7x**
+and does not shrink back: the pages the dropped tables used are freed inside the file, not returned
+to the filesystem, and SQLite reuses them for what the user records next. No `VACUUM` is run, because
+it cannot run inside the transaction the migration runner holds and reclaiming space is not worth a
+second full-file rewrite on an upgrade. And the runner takes a **pre-migration backup** first, so the
+peak disk needed is roughly three times the database, once, during the upgrade.
+
+Both figures are one-time, on the first command that opens storage for write after the upgrade.
+
 ## 1.1.0
 
 - Date: 2026-08-01

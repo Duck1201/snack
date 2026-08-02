@@ -36,9 +36,10 @@ export async function cleanupRunFixtures() {
  * `tls` and `fetch` all end up there, and because replacing a named export would not reach code
  * that already destructured it.
  *
- * ponytail: this proves the paths a test exercises, not the paths it does not. The complement is a
- * static walk of the import graph that fails when a module outside `update.js` imports a networking
- * builtin -- worth adding when a dependency, rather than this code, becomes the thing to doubt.
+ * This proves the paths a test exercises and nothing about the paths it does not. Its complement is
+ * the static import walk in `network-boundary.test.js`, which reads the source instead and so
+ * covers code no test runs -- and which in turn cannot see a dependency that opens a socket, which
+ * is what this one is for. Neither is complete alone.
  *
  * @returns {{attempts: string[], restore(): void}}
  */

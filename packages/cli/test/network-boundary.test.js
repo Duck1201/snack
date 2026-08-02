@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 
 import { run } from "../src/main.js";
@@ -105,5 +108,97 @@ test("the denial is real, so a green run above means something", async () => {
     );
   } finally {
     denied.restore();
+  }
+});
+
+/**
+ * Every builtin that can open a connection. `dns` is here because resolving a name is already
+ * reaching out, and `http2` and `dgram` because a boundary that lists only the obvious three is
+ * a boundary someone routes around by accident.
+ */
+const NETWORKING_BUILTINS = new Set(
+  ["net", "http", "https", "http2", "tls", "dns", "dns/promises", "dgram"].flatMap((name) => [
+    name,
+    `node:${name}`,
+  ]),
+);
+
+/**
+ * Every module reachable from `entry` by following relative imports, mapped to what it imports.
+ *
+ * Deliberately a text walk rather than a resolver: what is being asserted is what the source says,
+ * and a module that is never executed is exactly the case the runtime denial cannot see.
+ *
+ * @param {string} entry
+ * @returns {Promise<Map<string, string[]>>}
+ */
+async function importGraph(entry) {
+  /** @type {Map<string, string[]>} */
+  const graph = new Map();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (file === undefined || graph.has(file)) continue;
+    const source = await readFile(file, "utf8");
+    const specifiers = [...source.matchAll(/(?:\bfrom|\bimport)\s*\(?\s*["']([^"']+)["']/gu)].map(
+      (match) => /** @type {string} */ (match[1]),
+    );
+    graph.set(file, specifiers);
+    for (const specifier of specifiers) {
+      if (specifier.startsWith(".")) queue.push(resolve(dirname(file), specifier));
+    }
+  }
+  return graph;
+}
+
+/** @param {Map<string, string[]>} graph */
+const networkingImports = (graph) =>
+  [...graph]
+    .flatMap(([file, specifiers]) =>
+      specifiers.map((specifier) => /** @type {const} */ ([file, specifier])),
+    )
+    .filter(([, specifier]) => NETWORKING_BUILTINS.has(specifier))
+    .map(([file, specifier]) => `${file} imports ${specifier}`);
+
+test("no module SNACK ships imports a networking builtin", async () => {
+  // The complement to the runtime denial above, which proves the paths its commands exercise and
+  // says nothing about the paths they do not. This one reads the source instead, so a module that
+  // never runs under test is still covered -- and a `status` that grows a version check three
+  // releases from now fails here even if nothing calls it yet.
+  //
+  // The exception list is empty, which surprised the note that asked for this test. `update` is
+  // allowed to reach the network under ADR-0010, and it does it by spawning the package manager;
+  // it opens nothing itself. So the rule this file asserts is the simpler one: nothing in the
+  // shipped source opens a socket, and the one command that installs packages delegates that.
+  //
+  // What it cannot see is a dependency. That is the half the runtime denial covers, and neither
+  // is complete alone.
+  const graph = await importGraph(fileURLToPath(new URL("../src/cli.js", import.meta.url)));
+
+  assert.deepEqual(networkingImports(graph), []);
+  // A walk that read one file and stopped would pass the assertion above without proving anything.
+  assert.ok(graph.size > 20, `the walk reached ${graph.size} modules`);
+  assert.ok(
+    [...graph.keys()].some((file) => file.endsWith("update.js")),
+    "the walk never reached the one command that may reach the network",
+  );
+});
+
+test("the import walk finds a networking builtin behind a relative hop", async () => {
+  // The control for the walk. Without it a regex that matches nothing passes forever.
+  const root = await mkdtemp(join(tmpdir(), "snack-import-graph-"));
+  try {
+    await writeFile(join(root, "entry.js"), 'import { thing } from "./deep.js";\nthing();\n');
+    await writeFile(
+      join(root, "deep.js"),
+      'import https from "node:https";\nexport const thing = () => https;\n',
+    );
+
+    const graph = await importGraph(join(root, "entry.js"));
+
+    assert.equal(graph.size, 2);
+    assert.deepEqual(networkingImports(graph), [`${join(root, "deep.js")} imports node:https`]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

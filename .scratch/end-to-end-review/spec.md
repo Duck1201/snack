@@ -11,16 +11,17 @@ against the **published** artifact rather than the tree — the record is in
 | --------- | ------------------------------------------------ |
 | P1        | 05, 09, 10 — fixed, `1.0.1`                      |
 | P2/P3     | 01, 02 (partly), 03, 06, 07, 11 — fixed, `1.0.2` |
-| P3 open   | 04, 12 — `1.1.0`                                 |
+| P3        | 04, 12 — fixed, `1.1.1`                          |
 | Retracted | 08 — not a defect; this review's own harness     |
 
 Finding 02 is closed only as far as storage allows: replaying pending backfill rows is impossible
 because `pending_mapping` keeps identifiers and no payload, so what shipped is `doctor` naming the
 providers and the command. Finding 04's rename is a break to a frozen payload and needs a major, so
-only its additive half can ever land in the 1.x line.
+only its additive half can ever land in the 1.x line; that half shipped in `1.1.1` and the rename is
+recorded in `docs/compatibility.md` as a candidate for the next major.
 
-The phase's exit criterion — "the run is recorded, every finding is triaged, and no P0/P1 is
-outstanding" — is met.
+Every finding is now closed. With `1.1.1` the ledger has no open entry: ten fixed, one retracted as
+invalid, one closed as far as storage allows.
 
 The phase's own exit criterion — "the run is recorded, every finding is triaged, and no P0/P1 is
 outstanding" — is met.
@@ -71,7 +72,7 @@ falls back to it, and redirecting it would have hidden the real history the phas
 | [06](./issues/06-fingerprint-check-reads-the-whole-history-every-command.md)  | P2       | The Claude fingerprint check re-reads and re-parses the entire history on every command         | `1.1.0`   |
 | [08](./issues/08-setup-hangs-when-stdin-is-already-closed.md)                 | ~~P2~~   | **Invalid.** `setup` cancels cleanly; the hang was this review's own harness                    | retracted |
 | [03](./issues/03-pending-mapping-warning-is-a-dead-end.md)                    | P3       | `doctor`'s pending-mapping warning names a count and nothing else                               | `1.1.0`   |
-| [04](./issues/04-applied-setup-reports-under-a-dry-run-key.md)                | P3       | An applied `setup` reports its observation count under a `dry_run` key                          | `1.1.0`   |
+| [04](./issues/04-applied-setup-reports-under-a-dry-run-key.md)                | P3       | An applied `setup` reports its observation count under a `dry_run` key                          | `1.1.1`   |
 | [07](./issues/07-steady-state-memory-budget-does-not-name-its-unit.md)        | P3       | The steady-state memory budget does not say which memory it means                               | `1.1.0`   |
 
 Two more were found while fixing those:

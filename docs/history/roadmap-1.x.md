@@ -105,7 +105,7 @@ was scoped here and deferred to `1.1.1` once the rebuild was priced: `capacity_p
 observations table as a child, so dropping its redundant constraint copies the user's whole history
 out and back, and no pragma that would avoid it survives the migration runner's transaction.
 
-### 1.1.1 - the two findings 1.1.0 did not carry
+### 1.1.1 - the two findings 1.1.0 did not carry — **built, not yet published**
 
 **Purpose:** close the last two open findings from the Phase 1 review. Both are P3 with a documented
 workaround, both were scoped into `1.1.0` and neither shipped there — one by choice, one after being
@@ -162,6 +162,42 @@ a dependency, rather than this code, becomes the thing to doubt.
 **Exit:** each fix carries a test that fails against `1.1.0`; `setup --json` is self-describing
 without renaming a frozen field; and two `setup` runs in the same millisecond do not report an
 internal failure.
+
+**Exit, met.** Both fixes landed with a test that fails against `1.1.0` — `applied` missing from an
+applied setup's payload, and `SQLITE_CONSTRAINT_UNIQUE` from a rotation under a frozen clock. The
+optional gate was taken as well.
+
+**Where the plan above was wrong.**
+
+**The rebuild was chosen, and the cascade is bigger than this entry said.** The entry named two
+children, `prompt_execution` and `prediction_attempt`. There are eight tables in the drop: those two
+plus `prompt_usage_slice`, `prompt_source_outcome`, `restriction_observation`, `prediction_delivery`
+and `prediction_evaluation`, which cascade from them and cannot survive their parent being dropped
+with foreign keys on. Five triggers come back too, and in the form
+[migration 009](../../packages/cli/migrations/009_purge_tombstone.sql) left them, not the form
+`007` created them in — `DROP TABLE` takes a table's triggers with it, and recreating the original
+pair would have made `data purge` unable to delete the snapshots it previewed.
+
+**The price is far lower than "copies the user's whole history out and back" suggested.** Measured
+before the approach was committed to, as this entry required, on a seeded 100,000-prompt history:
+**1.8 s, 104 MB peak RSS, every row preserved**. The cost that is worth naming is not time but
+space — the file grows about 1.7x and keeps the freed pages for reuse instead of returning them, and
+the runner's own pre-migration backup means the peak disk needed is roughly three times the database,
+once. Figures in [docs/release/performance.md](../release/performance.md).
+
+**The alternative was not taken, and the reason it existed is now covered.** Classifying the
+collision as a config-level error would have fixed the exit code and left the testing trap: a frozen
+clock could still not reach the rotation path, which is what hid
+[finding 05](../../.scratch/end-to-end-review/issues/05-second-setup-discards-the-forecast-evidence.md).
+The rebuild removes the trap, and the regression test is precisely the one nothing could write
+before — a rotation with the clock held still.
+
+**The optional network gate has an empty exception list.** The note asking for it assumed the walk
+would need to exempt `update.js`. It does not: `update` reaches the network by spawning the package
+manager and imports no networking builtin itself, so the rule the test asserts is the simpler one —
+nothing in the shipped source opens a socket. The two gates are complementary and neither is complete
+alone: the runtime denial covers dependencies but only executed paths, the static walk covers
+unexecuted first-party code but no dependency.
 
 ### 1.2.0 - `status --watch` and `man snack`
 

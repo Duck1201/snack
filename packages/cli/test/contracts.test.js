@@ -149,6 +149,35 @@ test("every command's JSON document validates against the published envelope sch
   }
 });
 
+test("an applied setup says so under the key that names the opposite", async () => {
+  // `dry_run` is a frozen field name and renaming it needs a major, so the payload is made
+  // self-describing instead: `applied` is emitted either way, and a consumer can tell a preview
+  // from a mutation without knowing which flags were typed. Until 1.1.1 the key simply vanished on
+  // the applied run, which is the one case where the surrounding name is actively wrong.
+  const fixture = await makeConfiguredFixture();
+
+  for (const [client, alias] of /** @type {[string, string][]} */ ([
+    ["opencode", "work"],
+    ["claude", "personal"],
+  ])) {
+    fixture.stdout.value = "";
+    await run(
+      ["node", "snack", "setup", client, ...setupFlags(`${alias}-preview`), "--dry-run", "--json"],
+      fixture.options,
+    );
+    assert.equal(JSON.parse(fixture.stdout.value).data.dry_run.applied, false);
+
+    fixture.stdout.value = "";
+    const exitCode = await run(
+      ["node", "snack", "setup", client, ...setupFlags(alias), "--json"],
+      fixture.options,
+    );
+
+    assert.equal(exitCode, 0, `setup ${client} exited ${exitCode}: ${fixture.stderr.value}`);
+    assert.equal(JSON.parse(fixture.stdout.value).data.dry_run.applied, true);
+  }
+});
+
 test("an error document is an envelope too", async () => {
   // The failure path is the one a script is most likely to meet and least likely to be tested
   // against. An error that arrived in some other shape would break exactly the consumer that was

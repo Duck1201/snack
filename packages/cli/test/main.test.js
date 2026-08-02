@@ -39,7 +39,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.command, "config set");
   assert.equal(document.status, "ok");
   assert.equal(document.data.value, true);
-  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(document.data.storage.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   // Every other payload SNACK publishes is snake_case. This one carried the storage layer's own
   // JavaScript names straight into the document, so a consumer had to know which command it was
   // reading to know which convention applied.
@@ -299,7 +299,7 @@ test("setup opencode configures an explicit source after a compatible dry-run", 
           family: "oc-sqlite-msgpart-v1",
           supported: true,
         },
-        dry_run: { observations: 1 },
+        dry_run: { observations: 1, applied: true },
       },
       configuredSources: [
         {

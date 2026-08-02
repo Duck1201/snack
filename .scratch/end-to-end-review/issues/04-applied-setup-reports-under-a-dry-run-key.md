@@ -1,7 +1,7 @@
 # 04 — An applied `setup` reports its observation count under a `dry_run` key
 
-Status: `ready-for-agent` Severity: **P3** Owner: unassigned Found in: Phase 1 end-to-end review,
-Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.1`
+Status: `fixed` in `1.1.1`, commit 12db15e Severity: **P3** Owner: unassigned Found in: Phase 1
+end-to-end review, Wave 1, `@snack-ai/cli@1.0.0` from npm Target: `1.1.1`
 
 ## What happens
 
@@ -36,3 +36,17 @@ cut, rather than leaving it as an unrecorded wart.
 ## Test seam
 
 `packages/cli/test/contracts.test.js` — assert `applied` is present and `true` on an applied setup.
+
+## How it was fixed
+
+`applied: resolved.dryRun !== true` on both `setup` paths in `main.js`, and a test in
+`contracts.test.js` driving each client twice, with and without `--dry-run`.
+
+The schemas were **not** tightened. Making `applied` required would have broken
+`packages/cli/test/fixtures/contracts/0.9/setup-*.json`, which carry `dry_run` without it and must
+keep validating — the envelope routes every document to its command's payload schema, so the frozen
+corpus is checked against exactly the file a change here would edit. Declared-but-optional is what
+lets the product always emit it while a `0.9` document stays valid.
+
+The rename is recorded in `docs/compatibility.md` under "What 1.1.1 fixes" as a candidate for the
+next major.

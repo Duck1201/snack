@@ -302,9 +302,11 @@ export async function run(argv, options = {}) {
           plan_profile: configuredSource.plan_profile,
         },
         fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
+        // `applied` is emitted on both paths. It is the only thing in this object that says which
+        // of the two happened, and the key it sits under names the wrong one.
         dry_run: {
           observations: dryRun.observations.length,
-          ...(resolved.dryRun === true ? { applied: false } : {}),
+          applied: resolved.dryRun !== true,
         },
         ...(pluginRegistrationChange(pluginRegistration)
           ? { plugin_registration: pluginRegistrationChange(pluginRegistration) }
@@ -412,7 +414,7 @@ export async function run(argv, options = {}) {
         fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
         dry_run: {
           observations: dryRun.observations.length,
-          ...(resolved.dryRun === true ? { applied: false } : {}),
+          applied: resolved.dryRun !== true,
         },
       };
       if (wantsJson(this, configuredJson)) {
