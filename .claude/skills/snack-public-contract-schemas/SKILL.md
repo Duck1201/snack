@@ -2,16 +2,15 @@
 name: snack-public-contract-schemas
 description: >
   Version and compatibility-test a SNACK public contract — the `--json` envelope, the `export`
-  document or its columns, exit codes, or the documented flag surface — and freeze or confirm those
-  contracts (Stage 8 candidates, the Stage 9 freeze, the 1.0 confirmation). Use even when the task
-  is phrased as "add a field to the JSON output", "add a column to the export", "add a flag", or
-  "bump the schema version", and even when schemas are never mentioned. Reach for it BEFORE writing
-  the code: the fixtures proving the released version's documents still validate can only be
-  captured while the tree still matches the released tag.
+  document or its columns, exit codes, or the documented flag surface. Use even when the task is
+  phrased as "add a field to the JSON output", "add a column to the export", "add a flag", or "bump
+  the schema version", and even when schemas are never mentioned. Reach for it BEFORE writing the
+  code: the fixtures proving the released version's documents still validate can only be captured
+  while the tree still matches the released tag.
 license: MIT
 metadata:
   author: Duck
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Version and compatibility-test a SNACK public contract
@@ -34,18 +33,20 @@ passes whole, and the 0.7 fixtures actively failed when `source_bindings` and
 
 - Adding, renaming or removing a field in any `--json` document, or a column/table in `export`.
 - Adding or renaming a CLI flag or command, or touching `ExitCode` in `packages/cli/src/errors.js`.
-- Any stage that freezes or confirms contracts (Stage 9 freeze, Stage 10 / 1.0).
+- Anything that might reset a freeze — read the freeze-reset rule in `docs/compatibility.md` before
+  concluding it does not.
 - Anything that changes `createEnvelope` in `packages/cli/src/output.js` or `EXPORT_TABLES` in
   `packages/cli/src/export.js`.
 
 ## Procedure
 
 - [ ] 1. **Capture the previous release's documents FIRST — before writing any code.** This is the
-      step with no second chance. Confirm the tree still matches the released tag with
-      `git diff --stat v0.7.0 HEAD -- packages/ scripts/` — empty output means it is safe to
-      capture. If it is NOT empty you have already changed the product, and the only recovery is a
-      worktree: `git worktree add /tmp/snack-0.7.0 v0.7.0 && cd /tmp/snack-0.7.0 && npm ci`. Slow,
-      and the whole reason step 1 comes first.
+      step with no second chance. Take the tag from `git tag --sort=-creatordate | head -1` rather
+      than from this file, then confirm the tree still matches it with
+      `git diff --stat <tag> HEAD -- packages/ scripts/` — empty output means it is safe to capture.
+      If it is NOT empty you have already changed the product, and the only recovery is a worktree:
+      `git worktree add /tmp/snack-<tag> <tag> && cd /tmp/snack-<tag> && npm ci`. Slow, and the
+      whole reason step 1 comes first.
 
 - [ ] 1b. **Capturing an OLDER release deliberately is a worktree job, and a normal one.** Filling a
       gap in the corpus — `0.6` was captured this way long after the fact — is not a recovery, it is
@@ -81,7 +82,9 @@ passes whole, and the 0.7 fixtures actively failed when `source_bindings` and
 
 - [ ] 7. **Verify** with `node --test packages/cli/test/contracts.test.js`, then
       `npm run pack:smoke` — the second one is what asserts the schemas actually ship inside the
-      tarball.
+      tarball. **Every schema the repo ships must be compiled by a test**, this one included: a
+      published schema nobody compiles is success-shaped silence in file form, a contract nobody can
+      use, shipping release after release. That is exactly how the spool schema shipped broken.
 
 ### Additive or version bump?
 
@@ -113,10 +116,6 @@ the change was breaking.
   one type it really carries.
 - **A schema referenced by `$id` from another file must be `addSchema`'d before the referring schema
   compiles.** Register the whole `schemas/commands/` directory once, then compile the envelope.
-- **Compile every schema the repo ships, in a test.** A published schema nobody compiles is
-  success-shaped silence in file form — a contract nobody can use, shipping release after release.
-  That is exactly how the spool schema shipped broken.
-
 - **Ajv strict rejects `"format": "date-time"`** with `unknown format "date-time" ignored`.
   `ajv-formats` is not a dependency and adding one for a timestamp is not worth it. Use a pattern:
   `"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"`.

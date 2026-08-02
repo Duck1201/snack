@@ -2,16 +2,15 @@
 name: snack-release-a-version
 description: >
   Take a finished SNACK stage from a green branch to a published version — cutting the version, CI
-  evidence, publishing to npm, verifying the published artifact, tagging, dist-tags. Use whenever
-  the task mentions releasing, publishing, shipping, cutting a version, bumping, "put it on npm",
-  moving `latest`/`stable`/`rc`/`candidate`, cutting a release candidate, or creating a GitHub
-  release. Also use when a published tarball's checksum does not match the recorded evidence, when
-  someone asks why CI did not run on a pushed branch, or why `npm install` still resolves the old
-  version.
+  evidence, publishing to npm, verifying the published artifact, tagging, dist-tags. Use when the
+  task mentions releasing or publishing a version, when a dist-tag must move
+  (`latest`/`stable`/`rc`/`candidate`), when a release candidate or a GitHub release is being cut,
+  when a published tarball's checksum does not match the recorded evidence, when someone asks why CI
+  did not run on a pushed branch, or why `npm install` still resolves the old version.
 license: MIT
 metadata:
   author: Duck
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Release a SNACK version
@@ -194,7 +193,9 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
 - **Ask the user not to merge while you are still committing.** It happened three times in one
   session: the PR merged at the head it had, later commits were stranded on the branch, and each one
   cost a follow-up PR. Before saying "ready", push everything and confirm
-  `git rev-list --count origin/main..HEAD` is what you expect.
+  `git rev-list --count origin/main..HEAD` is what you expect. When the release is one PR of
+  several, the merge order and the flag that destroys a PR belong to
+  `.claude/skills/land-a-stacked-pr-set/SKILL.md`; read it before the first `gh pr merge`.
 - **The npm web page lags the registry** by minutes. `npm view` is the source of truth.
 - After merges, `git fetch --prune` then `git branch -d` — the remote branches are deleted on merge
   and the local refs linger.
@@ -235,5 +236,7 @@ within minutes — the walkthrough is in `references/promoting-a-major.md`.
   major release.
 - `references/staging-registry.md` — when the release stages its tarballs on an isolated registry
   first; four traps, each of which costs a run.
+- `.claude/skills/land-a-stacked-pr-set/SKILL.md` when the release is one PR of several — it owns
+  everything up to the merge, this skill owns everything after it.
 - `.claude/skills/sqlite-constraint-migrations/SKILL.md` when the release carries a schema change.
 - `.claude/skills/verify-snack-against-real-cli/SKILL.md` before claiming a command works.

@@ -3,13 +3,12 @@ name: snack-fuzz-a-trust-boundary
 description: >
   Write a property test that actually finds defects at one of SNACK's trust boundaries — a client
   adapter (Claude JSONL, OpenCode message/part blobs), the spool NDJSON reader, or argv. Use when
-  asked to fuzz, property-test, or harden ingestion or the CLI surface, whenever a stage asks for
-  "fuzz/property tests", and before trusting a green fixture suite as evidence that a parser fails
-  closed.
+  asked to fuzz, property-test, or harden ingestion or the CLI surface, and before trusting a green
+  fixture suite as evidence that a parser fails closed.
 license: MIT
 metadata:
   author: Duck
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Fuzz a SNACK trust boundary
@@ -148,8 +147,6 @@ boundary that passes for a reason you cannot name has not been tested; it has be
 - **Reusing one fixture across runs is fine and more realistic.** Reset `stdout.value` and
   `stderr.value` between invocations; state accumulating across cases is closer to a real
   installation than a clean root each time.
-- **`node --test --test-name-pattern` must be run from the repo root**, not from `packages/cli`, or
-  it reports `Could not find`.
 
 ## What didn't work
 
