@@ -64,7 +64,12 @@ const SCALE = {
  * down, so it must start at one x; a measurement is read against its own header, so it must not
  * move when a neighbouring source is renamed.
  *
- * @type {{header: string, width: number, align: "left" | "center", read: (status: SourceStatusView) => string, style?: (status: SourceStatusView) => Style | undefined}[]}
+ * `sacrifice` orders what a narrow terminal gives up, and it is deliberately not the reading order.
+ * The column a reader can most afford to lose is not the rightmost one: `SYNC` reads `ok` almost
+ * always, while `LAST SEEN` — printed further left — is what decides whether any of the other
+ * numbers are worth reading at all. A column without a rank is never dropped.
+ *
+ * @type {{header: string, width: number, align: "left" | "center", sacrifice?: number, read: (status: SourceStatusView) => string, style?: (status: SourceStatusView) => Style | undefined}[]}
  */
 const OVERVIEW = [
   { header: "SOURCE", width: 0, align: "left", read: (status) => status.source.alias },
@@ -78,14 +83,22 @@ const OVERVIEW = [
     header: "RISK",
     width: 6,
     align: "center",
+    sacrifice: 5,
     read: (status) => status.risk.label,
     style: (status) => SCALE[status.risk.label],
   },
-  { header: "EVIDENCE", width: 8, align: "center", read: (status) => status.evidence.level },
+  {
+    header: "EVIDENCE",
+    width: 8,
+    align: "center",
+    sacrifice: 2,
+    read: (status) => status.evidence.level,
+  },
   {
     header: "PRESSURE",
     width: 8,
     align: "center",
+    sacrifice: 3,
     read: (status) => status.pressure.band,
     style: (status) => SCALE[status.pressure.band],
   },
@@ -93,6 +106,7 @@ const OVERVIEW = [
     header: "LAST SEEN",
     width: 9,
     align: "center",
+    sacrifice: 4,
     // `never` rather than the dash the pressure column uses for an absent band: one symbol standing
     // for two different absences is how a reader learns to skip both.
     read: (status) =>
@@ -102,6 +116,7 @@ const OVERVIEW = [
     header: "SYNC",
     width: 6,
     align: "center",
+    sacrifice: 1,
     read: (status) => status.synchronization.status,
     // The word is `failed` before it is red, the same rule the panel follows: colour never carries
     // meaning on its own.
@@ -118,20 +133,91 @@ const OVERVIEW = [
  */
 export function renderStatusTable(statuses, options) {
   const paint = painter(options.color);
-  const widths = OVERVIEW.map((column) =>
+  const columns = fit(statuses, options.columns);
+  const widths = columns.map((column) =>
     Math.max(column.width, ...[column.header, ...statuses.map(column.read)].map(measure)),
   );
   const lines = [
-    OVERVIEW.map((column, index) =>
+    columns.map((column, index) =>
       place(column.header, widths[index] ?? 0, column.align, paint, "dim"),
     ),
     ...statuses.map((status) =>
-      OVERVIEW.map((column, index) =>
+      columns.map((column, index) =>
         place(column.read(status), widths[index] ?? 0, column.align, paint, column.style?.(status)),
       ),
     ),
   ];
-  return `${lines.map((cells) => `  ${cells.join("  ")}`.trimEnd()).join("\n")}\n`;
+  const drawn = lines.map((cells) => `  ${cells.join("  ")}`.trimEnd());
+  return `${[...drawn, ...warnings(statuses, columns, paint)].join("\n")}\n`;
+}
+
+/**
+ * The lines a dropped column still owes the reader.
+ *
+ * Width is allowed to cost detail; it is not allowed to cost a warning. `SYNC` is droppable only
+ * because it reads `ok` almost always -- when it does not, every other number in that row is
+ * suspect, and losing the one word that says so would turn a layout decision into a correctness
+ * one. A sync that worked is not reported: a footer that narrates the ordinary case costs exactly
+ * as many lines as the column it replaced.
+ *
+ * @param {SourceStatusView[]} statuses
+ * @param {typeof OVERVIEW} columns
+ * @param {(value: string, style?: Style) => string} paint
+ */
+function warnings(statuses, columns, paint) {
+  const dropped = columns.some((column) => column.header === "SYNC")
+    ? []
+    : statuses
+        // Only `failed`. `not_requested` is what `--no-sync` means, and warning about it warns the
+        // reader about their own flag.
+        .filter((status) => status.synchronization.status === "failed")
+        .map(
+          (status) =>
+            `  ${paint("!", "red")} sync ${status.synchronization.status} on ${status.source.alias}`,
+        );
+  // Every source closes with the same standing caveats, so four of them printed twelve identical
+  // lines under a five-line table. A warning repeated per row is a warning a reader learns to skip;
+  // said once, it is still read. Order is first-seen rather than sorted, so the sentence a source
+  // adds for itself stays under the standing ones instead of jumping above them.
+  const caveats = [...new Set(statuses.flatMap((status) => status.caveats))];
+  return [...dropped, ...caveats.map((caveat) => `  ${paint("!", "gray")} ${caveat}`)];
+}
+
+/**
+ * Give up columns in `sacrifice` order until the widest row fits.
+ *
+ * A row wider than the terminal wraps, and a wrapped row destroys the alignment that is the whole
+ * reason a table beats one panel per source. The columns that survive keep their reading order:
+ * dropping a column must not reshuffle the ones beside it.
+ *
+ * @param {SourceStatusView[]} statuses
+ * @param {number} available
+ */
+function fit(statuses, available) {
+  let columns = [...OVERVIEW];
+  // A column with no rank is never given up: an overview that cannot say which source a number
+  // belongs to, or what the number is, has stopped being an overview.
+  const order = [...OVERVIEW]
+    .filter((column) => column.sacrifice !== undefined)
+    .sort((left, right) => Number(left.sacrifice) - Number(right.sacrifice));
+  for (const doomed of order) {
+    if (spans(statuses, columns) <= available) break;
+    columns = columns.filter((column) => column !== doomed);
+  }
+  return columns;
+}
+
+/**
+ * The width of the widest row these columns would draw, indent and gutters included.
+ *
+ * @param {SourceStatusView[]} statuses
+ * @param {typeof OVERVIEW} columns
+ */
+function spans(statuses, columns) {
+  const widths = columns.map((column) =>
+    Math.max(column.width, ...[column.header, ...statuses.map(column.read)].map(measure)),
+  );
+  return 2 + widths.reduce((total, width) => total + width, 0) + 2 * (columns.length - 1);
 }
 
 /**

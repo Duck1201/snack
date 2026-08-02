@@ -1675,6 +1675,55 @@ test("setup rejects source rebinds and ambiguous provider mappings", async () =>
   );
 });
 
+test("status draws an overview without a selection and a panel with one", async () => {
+  // The two readings are different questions. Without a selection the reader is choosing which
+  // source to reach for, which is a comparison and wants one row each; with a selection they are
+  // reading one source, which wants the detail a row cannot hold. Driven through `run` rather than
+  // the renderer because what is under test is the choice, not the drawing.
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+  fixture.stdout.value = "";
+
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  const overview = fixture.stdout.value;
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic"],
+    fixture.options,
+  );
+  const panel = fixture.stdout.value;
+
+  // The `SOURCE` column is fitted to the aliases, so the gap after the word is whatever this
+  // alias needs; what the assertion pins is the order of the headings, not their spacing.
+  assert.match(overview, /^ {2}SOURCE {2,}NEXT PROMPT/mu);
+  assert.match(overview, /^ {2}personal-anthropic\b/mu);
+  assert.doesNotMatch(overview, /^ {2}method {4}/mu, "the overview is not a panel");
+
+  assert.match(panel, /^personal-anthropic$/mu);
+  assert.match(panel, /^ {2}method {5}/mu);
+  assert.doesNotMatch(panel, /NEXT PROMPT/u, "a selected source is not a one-row table");
+});
+
 test("status isolates a failed source and returns stale summaries", async () => {
   const fixture = await makeRunFixture();
   fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
@@ -1902,14 +1951,19 @@ test("human status names the period it describes and what moved the pressure ban
   await setupAndSync(fixture);
 
   fixture.stdout.value = "";
-  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  // Naming the source is what asks for the detail. The overview answers "which source", and the
+  // period and the drivers are not part of that answer; they belong to the reading of one source.
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic"],
+    fixture.options,
+  );
   const human = fixture.stdout.value;
 
   fixture.stdout.value = "";
   await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
   const status = JSON.parse(fixture.stdout.value).data;
 
-  // Specification §12.3: the default human detail includes the active period and the top pressure
+  // Specification §12.3: the human detail includes the active period and the top pressure
   // contributors. A forecast whose scope and drivers are only in `--json` is two contracts.
   //
   // The panel carries the period's date rather than its full timestamp -- what a reader needs is

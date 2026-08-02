@@ -49,7 +49,7 @@ import {
 import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
-import { renderStatus } from "./render.js";
+import { renderStatus, renderStatusTable } from "./render.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { executeCommand, readLockfiles, resolveUpdatePlan, updateModulePath } from "./update.js";
 import {
@@ -772,8 +772,15 @@ export async function run(argv, options = {}) {
           ),
         );
       } else {
+        const env = options.env ?? process.env;
+        const color = supportsColor(stdout, env);
+        // Two readings, two shapes. Without a selection the reader is choosing which source to
+        // reach for, which is a comparison and wants one row each; having named one, they are
+        // reading that source, which wants the detail a row cannot hold.
         stdout.write(
-          renderStatus(statuses, { color: supportsColor(stdout, options.env ?? process.env) }),
+          commandOptions.source
+            ? renderStatus(statuses, { color })
+            : renderStatusTable(statuses, { color, columns: terminalColumns(stdout, env) }),
         );
         reportWarnings(stderr, reportedWarnings);
       }
@@ -1372,6 +1379,26 @@ function supportsColor(stream, env) {
   if (forced !== "" && forced !== "0") return true;
   if ((env.NO_COLOR ?? "") !== "") return false;
   return typeof stream.hasColors === "function" && stream.hasColors();
+}
+
+/**
+ * How many columns the reader has, for the one view whose shape depends on it.
+ *
+ * `COLUMNS` is read before the stream because it is the only answer available where the answer
+ * matters most: a pipe has no width, and `snack status | less -R` is read at a terminal that the
+ * pipe cannot see. It is also what makes the behaviour testable through an injected sink.
+ *
+ * The fallback is 80 rather than "unlimited". A stream with no width is usually a pipe into a file
+ * or a log, and a table that assumed an infinite terminal there would produce lines nobody can read
+ * back without horizontal scrolling.
+ *
+ * @param {{write(chunk: string): unknown, columns?: number}} stream
+ * @param {NodeJS.ProcessEnv} env
+ */
+function terminalColumns(stream, env) {
+  const declared = Number.parseInt(env.COLUMNS ?? "", 10);
+  if (Number.isFinite(declared) && declared > 0) return declared;
+  return typeof stream.columns === "number" && stream.columns > 0 ? stream.columns : 80;
 }
 
 /**

@@ -93,6 +93,7 @@ test("the overview is one header and one row per source", () => {
     [
       "  SOURCE  NEXT PROMPT   RISK   EVIDENCE  PRESSURE  LAST SEEN   SYNC",
       "  work      95-100%     low    moderate    high     40s ago     ok",
+      "  ! Real provider capacity is unknown.",
       "",
     ].join("\n"),
   );
@@ -140,6 +141,72 @@ test("colour never moves a column in the overview", () => {
   assert.notEqual(coloured, plain, "colour: true produced no colour");
   // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
   assert.equal(coloured.replace(/\u001B\[[0-9;]*m/gu, ""), plain);
+});
+
+test("a narrow terminal drops columns from the least load-bearing end", () => {
+  // A row wider than the terminal wraps, and a wrapped row destroys the alignment that is the only
+  // reason the table beat four panels. Dropping is ordered by what the reader loses: `SYNC` is
+  // almost always `ok`, `EVIDENCE` qualifies the estimate, and `PRESSURE` and the interval are the
+  // reading itself.
+  const wide = renderStatusTable([statusFor()], { color: false, columns: 80 });
+  const narrow = renderStatusTable([statusFor()], { color: false, columns: 60 });
+  const narrower = renderStatusTable([statusFor()], { color: false, columns: 48 });
+
+  assert.match(wide, /SYNC/u);
+  assert.doesNotMatch(narrow, /SYNC/u);
+  assert.match(narrow, /EVIDENCE/u);
+  assert.doesNotMatch(narrower, /EVIDENCE/u);
+  assert.match(narrower, /NEXT PROMPT/u, "the reading itself is never dropped");
+
+  for (const line of narrow.split("\n")) {
+    assert.ok(line.length <= 60, `line overflowed 60 columns: ${JSON.stringify(line)}`);
+  }
+});
+
+test("a failed sync survives losing its column", () => {
+  // Dropping `SYNC` for width is safe only because it almost always reads `ok`. The moment it does
+  // not, every other number in that row is suspect, and silently dropping the one word that says so
+  // would turn a width decision into a correctness one.
+  const failed = statusFor({ synchronization: { performed: true, status: "failed" } });
+  const narrow = renderStatusTable([failed], { color: false, columns: 60 });
+
+  assert.doesNotMatch(narrow, /SYNC/u, "the column itself should still be dropped");
+  assert.match(narrow, / {2}! sync failed on work\n/u);
+});
+
+test("nothing is said about a sync that worked or was never asked for", () => {
+  // The footer exists to carry a dropped warning, not to narrate. A line reading "sync ok on work"
+  // under every source would cost exactly as many lines as the column it replaced. `not_requested`
+  // is the same: it is what `--no-sync` means, so warning about it is warning the reader about
+  // their own flag.
+  for (const status of ["ok", "not_requested"]) {
+    const narrow = renderStatusTable([statusFor({ synchronization: { status } })], {
+      color: false,
+      columns: 60,
+    });
+
+    assert.doesNotMatch(narrow, /sync/u, `sync ${status} should be silent`);
+  }
+});
+
+test("a caveat every source repeats is stated once", () => {
+  // `createSourceStatus` gives every source the same three closing caveats, so four configured
+  // sources printed twelve identical lines under a five-line table. Repetition is how a reader
+  // learns to skip a warning; stating it once is what keeps it readable. A caveat only some sources
+  // carry is still printed, because there it is telling them apart.
+  const text = renderStatusTable(
+    [
+      statusFor(),
+      statusFor({
+        source: { alias: "personal", active_period: { started_at: null } },
+        caveats: ["Real provider capacity is unknown.", "Sparse history; the prior dominates."],
+      }),
+    ],
+    { color: false, columns: 80 },
+  );
+
+  assert.equal(text.match(/Real provider capacity is unknown\./gu)?.length, 1);
+  assert.match(text, / {2}! Sparse history; the prior dominates\.\n/u);
 });
 
 test("no escape sequence survives when colour is off", () => {
