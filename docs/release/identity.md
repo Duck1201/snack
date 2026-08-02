@@ -338,12 +338,19 @@ Tagged `v1.2.0` on that same commit, released on GitHub as Latest.
 
 | Package | Version | `latest` | `stable` | Attestations |
 | --- | --- | --- | --- | --- |
-| `@snack-ai/cli` | `1.2.0` | `1.2.0` | `1.1.2` | publish + SLSA provenance |
+| `@snack-ai/cli` | `1.2.0` | `1.2.0` | `1.2.0` | publish + SLSA provenance |
 | `@snack-ai/opencode` | `1.0.3` | `1.0.3` | — | publish + SLSA provenance |
 
 The registry is what this table records, not the intent: `npm view @snack-ai/cli dist-tags` answers
-`{ stable: '1.1.2', latest: '1.2.0' }` and `npm view @snack-ai/opencode dist-tags` answers
-`{ latest: '1.0.3' }`. `stable` did not move, because no release moves it.
+`{ stable: '1.2.0', latest: '1.2.0' }` and `npm view @snack-ai/opencode dist-tags` answers
+`{ latest: '1.0.3' }`.
+
+**`stable` was moved by hand, after the publish and by decision.** The release workflow did not set
+it and cannot: trusted publishing authorizes a publish request and not a `dist-tag` call, so
+`--tag` on the publish itself is the only channel a release can reach. From `1.0` the newest release
+is also the one whose contracts are held, so `stable` tracking `latest` is the ordinary outcome —
+but it is still a separate act by a person, which is why this paragraph exists and why the table
+above was written `1.1.2` for the minutes between the publish and that command.
 
 **The published tarballs were verified against the recorded evidence before the tag was created.**
 `npm pack` against the published specs reproduced `docs/release/artifacts.md` exactly:
