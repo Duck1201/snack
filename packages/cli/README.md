@@ -83,20 +83,21 @@ fails the build if a single one shows up in any byte SNACK writes.
 
 ## The commands
 
-| Command                                       | What it does                                                                                              |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm. |
-| `snack status`                                | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness.                 |
-| `snack stats`                                 | What your usage really looks like over rolling horizons, and how well past forecasts scored.              |
-| `snack sync`                                  | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                  |
-| `snack export`                                | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                      |
-| `snack data purge`                            | Deletes a scope you choose, transactionally, after showing you exactly what goes.                         |
-| `snack config`                                | Reads and edits local configuration.                                                                      |
-| `snack doctor`                                | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.              |
-| `snack update`                                | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.   |
+| Command                                       | What it does                                                                                                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snack setup opencode` / `snack setup claude` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                          |
+| `snack status`                                | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method and the policy versions. |
+| `snack stats`                                 | What your usage really looks like over rolling horizons, and how well past forecasts scored.                                                                       |
+| `snack sync`                                  | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                           |
+| `snack export`                                | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                               |
+| `snack data purge`                            | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                  |
+| `snack config`                                | Reads and edits local configuration.                                                                                                                               |
+| `snack doctor`                                | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                       |
+| `snack update`                                | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                            |
 
 Every command takes `--json` and answers with one versioned document, so scripting it never means
-parsing prose.
+parsing prose. Every command is also in `man snack`, which ships in the package and is generated
+from the CLI's own flag surface — an undocumented flag fails the build rather than reaching you.
 
 Two clients can share one capacity source. If OpenCode and Claude Code bill against the same
 account, map them to the same alias and SNACK will treat their usage as the single pool it really

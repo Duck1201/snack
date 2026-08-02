@@ -254,7 +254,7 @@ repeated. Racing a command against itself now belongs in the verification of any
 capacity period, and the `verify-snack-against-real-cli` skill is where that belongs rather than in
 a release note nobody reads twice.
 
-### 1.1.3 - The reading
+### 1.1.3 - The reading — **shipped**
 
 **Purpose:** `1.1.0` made the output aligned and coloured, which fixed the layout and left the
 words. The two screens a person actually reads still spoke to a statistician: `stats` put every
@@ -313,60 +313,72 @@ an estimate always names its method is met throughout — by the JSON document �
 route rather than two, and that is the reason `--verbose` is the first item of the next release
 rather than a later one.
 
-**Exit:** `--json` bytes are unchanged from `1.1.2` for the same input; the flag surface is unchanged;
-the renderer is covered by tests that need no database, clock or terminal; an alias of double-width
-characters aligns with an ASCII one.
+**Exit, met.** `--json` bytes are unchanged from `1.1.2` for the same input; the flag surface is
+unchanged; the renderer is covered by tests that need no database, clock or terminal; an alias of
+double-width characters aligns with an ASCII one.
 
-### 1.2.0 - `status --verbose`, `snack dash`, and `man snack`
+**Shipped** as `@snack-ai/cli@1.1.3` on 2026-08-02, from commit `32d23d8`, tagged `v1.1.3`. The
+plugin stays at `1.0.2`. The published artifact matches the recorded evidence exactly. Full record
+in [docs/release/identity.md](../release/identity.md).
+
+**Where the plan above was wrong.**
+
+**The entry reads as though `--verbose` was always deferred, and it was not.** The flag was written,
+tested and reviewed as part of this release, and removed before the cut. The paragraph above stating
+that it "waits for `1.2.0`, where an additive option belongs" is the conclusion, written after the
+fact and phrased as if it had been the intention. What actually happened is that a patch was most of
+the way to shipping an additive public option, and the compatibility policy this same release
+documents is what caught it. The rule worked; the plan did not anticipate needing it.
+
+**The roadmap was renumbered and then un-renumbered.** The first attempt made room for this work by
+moving Codex, `--sequence` and `reported_capacity_v1` each down a version. Renumbering published
+commitments to absorb unplanned work is backwards — it makes every promise the roadmap has already
+made contingent on whatever arrives next. The work landed as `1.1.3` instead, and the `1.2.0` slot
+kept its number while its contents changed. **This is now the rule** and it is what put `snack dash`
+at `1.6.0` rather than displacing the three releases behind it.
+
+**Removing a line is what made an older defect legible.** The initial-heuristic label above is
+recorded in this entry as part of the release, but it was not part of the plan. It surfaced only
+while reviewing what the removed `method` row had been carrying: `docs/specification/analysis.md`
+puts that label on the interface, no version had ever met it, and the suite exercised the path
+through `--json` alone. Deleting something is a review technique this release found by accident.
+
+### 1.2.0 - `status --verbose` and `man snack`
 
 **Purpose:** finish the reading `1.1.3` started. That release moved the statistics off the default
-panel and had nowhere human to put them; this one adds the flag that holds them, and the screen that
-`status` was never the right shape to be.
+panel and had nowhere human to put them; this one adds the flag that holds them, and the gate that
+makes an undocumented flag impossible to ship.
 
 - **`status --verbose`**, additive and therefore a minor: the method and its version, the model
   policy version, the evidence gates, and the percentile behind each pressure driver. It closes the
-  one thing `1.1.3` left open, and it spells the same idea `stats --verbose` already spells;
-- **`snack dash`**, a new command rather than a flag. Full screen, alternate buffer, every capacity
-  source on one interactive screen. Without a TTY it exits `2` and points at `snack status`, which is
-  the pipe-safe answer to the same question;
-- **stdlib only.** No `ink` — it needs JSX, and this package publishes `src/` with no build step,
-  which is also what lets a reader audit on GitHub exactly what runs on their machine. A screen
-  buffer, pure `state → string[]` widgets, and a per-line frame diff reproduce the three properties
-  of a component renderer that matter here, and the widgets stay testable without a terminal;
-- **list and detail**: every source as a row, the selected one expanded below, a key bar at the
-  foot. It scales the same with one source or nine, and the selection is the interaction;
-- **a plot worth plotting**: ~24 hourly windows, read from the baseline `analytics.js` already
-  computes, as a display series of its own. `TREND_POLICY.windows` stays at 5 — the direction
-  statistic is versioned, published in `--json`, and changing it would be a different decision from
-  drawing a chart;
-- **a scale with a marker, never a filled bar.** A filled bar reads as how much of a tank is gone,
-  which is the one claim this product exists not to make; a marker on a named scale reads as where
-  you sit, which is what a percentile against your own history is. `vocabulary.test.js` grows a
-  snapshot mode with a fake TTY so `dash` is held to the same forbidden patterns as every other
-  surface;
-- **two clocks.** Redrawing reads storage and is cheap; synchronizing takes seconds and writes.
-  Measured on a real database, `snack sync` takes 2.3 s and `better-sqlite3` is synchronous, so an
-  inline sync freezes the screen and kills the keys. The redraw ticks about every second; the sync
-  runs `snack sync --json` as a child process, which reuses the tested path and keeps the storage
-  lock inside the child and measured in seconds;
-- **a snapshot per forecast the reader actually saw**, keyed on the rendered estimate — the rounded
-  interval, the risk label, the evidence level, the method, the policy versions. A redraw that
-  changes nothing writes nothing;
+  one thing `1.1.3` left open, and it spells the same idea `stats --verbose` already spells. Most of
+  it is recoverable rather than new — the flag was built and removed during `1.1.3`, so this release
+  restores reviewed code and adds the two parts that version never had, the model policy version and
+  the evidence gates;
+- **`--verbose` renders panels, never the overview.** The overview exists to compare sources, and
+  four extra rows per source is not a comparison;
 - `snack.1`, generated by script from Commander's own definitions plus the command-reference prose,
-  checked in, and verified by `npm run check` so an undocumented flag fails the gate.
+  checked in, and verified by `npm run check` so an undocumented flag fails the gate. It reads the
+  same help text `contracts.test.js` reads, from one lifted function, so the man page and the frozen
+  surface cannot disagree by construction;
+- **the gate lands before the flag.** The generator goes in against the unchanged flag surface,
+  where green proves the generator works; then `--verbose` turns it red, which is what proves the
+  gate. Landing them the other way round makes the gate's first run also its first regeneration, and
+  there is no way to tell a working generator from one that absorbed whatever it was given.
 
-**`status --watch` is dropped from this release and superseded by `snack dash`.** It was specified
-as a flag that would put `status` into a second output mode, and the `1.1.3` work made the better
-answer obvious: a live screen is not a stream. `status` and `stats` are read through pipes —
-`cli.js` handles `EPIPE` because `| less -R` and `| jq` are real uses — and a full-screen drawing
-cannot be their stdout.
-[ADR-0008](../adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md) survives the move intact:
-its rule was always about a live screen rather than about a flag, and the dash's snapshot key is
-that rule restated for a screen that redraws faster than evidence arrives.
+**`snack dash` is not in this release.** It was specified here, and it is three candidate causes —
+a flag, a generated artifact and a full-screen application with a background child process, a new
+write path and an interaction with the storage lock — for anything a single version breaks. The same
+argument already separates `1.5.0` from `1.3.0`. Its exit criterion is an eight-hour measurement
+against a real database, and that evidence should not hold up a flag and a man page that are both
+already proven. It lands at [`1.6.0`](#160---snack-dash), behind the three releases that were
+promised before it, because the alternative is renumbering published commitments to absorb a scope
+change — which is what `1.1.3` established is backwards.
 
-**Exit:** an eight-hour dash session writes the same number of snapshots as the equivalent number of
-manual `status` runs; no storage lock is held between syncs; `dash` piped anywhere exits `2`; the
-widgets are covered by tests with no terminal; the generated man page matches the live flag surface.
+**Exit:** `status --verbose` is covered by renderer tests that need no database, clock or terminal;
+`status --json` is byte-identical with and without `--verbose`; `snack.1` regenerates identically in
+CI and opens under `man -l`; a flag added to `main.js` and not to `docs/specification/cli.md` makes
+`npm run check` fail.
 
 ### 1.3.0 - Codex CLI adapter
 
@@ -393,3 +405,53 @@ widgets are covered by tests with no terminal; the generated man page matches th
 - separated from `1.3.0` on purpose — shipping a new adapter and a new prediction method together leaves two candidate causes for any divergence and no way to separate them.
 
 **Exit:** both methods carry independent calibration figures with their own sample sizes; the baseline's numbers are unchanged for sources that report nothing.
+
+### 1.6.0 - `snack dash`
+
+**Purpose:** the screen `status` was never the right shape to be. It was specified as part of
+`1.2.0` and moved here rather than displacing the three releases already promised behind it; the
+reasoning for the move is in the [`1.2.0`](#120---status---verbose-and-man-snack) entry.
+
+- **`snack dash`**, a new command rather than a flag. Full screen, alternate buffer, every capacity
+  source on one interactive screen. Without a TTY it exits `2` and points at `snack status`, which is
+  the pipe-safe answer to the same question;
+- **stdlib only.** No `ink` — it needs JSX, and this package publishes `src/` with no build step,
+  which is also what lets a reader audit on GitHub exactly what runs on their machine. A screen
+  buffer, pure `state → string[]` widgets, and a per-line frame diff reproduce the three properties
+  of a component renderer that matter here, and the widgets stay testable without a terminal;
+- **list and detail**: every source as a row, the selected one expanded below, a key bar at the
+  foot. It scales the same with one source or nine, and the selection is the interaction;
+- **a plot worth plotting**: ~24 hourly windows, read from the baseline `analytics.js` already
+  computes, as a display series of its own. `TREND_POLICY.windows` stays at 5 — the direction
+  statistic is versioned, published in `--json`, and changing it would be a different decision from
+  drawing a chart;
+- **a scale with a marker, never a filled bar.** A filled bar reads as how much of a tank is gone,
+  which is the one claim this product exists not to make; a marker on a named scale reads as where
+  you sit, which is what a percentile against your own history is. `vocabulary.test.js` grows a
+  snapshot mode with a fake TTY so `dash` is held to the same forbidden patterns as every other
+  surface;
+- **two clocks.** Redrawing reads storage and is cheap; synchronizing takes seconds and writes.
+  Measured on a real database, `snack sync` takes 2.3 s and `better-sqlite3` is synchronous, so an
+  inline sync freezes the screen and kills the keys. The redraw ticks about every second; the sync
+  runs `snack sync --json` as a child process, which reuses the tested path and keeps the storage
+  lock inside the child and measured in seconds;
+- **a snapshot per forecast the reader actually saw**, keyed on the rendered estimate — the rounded
+  interval, the risk label, the evidence level, the method, the policy versions. A redraw that
+  changes nothing writes nothing. The key and the panel must round through one shared function, or
+  the screen writes a snapshot on a frame that redrew identical bytes.
+
+**`status --watch` is dropped and superseded by `snack dash`.** It was specified as a flag that would
+put `status` into a second output mode, and the `1.1.3` work made the better answer obvious: a live
+screen is not a stream. `status` and `stats` are read through pipes — `cli.js` handles `EPIPE`
+because `| less -R` and `| jq` are real uses — and a full-screen drawing cannot be their stdout.
+[ADR-0008](../adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md) survives the move intact:
+its rule was always about a live screen rather than about a flag, and the dash's snapshot key is
+that rule restated for a screen that redraws faster than evidence arrives.
+
+**This release requires amending [PLAN.md](../../PLAN.md)'s "Outside the 1.x Line" item 4**, which
+placed a full-screen application outside this line. The amendment is written when the release is
+scheduled rather than when it is built, and it is already recorded there.
+
+**Exit:** an eight-hour dash session writes the same number of snapshots as the equivalent number of
+manual `status` runs; no storage lock is held between syncs; `dash` piped anywhere exits `2`; the
+widgets are covered by tests with no terminal.

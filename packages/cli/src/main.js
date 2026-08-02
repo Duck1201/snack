@@ -621,6 +621,7 @@ export async function run(argv, options = {}) {
     .option("--source <alias>", "capacity-source alias")
     .option("--no-sync", "use already synchronized observations")
     .option("--prompt-file <path>", "analyze an unsent prompt from a file, or - for stdin")
+    .option("--verbose", "add the evidence gates, the method and the policy versions")
     .option("--json", "emit one versioned JSON document")
     .action(async function status(commandOptions) {
       /** @type {ReturnType<typeof createSourceStatus>[]} */
@@ -777,9 +778,14 @@ export async function run(argv, options = {}) {
         // Two readings, two shapes. Without a selection the reader is choosing which source to
         // reach for, which is a comparison and wants one row each; having named one, they are
         // reading that source, which wants the detail a row cannot hold.
+        //
+        // `--verbose` takes the panel shape for the same reason, even without a selection: it adds
+        // four rows per source, and four more rows each is a stack of panels wearing a table's
+        // header rather than a comparison. Asking for the detail is asking for the shape with room
+        // for it.
         stdout.write(
-          commandOptions.source
-            ? renderStatus(statuses, { color })
+          commandOptions.source || commandOptions.verbose === true
+            ? renderStatus(statuses, { color, verbose: commandOptions.verbose === true })
             : renderStatusTable(statuses, { color, columns: terminalColumns(stdout, env) }),
         );
         reportWarnings(stderr, reportedWarnings);

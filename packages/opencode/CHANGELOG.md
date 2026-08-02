@@ -1,5 +1,26 @@
 # @snack-ai/opencode
 
+## 1.0.3
+
+### Patch Changes
+
+- The capture plugin validates only what the host can get wrong.
+
+  The spool had three descriptions of a valid event: the schema both packages ship, this plugin's
+  hand-written check on the way in, and the reader's on the way out. The schema is the contract and
+  the other two were implementations of it, so all three could disagree — and a reader stricter than
+  the contract reports a conforming plugin's events as corruption rather than as disagreement.
+
+  The plugin now checks only the identifiers, provider and model OpenCode supplies and does not
+  bound. Every other field of an event is a literal written a few lines above, so re-deriving it
+  from the assembled object only restated the constructor. An identifier the host makes longer than
+  the schema allows is refused rather than written, because `spool.js` validates that same schema on
+  the way back in and would otherwise read the line as a corrupt segment instead of as a prompt this
+  plugin could not represent.
+
+  No event that was valid before is refused now, and the spool event schema is unchanged at
+  version 1.
+
 ## 1.0.2
 
 ### Patch Changes

@@ -53,6 +53,9 @@ test("no command calls observed usage a quota percentage or a remaining balance"
     ],
     ["sync", "--full"],
     ["status"],
+    // The verbose panel is where the pressure percentiles reach a human surface, which is the one
+    // number in this product most likely to be read as a share of a capacity.
+    ["status", "--verbose"],
     ["stats", "--verbose"],
     // The per-client comparison renders refusal counts and intervals, which is exactly the shape of
     // output that drifts into sounding like a share of real capacity.

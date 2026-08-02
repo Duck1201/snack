@@ -3546,3 +3546,65 @@ test("a first setup retires nothing and says nothing", async () => {
   // one warning that matters.
   assert.deepEqual(JSON.parse(fixture.stdout.value).warnings, []);
 });
+
+test("status --verbose names the method and the model policy version", async () => {
+  // The invariant is that an estimate can always say which method produced it. `1.1.3` moved the
+  // method off the default panel, which is only defensible because both `--verbose` and `--json`
+  // carry it -- so this flag existing is part of the invariant rather than a convenience.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic", "--verbose"],
+    fixture.options,
+  );
+  const verbose = fixture.stdout.value;
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const { method, model_policy_version: modelPolicy } = JSON.parse(fixture.stdout.value).data;
+
+  assert.match(
+    verbose,
+    new RegExp(` {2}method {7}${method.id}@${method.version} · model ${modelPolicy}\n`, "u"),
+  );
+  assert.match(verbose, / {2}gates {8}\w/u);
+});
+
+test("status --verbose changes no byte of the JSON document", async () => {
+  // `--verbose` is human formatting reached through a public option. A flag that quietly widened
+  // the envelope would be a schema change arriving as a minor without a version move.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  const plain = fixture.stdout.value;
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--verbose", "--json"], fixture.options);
+
+  assert.equal(fixture.stdout.value, plain);
+});
+
+test("status --verbose without a source prints panels rather than the overview", async () => {
+  // The overview exists to compare sources, and comparison is what the extra rows destroy: four
+  // more lines per source is a stack of panels wearing a table's header. Asking for the detail is
+  // therefore asking for the shape that has room for it.
+  const fixture = await makeRunFixture();
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await setupAndSync(fixture);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  assert.match(fixture.stdout.value, /^ *SOURCE/mu);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync", "--verbose"], fixture.options);
+
+  assert.doesNotMatch(fixture.stdout.value, /^ *SOURCE/mu);
+  assert.match(fixture.stdout.value, / {2}method {7}/u);
+});
