@@ -338,7 +338,7 @@ Tagged `v1.1.0` on that same commit, released on GitHub as Latest.
 
 | Package | Version | `latest` | `stable` | Attestations |
 | --- | --- | --- | --- | --- |
-| `@snack-ai/cli` | `1.1.0` | `1.1.0` | pending decision | publish + SLSA provenance |
+| `@snack-ai/cli` | `1.1.0` | `1.1.0` | `1.1.0` | publish + SLSA provenance |
 | `@snack-ai/opencode` | `1.0.2` | `1.0.2` | — | publish + SLSA provenance |
 
 **The published artifacts match the recorded evidence exactly.** Packed from the registry rather
@@ -351,6 +351,12 @@ snack-ai-opencode-1.0.2.tgz  sha256:90b8740c9a43e5782f0e22632c5634bcbf62a50af01c
 
 Both equal what `docs/release/artifacts.md` records. At `1.0.0` this same check found a mismatch
 within minutes of publishing; here there is none.
+
+`stable` was moved by hand after that verification, which is the order that makes the check worth
+running: `latest` and `stable` both point at an artifact somebody compared against the evidence
+first. The registry is the source consulted for this table —
+`npm view @snack-ai/cli dist-tags` answers `{ stable: '1.1.0', latest: '1.1.0' }` and
+`npm view @snack-ai/opencode dist-tags` answers `{ latest: '1.0.2' }`.
 
 **The plugin republished with no behavioural change**, which is the opposite case to `1.0.2` and was
 taken deliberately rather than discovered. Its README was split by language and both files now ship,
