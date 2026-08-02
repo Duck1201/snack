@@ -250,6 +250,13 @@ that literal is compared against is now read by `scripts/man-surface.mjs`, which
 published `man snack`. The two cannot describe different CLIs, and a flag that reaches `main.js`
 without reaching `docs/specification/cli.md` fails `npm run check`.
 
+**The capture plugin moves to `1.0.3`, and the CLI's pin moves with it.** Both packages validate
+spool events against the schema they ship byte-for-byte instead of against hand-written copies of
+it, which changed the plugin's source and therefore its tarball. A published version is immutable,
+so content that changed takes a new number rather than reusing `1.0.2`. The spool event contract is
+untouched at version 1, and no event that was valid before is refused now: a `1.0.2` plugin and a
+`1.2.0` CLI still interoperate in both directions.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

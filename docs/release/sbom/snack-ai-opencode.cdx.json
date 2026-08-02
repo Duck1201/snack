@@ -2,10 +2,10 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:8bcfbbcc-4c2b-4070-8e68-32096a3e0d29",
+  "serialNumber": "urn:uuid:9f9cc3d7-b1e2-4757-9d94-10e79a90e334",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-02T04:22:44.327Z",
+    "timestamp": "2026-08-02T18:28:57.142Z",
     "lifecycles": [
       {
         "phase": "pre-build"
@@ -44,13 +44,13 @@
   },
   "components": [
     {
-      "bom-ref": "@snack-ai/opencode@1.0.2",
+      "bom-ref": "@snack-ai/opencode@1.0.3",
       "type": "library",
       "name": "opencode",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "scope": "required",
       "description": "Fail-open OpenCode metadata capture for SNACK",
-      "purl": "pkg:npm/%40snack-ai/opencode@1.0.2",
+      "purl": "pkg:npm/%40snack-ai/opencode@1.0.3",
       "properties": [],
       "externalReferences": [
         {
@@ -73,7 +73,7 @@
       "dependsOn": []
     },
     {
-      "ref": "@snack-ai/opencode@1.0.2",
+      "ref": "@snack-ai/opencode@1.0.3",
       "dependsOn": []
     }
   ]
