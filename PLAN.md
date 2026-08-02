@@ -14,7 +14,7 @@ SNACK is a local-first command-line application that describes observed AI-tool 
 - [Compatibility](./docs/compatibility.md): the frozen public surfaces, their versions, and the freeze-reset rule.
 - [Roadmap, 1.0 onward](./docs/history/roadmap-1.x.md): the per-release detail for the 1.x line.
 - [Archived roadmap 0.1.0 - 1.0.0](./docs/history/roadmap-0.1-1.0.md): the ten stages that produced the stable release, kept because the compatibility policy and the ADRs refer to them by number.
-- ADRs: [0001](./docs/adr/0001-nodejs-modular-monolith.md) modular monolith · [0002](./docs/adr/0002-local-metadata-without-content.md) local metadata without content · [0003](./docs/adr/0003-hybrid-opencode-ingestion.md) hybrid OpenCode ingestion · [0004](./docs/adr/0004-nodejs-24-baseline.md) Node.js 24 baseline · [0005](./docs/adr/0005-retain-snack-name.md) the SNACK name · [0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) Claude JSONL without hooks · [0007](./docs/adr/0007-quote-codex-reported-capacity.md) quoting Codex's reported capacity · [0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md) `--watch` and prediction snapshots · [0009](./docs/adr/0009-documentation-lives-in-the-repository.md) documentation in the repository · [0010](./docs/adr/0010-snack-update-may-reach-the-network.md) `snack update` may reach the network.
+- ADRs: [0001](./docs/adr/0001-nodejs-modular-monolith.md) modular monolith · [0002](./docs/adr/0002-local-metadata-without-content.md) local metadata without content · [0003](./docs/adr/0003-hybrid-opencode-ingestion.md) hybrid OpenCode ingestion · [0004](./docs/adr/0004-nodejs-24-baseline.md) Node.js 24 baseline · [0005](./docs/adr/0005-retain-snack-name.md) the SNACK name · [0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md) Claude JSONL without hooks · [0007](./docs/adr/0007-quote-codex-reported-capacity.md) quoting Codex's reported capacity · [0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md) a live screen and prediction snapshots · [0009](./docs/adr/0009-documentation-lives-in-the-repository.md) documentation in the repository · [0010](./docs/adr/0010-snack-update-may-reach-the-network.md) `snack update` may reach the network.
 
 ## Product Thesis
 
@@ -190,7 +190,8 @@ budgets, and the risks.
 | `1.1.0` | `snack update`, the status panel and colour, the documentation restructure | shipped |
 | `1.1.1` | The two Phase 1 findings `1.1.0` did not carry, both P3 | shipped |
 | `1.1.2` | The capacity-period boundary the 1.1.1 verification found | shipped |
-| `1.2.0` | `status --watch` and a generated `man snack` | planned |
+| `1.1.3` | The reading: `status` and `stats` written for a person, and screen-width alignment | planned |
+| `1.2.0` | `status --verbose`, `snack dash` — superseding `status --watch` — and a generated `man snack` | planned |
 | `1.3.0` | Codex CLI adapter | planned |
 | `1.4.0` | `status --sequence N` | planned |
 | `1.5.0` | `reported_capacity_v1` prediction method | planned |
@@ -255,7 +256,7 @@ Steady state means the commands run repeatedly against an already-stored history
 
 These are release gates, not cross-device guarantees. Regressions require measurement and resolution before release.
 
-A `--watch` tick is held to the same budgets as the command it repeats, and is the reason the default interval is 30 seconds rather than a number that feels live.
+A `snack dash` redraw is held to the same budgets as the command it repeats, and is the reason its synchronization runs on a clock of its own rather than on every frame.
 
 ## Outside the 1.x Line
 
@@ -274,7 +275,7 @@ Explicitly not on this roadmap. Each needs its own design and its own release de
 - **A reported figure trusted too far:** Codex states its own usage, and the temptation is to let that number stand in for capacity generally. It is quoted for one source, never generalized, and never enters usage pressure.
 - **Client schema drift:** fingerprints can break between releases. Latest + previous support and fail-closed behavior contain the risk.
 - **A third client widening the privacy surface:** Codex rollout files carry prompt text and project paths in the same records as the metadata. Allowlist reading and canary assertions are the containment, and they are release gates.
-- **Calibration corrupted by presentation:** a long-running `--watch` writing snapshots per repaint would silently destroy the calibration stream. See [ADR-0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md).
+- **Calibration corrupted by presentation:** a long-running live screen writing snapshots per repaint would silently destroy the calibration stream. See [ADR-0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md).
 - **False precision:** percentages can look authoritative. Intervals, evidence, method, freshness, and caveats remain visible.
 - **Privacy regression:** logs, fixtures, histories, hooks, or event payloads could retain content. Canary tests and independent review are release gates.
 - **Native SQLite installation:** prebuilt support may vary across Node/platform versions.

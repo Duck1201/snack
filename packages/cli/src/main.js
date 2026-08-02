@@ -49,7 +49,7 @@ import {
 import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
-import { renderStatus } from "./render.js";
+import { renderStats, renderStatus, renderStatusTable } from "./render.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { executeCommand, readLockfiles, resolveUpdatePlan, updateModulePath } from "./update.js";
 import {
@@ -609,7 +609,7 @@ export async function run(argv, options = {}) {
         stdout.write(formatJson(createEnvelope("stats", data, { warnings: statsWarnings, now })));
       } else {
         for (const report of reports) {
-          stdout.write(renderStats(report, commandOptions.verbose === true));
+          stdout.write(renderStats(report, { verbose: commandOptions.verbose === true }));
         }
         reportWarnings(stderr, statsWarnings);
       }
@@ -772,8 +772,15 @@ export async function run(argv, options = {}) {
           ),
         );
       } else {
+        const env = options.env ?? process.env;
+        const color = supportsColor(stdout, env);
+        // Two readings, two shapes. Without a selection the reader is choosing which source to
+        // reach for, which is a comparison and wants one row each; having named one, they are
+        // reading that source, which wants the detail a row cannot hold.
         stdout.write(
-          renderStatus(statuses, { color: supportsColor(stdout, options.env ?? process.env) }),
+          commandOptions.source
+            ? renderStatus(statuses, { color })
+            : renderStatusTable(statuses, { color, columns: terminalColumns(stdout, env) }),
         );
         reportWarnings(stderr, reportedWarnings);
       }
@@ -1372,6 +1379,26 @@ function supportsColor(stream, env) {
   if (forced !== "" && forced !== "0") return true;
   if ((env.NO_COLOR ?? "") !== "") return false;
   return typeof stream.hasColors === "function" && stream.hasColors();
+}
+
+/**
+ * How many columns the reader has, for the one view whose shape depends on it.
+ *
+ * `COLUMNS` is read before the stream because it is the only answer available where the answer
+ * matters most: a pipe has no width, and `snack status | less -R` is read at a terminal that the
+ * pipe cannot see. It is also what makes the behaviour testable through an injected sink.
+ *
+ * The fallback is 80 rather than "unlimited". A stream with no width is usually a pipe into a file
+ * or a log, and a table that assumed an infinite terminal there would produce lines nobody can read
+ * back without horizontal scrolling.
+ *
+ * @param {{write(chunk: string): unknown, columns?: number}} stream
+ * @param {NodeJS.ProcessEnv} env
+ */
+function terminalColumns(stream, env) {
+  const declared = Number.parseInt(env.COLUMNS ?? "", 10);
+  if (Number.isFinite(declared) && declared > 0) return declared;
+  return typeof stream.columns === "number" && stream.columns > 0 ? stream.columns : 80;
 }
 
 /**
@@ -2720,136 +2747,6 @@ function buildCalibrationReport(databaseFile, alias, planProfile) {
     live: summarizeCalibration(pairs),
     backtest: { ...replay.calibration, forecasts: replay.forecasts },
   };
-}
-
-/**
- * State the same calibration facts the JSON document carries, in one line.
- *
- * A score without its sample size invites over-reading, so both always travel together,
- * and the live and backtest streams are never merged into one number.
- *
- * @param {ReturnType<typeof buildCalibrationReport>} calibration
- * @returns {string}
- */
-function describeCalibration(calibration) {
-  const stream = (
-    /** @type {{status: string, brier: {value: number | null, sample_size: number}, interval: {coverage: number | null}}} */ report,
-  ) =>
-    report.status === "not_available" || report.brier.value === null
-      ? "not available"
-      : `brier ${report.brier.value.toFixed(3)} (sample ${report.brier.sample_size}` +
-        `${report.interval.coverage === null ? "" : `, coverage ${report.interval.coverage.toFixed(2)}`})`;
-  return (
-    `${calibration.snapshots} snapshots, ${calibration.undelivered_attempts} undelivered;` +
-    ` live ${stream(calibration.live)};` +
-    ` backtest ${stream(calibration.backtest)} over ${calibration.backtest.forecasts} forecasts;` +
-    ` policy ${calibration.policy_version}.`
-  );
-}
-
-/**
- * Describe which way pressure has been moving, without implying where it goes next.
- *
- * `steady` rather than `stable`: stable hints at a claim about the future, and a trend only
- * describes windows already observed.
- *
- * @param {ReturnType<typeof computeUsageTrend> | undefined} trend
- */
-function describeTrend(trend) {
-  if (trend === undefined || trend.status !== "observed" || trend.direction === null) {
-    return `trend not_available (${trend?.reason ?? "unknown"})`;
-  }
-  return (
-    `trend ${trend.direction} over ${trend.windows_compared} windows ` +
-    `against ${trend.baseline_windows} baseline windows (policy ${trend.policy_version})`
-  );
-}
-
-/**
- * @param {ReturnType<typeof buildSourceStats>} report
- * @param {boolean} verbose
- */
-function renderStats(report, verbose) {
-  let text = `${report.source.alias}: plan profile ${report.source.plan_profile.id}@${report.source.plan_profile.version} (${report.source.plan_profile.provenance}, as of ${report.source.plan_profile.as_of}).\n`;
-  text += `  pressure ${report.pressure.band} (${report.pressure.baseline_kind} baseline, policy ${report.pressure.policy_version}); ${describeTrend(report.pressure.trend)}.\n`;
-  text += `  calibration: ${describeCalibration(report.calibration)}\n`;
-  if (report.by_client) text += describeClientComparison(report.by_client);
-  for (const horizon of report.horizons) {
-    const restrictions = Object.entries(horizon.restrictions.by_class);
-    const tokens = Object.entries(horizon.dimensions)
-      .map(([dimension, value]) => `${dimension} ${"value" in value ? value.value : "unknown"}`)
-      .join(", ");
-    const cost = Object.entries(horizon.cost.by_currency)
-      .map(([currency, amount]) => `${currency} ${amount}`)
-      .join(", ");
-    text +=
-      `  ${horizon.horizon}: ${horizon.prompts.count} prompts` +
-      ` (${horizon.prompts.eligible} eligible, ${horizon.prompts.excluded} excluded);` +
-      ` restrictions ${restrictions.length === 0 ? "none" : restrictions.map(([klass, count]) => `${klass} ${count}`).join(", ")};` +
-      ` tokens ${tokens};` +
-      ` cost ${cost === "" ? "unknown" : cost};` +
-      ` duration ${"p50" in horizon.duration ? `p50 ${horizon.duration.p50}ms p90 ${horizon.duration.p90}ms` : "unknown"};` +
-      ` effective sample ${horizon.effective_sample_size.value.toFixed(2)} ${horizon.effective_sample_size.unit};` +
-      ` as_of ${horizon.freshness.as_of ?? "unknown"}.\n`;
-    if (verbose) {
-      for (const [dimension, value] of Object.entries(horizon.dimensions)) {
-        text += `    ${dimension}: ${"value" in value ? value.value : "unknown"} ${value.unit} (sample ${value.sample_size}, missing ${value.missing}).\n`;
-      }
-      text += `    cost: sample ${horizon.cost.sample_size}, missing ${horizon.cost.missing}.\n`;
-      for (const entry of horizon.by_model) {
-        const tokensByModel = Object.entries(entry.dimensions)
-          .map(([dimension, value]) => `${dimension} ${"value" in value ? value.value : "unknown"}`)
-          .join(", ");
-        const costByModel = Object.entries(entry.cost.by_currency)
-          .map(([currency, amount]) => `${currency} ${amount}`)
-          .join(", ");
-        text +=
-          `    model ${entry.model}: ${entry.slices.count} ${entry.slices.unit};` +
-          ` ${tokensByModel}; cost ${costByModel === "" ? "unknown" : costByModel}.\n`;
-      }
-    }
-  }
-  return text;
-}
-
-/**
- * Render the per-client comparison as counts with their denominators.
- *
- * Deliberately not a percentage. A refusal share printed as "7% refused" reads as a measurement of
- * the provider's real behavior, which is exactly the claim SNACK never makes; "87 of 1180 eligible"
- * says the same thing while showing how much evidence is behind it.
- *
- * @param {ReturnType<typeof buildClientComparison>} comparison
- */
-function describeClientComparison(comparison) {
-  if (comparison.groups.length === 0) {
-    return `  by client: no attributed prompts (policy ${comparison.policy_version}).\n`;
-  }
-  const verdicts = {
-    higher_than_others: "higher than the others",
-    lower_than_others: "lower than the others",
-    not_detected: "difference not detected",
-    not_comparable: "not enough eligible prompts to compare",
-  };
-  let text = "";
-  for (const group of comparison.groups) {
-    // With nothing eligible the interval is the untouched prior, not a measurement of anything.
-    // Printing it beside "0 of 0" would dress a starting assumption up as an observation.
-    const interval =
-      group.eligible === 0
-        ? ""
-        : ` [${group.restriction_share.lower.toFixed(3)}-${group.restriction_share.upper.toFixed(3)}]`;
-    text +=
-      `  by client ${group.client ?? group.installation_id}:` +
-      ` restricted ${group.restricted} of ${group.eligible} eligible${interval},` +
-      ` ${verdicts[/** @type {keyof typeof verdicts} */ (group.difference)]}.\n`;
-  }
-  if (comparison.unattributed.prompts > 0) {
-    text += `    ${comparison.unattributed.prompts} prompt(s) could not be attributed to a client.\n`;
-  }
-  text += `    policy ${comparison.policy_version}`;
-  text += comparison.reason === null ? ".\n" : `, ${comparison.reason}.\n`;
-  return text;
 }
 
 /** @param {unknown[]} sources @param {string} installationId */

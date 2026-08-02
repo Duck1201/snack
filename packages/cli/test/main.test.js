@@ -1675,6 +1675,55 @@ test("setup rejects source rebinds and ambiguous provider mappings", async () =>
   );
 });
 
+test("status draws an overview without a selection and a panel with one", async () => {
+  // The two readings are different questions. Without a selection the reader is choosing which
+  // source to reach for, which is a comparison and wants one row each; with a selection they are
+  // reading one source, which wants the detail a row cannot hold. Driven through `run` rather than
+  // the renderer because what is under test is the choice, not the drawing.
+  const fixture = await makeRunFixture();
+  fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "opencode",
+      "--non-interactive",
+      "--source",
+      "personal-anthropic",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "personal",
+      "--plan",
+      "generic",
+      "--json",
+    ],
+    fixture.options,
+  );
+  fixture.stdout.value = "";
+
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  const overview = fixture.stdout.value;
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic"],
+    fixture.options,
+  );
+  const panel = fixture.stdout.value;
+
+  // The `SOURCE` column is fitted to the aliases, so the gap after the word is whatever this
+  // alias needs; what the assertion pins is the order of the headings, not their spacing.
+  assert.match(overview, /^ {2}SOURCE {2,}NEXT PROMPT/mu);
+  assert.match(overview, /^ {2}personal-anthropic\b/mu);
+  assert.doesNotMatch(overview, /^ {2}drivers/mu, "the overview is not a panel");
+
+  assert.match(panel, /^personal-anthropic$/mu);
+  assert.match(panel, /^ {2}drivers {6}/mu);
+  assert.doesNotMatch(panel, /NEXT PROMPT/u, "a selected source is not a one-row table");
+});
+
 test("status isolates a failed source and returns stale summaries", async () => {
   const fixture = await makeRunFixture();
   fixture.options.now = new Date("2026-01-02T03:05:00.000Z");
@@ -1822,23 +1871,35 @@ test("human status includes every required uncertainty field", async () => {
 
   await run(["node", "snack", "status", "--source", "personal-anthropic"], fixture.options);
 
-  // Every field specification 12.3 requires of the default human detail, now read down a panel
-  // rather than along one line. The assertion stays field by field: pinning the whole block would
-  // make an alignment change look like a lost contract.
+  // Every field specification 12.3 requires of the human detail, read down a panel rather than
+  // along one line. The assertion stays field by field: pinning the whole block would make an
+  // alignment change look like a lost contract.
   assert.match(fixture.stdout.value, /^personal-anthropic$/mu);
   // The interval's arithmetic belongs to the prediction seam; what the panel owes is that the
   // range and the risk word sit in their columns.
-  assert.match(fixture.stdout.value, / {2}viability {2}\d+-\d+% +risk high/u);
-  assert.match(fixture.stdout.value, /evidence very_low/u);
-  assert.match(fixture.stdout.value, / {2}pressure {3}unknown/u);
-  assert.match(fixture.stdout.value, /category typical/u);
-  assert.match(fixture.stdout.value, / {2}drivers {4}none ranked/u);
-  assert.match(fixture.stdout.value, / {2}method {5}bayesian-pressure-band@1/u);
+  assert.match(
+    fixture.stdout.value,
+    / {2}next prompt {2}\d+-\d+% chance it goes through · risk high/u,
+  );
+  assert.match(fixture.stdout.value, / {2}evidence {5}very_low/u);
+  assert.match(fixture.stdout.value, / {2}pressure {5}unknown/u);
+  assert.match(fixture.stdout.value, /typical prompt/u);
+  assert.match(fixture.stdout.value, / {2}drivers {6}nothing to compare against yet/u);
+  // The method identifies the estimate rather than stating it, so it left the panel with the rest
+  // of the machinery. The invariant that an estimate always names its method is met by the JSON
+  // document until `status --verbose` gives it a human home in 1.2.0.
   assert.match(fixture.stdout.value, /sync ok · period since 2026-01-02/u);
   assert.match(
     fixture.stdout.value,
     /! Sparse history; the weak plan-profile prior still dominates/u,
   );
+
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--source", "personal-anthropic", "--json"],
+    fixture.options,
+  );
+  assert.equal(JSON.parse(fixture.stdout.value).data.method.id, "bayesian-pressure-band");
 });
 
 test("colour follows what the output stream says it supports", async () => {
@@ -1902,14 +1963,19 @@ test("human status names the period it describes and what moved the pressure ban
   await setupAndSync(fixture);
 
   fixture.stdout.value = "";
-  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  // Naming the source is what asks for the detail. The overview answers "which source", and the
+  // period and the drivers are not part of that answer; they belong to the reading of one source.
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic"],
+    fixture.options,
+  );
   const human = fixture.stdout.value;
 
   fixture.stdout.value = "";
   await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
   const status = JSON.parse(fixture.stdout.value).data;
 
-  // Specification §12.3: the default human detail includes the active period and the top pressure
+  // Specification §12.3: the human detail includes the active period and the top pressure
   // contributors. A forecast whose scope and drivers are only in `--json` is two contracts.
   //
   // The panel carries the period's date rather than its full timestamp -- what a reader needs is
@@ -1923,7 +1989,7 @@ test("human status names the period it describes and what moved the pressure ban
   if (ranked.length > 0) {
     assert.match(human, new RegExp(`drivers[^\\n]*${ranked[0].dimension}`, "u"));
   } else {
-    assert.match(human, / {2}drivers {4}none ranked/u);
+    assert.match(human, / {2}drivers {6}nothing to compare against yet/u);
   }
 });
 
@@ -2054,8 +2120,10 @@ test("verbose stats report unknown dimensions without substituting zero", async 
   );
 
   assert.equal(exitCode, 0);
-  assert.match(fixture.stdout.value, /PT1H: 1 prompts \(1 eligible, 0 excluded\)/u);
-  assert.match(fixture.stdout.value, /input_tokens: 100 tokens \(sample 1, missing 0\)/u);
+  assert.match(fixture.stdout.value, /^ {2}1h +1 +1 +— +0 /mu, "prompt counts");
+  // Specification: every reported statistic carries its unit and its sample size, and is never a
+  // bare number whose meaning has to be inferred.
+  assert.match(fixture.stdout.value, /^ {2}1h +input_tokens +100 +tokens +1 +0$/mu);
 
   // A horizon with no observations reports unknown, never a fabricated zero.
   fixture.options.now = new Date("2026-01-10T00:00:00.000Z");
@@ -2065,9 +2133,9 @@ test("verbose stats report unknown dimensions without substituting zero", async 
     fixture.options,
   );
 
-  assert.match(fixture.stdout.value, /PT1H: 0 prompts/u);
-  assert.match(fixture.stdout.value, /input_tokens: unknown tokens \(sample 0, missing 0\)/u);
-  assert.doesNotMatch(fixture.stdout.value, /input_tokens: 0 /u);
+  assert.match(fixture.stdout.value, /^ {2}1h +0 +0 /mu);
+  assert.match(fixture.stdout.value, /^ {2}1h +input_tokens +unknown +tokens +0 +0$/mu);
+  assert.doesNotMatch(fixture.stdout.value, /^ {2}1h +input_tokens +0 /mu);
 });
 
 test("stats never emit prompt content", async () => {
@@ -2222,14 +2290,17 @@ test("concise stats report every field the specification requires", async () => 
 
   assert.equal(exitCode, 0);
   const output = fixture.stdout.value;
-  assert.match(output, /PT5H: 1 prompts \(1 eligible, 0 excluded\)/u, "prompt counts");
-  assert.match(output, /restrictions none/u, "restrictions by class");
-  assert.match(output, /input_tokens 100/u, "token dimensions stay separate");
-  assert.match(output, /output_tokens 25/u, "token dimensions stay separate");
-  assert.match(output, /cost unknown 0\.003/u, "observed cost with its currency");
-  assert.match(output, /duration p50 5000ms p90 5000ms/u, "duration percentiles");
+  const rows = output.split("\n");
+  const counts = rows[rows.findIndex((line) => /WINDOW +PROMPTS/u.test(line)) + 1] ?? "";
+  const tokens = rows[rows.findIndex((line) => /WINDOW +INPUT/u.test(line)) + 1] ?? "";
+
+  // The same fields the specification requires, read across a row instead of along a sentence.
+  assert.match(counts, /^ {2}5h +1 +1 +— +0 /u, "prompt counts and restrictions by class");
+  assert.match(counts, /0\.003 unknown/u, "observed cost with its currency, never converted");
+  assert.match(counts, /5\.0s +5\.0s$/u, "duration percentiles, in a unit a person reads");
+  assert.match(tokens, /^ {2}5h +100 +25 /u, "token dimensions stay separate and named");
   assert.match(output, /pressure \w+/u, "current pressure");
-  assert.match(output, /as_of 2026-01-02T03:04:10\.000Z/u, "freshness");
+  assert.match(output, /observed up to 2026-01-02T03:04:10\.000Z/u, "freshness");
 });
 
 test("prospective analysis sizes the next prompt from a file without retaining it", async () => {
@@ -2567,13 +2638,23 @@ test("human stats describe the same calibration the JSON document reports", asyn
   const { calibration } = JSON.parse(fixture.stdout.value).data;
   fixture.stdout.value = "";
   await run(["node", "snack", "stats", "--source", "personal-anthropic"], fixture.options);
+  const concise = fixture.stdout.value;
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "stats", "--source", "personal-anthropic", "--verbose"],
+    fixture.options,
+  );
   const human = fixture.stdout.value;
 
-  // Both renderings must state the same facts: how many snapshots exist, what the live
-  // score is with its sample size, and that backtesting is a separate stream.
-  assert.match(human, /calibration/iu);
-  assert.match(human, new RegExp(`${calibration.snapshots} snapshot`, "u"));
-  assert.match(human, new RegExp(`brier ${calibration.live.brier.value.toFixed(3)}`, "u"));
+  // The default reading says how much has been checked, which is what decides whether to trust the
+  // estimate; the score itself is a modeller's question and lives with the other statistics.
+  assert.match(concise, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.doesNotMatch(concise, /brier/iu);
+
+  // Under `--verbose` both renderings must state the same facts: how many snapshots exist, what the
+  // live score is with its sample size, and that backtesting is a separate stream.
+  assert.match(human, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.match(human, new RegExp(`brier ${calibration.live.brier.value}`, "u"));
   assert.match(human, new RegExp(`sample ${calibration.live.brier.sample_size}`, "u"));
   assert.match(human, /backtest/iu);
 });
@@ -2757,11 +2838,10 @@ test("verbose stats break usage down by model, as the flag promises", async () =
   );
 
   assert.equal(exitCode, 0);
-  // `--verbose` advertises per-model detail; before this it only repeated the dimensions.
-  assert.match(
-    fixture.stdout.value,
-    /model claude-sonnet: 1 usage slices; input_tokens 100, output_tokens 25/u,
-  );
+  // `--verbose` advertises per-model detail; before this it only repeated the dimensions. The
+  // window stays a column so the comparison the report is built around survives into the detail.
+  assert.match(fixture.stdout.value, /^ {2}5h +claude-sonnet +1 +100 +25\b/mu);
+  assert.match(fixture.stdout.value, /counted in usage slices/u);
 });
 
 test("verbose stats report per-model usage in the JSON contract too", async () => {
@@ -3179,8 +3259,18 @@ test("stats --by-client reports each client behind a shared source and what it c
   // printed as a percentage reads as a claim about the provider's real capacity.
   fixture.stdout.value = "";
   await run(["node", "snack", "stats", ...wide, "--by-client"], fixture.options);
-  assert.match(fixture.stdout.value, /by client (?:opencode|claude): restricted 0 of 1 eligible/u);
-  assert.doesNotMatch(fixture.stdout.value, /%/u);
+  const clientLines = fixture.stdout.value
+    .split("\n")
+    .filter((line) => /\b(?:opencode|claude)\b/u.test(line));
+
+  assert.ok(clientLines.length >= 2, `expected a line per client:\n${fixture.stdout.value}`);
+  for (const line of clientLines) {
+    assert.match(line, /0 of 1 counted/u);
+    // Scoped to the client lines: the report legitimately carries a `10%` in its `SLOWEST 10%`
+    // heading, while a refusal share printed as a percentage would read as a claim about the
+    // provider's real capacity.
+    assert.doesNotMatch(line, /%/u);
+  }
 });
 
 test("a prompt id one client reuses from another is reported instead of overwriting", async () => {
@@ -3374,6 +3464,21 @@ test("changing the plan label keeps the evidence the source already carries", as
   assert.equal(after.method.id, "initial-generic");
   assert.equal(after.evidence.level, "very_low");
   assert.notEqual(after.source.active_period.started_at, before.source.active_period.started_at);
+
+  // And says so on the surface a person reads. `docs/specification/analysis.md` puts this on the
+  // interface rather than on the document: "The UI explicitly labels the method as an initial
+  // heuristic; it must not relabel a weak prior as calibrated probability." The panel and the
+  // overview are both that interface, and this is the state a user reaches by changing their plan.
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic"],
+    fixture.options,
+  );
+  assert.match(fixture.stdout.value, / {2}method {7}initial heuristic — /u);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  assert.match(fixture.stdout.value, /! personal-anthropic has no history of its own yet/u);
 });
 
 test("setup says how much evidence a plan change retires", async () => {

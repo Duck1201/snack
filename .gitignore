@@ -27,3 +27,6 @@ graphify-out/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Reference images dropped in while designing. Not project assets.
+terminal-design.jpg
