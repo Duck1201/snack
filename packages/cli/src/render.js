@@ -617,12 +617,27 @@ function warnings(statuses, columns, paint) {
           (status) =>
             `  ${paint("!", "red")} sync ${status.synchronization.status} on ${status.source.alias}`,
         );
+  // A table of intervals invites reading every row as the same kind of number, and a row that is
+  // entirely the plan-profile prior is not a measurement of that source at all. `EVIDENCE very_low`
+  // does not say that on its own, and the specification requires the interface to label an initial
+  // heuristic rather than let it pass as a calibrated result. Named per source, because which row
+  // it applies to is the whole content.
+  const heuristic = statuses
+    .filter((status) => isInitialHeuristic(status))
+    .map(
+      (status) =>
+        `  ${paint("!", "yellow")} ${status.source.alias} has no history of its own yet; that estimate is the plan profile`,
+    );
   // Every source closes with the same standing caveats, so four of them printed twelve identical
   // lines under a five-line table. A warning repeated per row is a warning a reader learns to skip;
   // said once, it is still read. Order is first-seen rather than sorted, so the sentence a source
   // adds for itself stays under the standing ones instead of jumping above them.
   const caveats = [...new Set(statuses.flatMap((status) => status.caveats))];
-  return [...dropped, ...caveats.map((caveat) => `  ${paint("!", "gray")} ${caveat}`)];
+  return [
+    ...dropped,
+    ...heuristic,
+    ...caveats.map((caveat) => `  ${paint("!", "gray")} ${caveat}`),
+  ];
 }
 
 /**
@@ -801,6 +816,20 @@ function renderSource(status, paint) {
     row(paint, "drivers", [
       [describeContributors(status.pressure.contributors ?? []), undefined, 0],
     ]),
+    // Specification: the interface explicitly labels the method as an initial heuristic, and must
+    // not relabel a weak prior as a calibrated probability. Only that one method is named, and it
+    // is named rather than identified -- `initial-generic@1` is a key for something that parses,
+    // and this line exists for someone who has just configured a source and is looking at a number
+    // that describes no history of theirs at all. The learned method identifies an estimate rather
+    // than warning about it, and stays in the `--json` document.
+    ...(isInitialHeuristic(status)
+      ? [
+          row(paint, "method", [
+            ["initial heuristic", "yellow", 0],
+            [" — no history of your own is behind this yet", "dim", 0],
+          ]),
+        ]
+      : []),
     row(paint, "as of", [
       [
         [
@@ -836,6 +865,20 @@ const EVIDENCE_MEANS = {
   moderate: "some history, but few refusals seen yet",
   high: "enough of your own history to lean on",
 };
+
+/**
+ * Whether this estimate is the plan-profile prior and nothing else.
+ *
+ * `buildForecast` names the method `initial-generic` exactly when it backed off past every local
+ * cell to the prior alone, so the identifier is the condition rather than a proxy for it. Read from
+ * the method rather than from the evidence level: a `very_low` estimate can still be built from
+ * observations, and the two statements are not interchangeable.
+ *
+ * @param {SourceStatusView} status
+ */
+function isInitialHeuristic(status) {
+  return status.method.id === "initial-generic";
+}
 
 /**
  * Say where a percentile sits without using the word.

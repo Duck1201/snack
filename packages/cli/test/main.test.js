@@ -3464,6 +3464,21 @@ test("changing the plan label keeps the evidence the source already carries", as
   assert.equal(after.method.id, "initial-generic");
   assert.equal(after.evidence.level, "very_low");
   assert.notEqual(after.source.active_period.started_at, before.source.active_period.started_at);
+
+  // And says so on the surface a person reads. `docs/specification/analysis.md` puts this on the
+  // interface rather than on the document: "The UI explicitly labels the method as an initial
+  // heuristic; it must not relabel a weak prior as calibrated probability." The panel and the
+  // overview are both that interface, and this is the state a user reaches by changing their plan.
+  fixture.stdout.value = "";
+  await run(
+    ["node", "snack", "status", "--no-sync", "--source", "personal-anthropic"],
+    fixture.options,
+  );
+  assert.match(fixture.stdout.value, / {2}method {7}initial heuristic — /u);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  assert.match(fixture.stdout.value, /! personal-anthropic has no history of its own yet/u);
 });
 
 test("setup says how much evidence a plan change retires", async () => {

@@ -299,11 +299,19 @@ option, so it waits for `1.2.0`, where an additive option belongs.
   because a stale number invalidates every other number in the row. A dropped `SYNC` that would have
   read `failed` becomes a footer line: width may cost detail, never a warning.
 
-**Carried into `1.2.0`:** the method and the policy versions leave the panel in this release and are
-reachable only through `--json` until `status --verbose` ships. The invariant that an estimate always
-names its method is met throughout — by the JSON document — but it is met by one route rather than
-two, and that is the reason `--verbose` is the first item of the next release rather than a later
-one.
+- **an estimate built from no observation of its own says so.** Reviewing what the method line was
+  carrying found a requirement that is not about identifying an estimate at all:
+  [analysis](../specification/analysis.md) puts it on the interface — "the UI explicitly labels the
+  method as an initial heuristic; it must not relabel a weak prior as calibrated probability" — and
+  it lands on the first screen a new source ever shows, and on every source whose plan was just
+  changed. The panel names it and the overview warns per source, in words and with no identifier.
+  This was reachable and unsaid before this release as well as during it.
+
+**Carried into `1.2.0`:** the method identifier and the policy versions leave the panel in this
+release and are reachable only through `--json` until `status --verbose` ships. The requirement that
+an estimate always names its method is met throughout — by the JSON document — but it is met by one
+route rather than two, and that is the reason `--verbose` is the first item of the next release
+rather than a later one.
 
 **Exit:** `--json` bytes are unchanged from `1.1.2` for the same input; the flag surface is unchanged;
 the renderer is covered by tests that need no database, clock or terminal; an alias of double-width

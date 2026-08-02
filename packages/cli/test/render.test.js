@@ -82,6 +82,46 @@ test("a selected source is a panel written in words", () => {
   );
 });
 
+test("an estimate the prior alone produced is labelled as the heuristic it is", () => {
+  // `docs/specification/analysis.md`: "The UI explicitly labels the method as an initial heuristic;
+  // it must not relabel a weak prior as calibrated probability." That is a requirement on the human
+  // surface, not on the JSON document, and it applies to the first screen a new source ever shows:
+  // before any observation, `buildForecast` backs off to the prior and reports `initial-generic`.
+  //
+  // Labelled rather than identified: the specification asks the interface to say what the estimate
+  // is, and `initial-generic@1` is a key for something that parses, not a statement to a reader.
+  const initial = statusFor({
+    method: { id: "initial-generic", version: "1" },
+    evidence: { level: "very_low", policy_version: "1", gates: [] },
+  });
+
+  const heuristic = renderStatus([initial], { color: false });
+  const learned = renderStatus([statusFor()], { color: false });
+
+  assert.match(heuristic, / {2}method {7}initial heuristic — /u);
+  assert.doesNotMatch(heuristic, /initial-generic/u, "a reader is owed the label, not the key");
+  // The learned method identifies the estimate rather than warning about it, and stays in `--json`.
+  assert.doesNotMatch(learned, / {2}method/u);
+});
+
+test("the overview warns when a row is nothing but the prior", () => {
+  // The overview is a human surface too, and a table of intervals invites reading every row as the
+  // same kind of number. A row that is entirely the plan-profile prior is not a measurement of that
+  // source at all, and `EVIDENCE very_low` alone does not say so.
+  const initial = statusFor({
+    source: { alias: "fresh", active_period: { started_at: null } },
+    method: { id: "initial-generic", version: "1" },
+    evidence: { level: "very_low", policy_version: "1", gates: [] },
+  });
+
+  const text = renderStatusTable([statusFor(), initial], { color: false, columns: 80 });
+
+  assert.match(
+    text,
+    / {2}! fresh has no history of its own yet; that estimate is the plan profile\n/u,
+  );
+});
+
 test("the overview is one header and one row per source", () => {
   // Without a selection the question is which source to reach for, and that is a comparison across
   // sources rather than a reading of one. A row per source answers it in one glance; four panels

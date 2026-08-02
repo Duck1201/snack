@@ -17,6 +17,11 @@ subtotal. `2423712.9000000013ms` reads as `40m` and `5104351653` reads as `5.10G
 reports how many forecasts have been checked; the Brier scores, coverage, per-dimension sample
 sizes, per-model breakdown and policy versions moved under the `--verbose` `stats` already had.
 
+An estimate produced by the plan-profile prior alone — a source just configured, or one whose plan
+was just changed — is now labelled an initial heuristic in the panel and warned about per source
+beneath the overview. The specification puts that on the interface rather than on the JSON document,
+and no surface was saying it.
+
 Fixes an alignment defect that has been present since `1.1.0`: widths were counted in UTF-16 code
 units, so a capacity source whose alias is written in CJK or holds an emoji had every measurement in
 its row shifted left of its own heading.

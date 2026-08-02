@@ -76,11 +76,19 @@ that level supports, the pressure band with the reading behind it, the top press
 the expected prompt category, the active period, the data age, the synchronization status, and the
 uncertainty statement.
 
-The method and its version, the model policy version, the evidence gates, and the percentile each
-pressure contributor ranks at are **not** in the human output. They identify and qualify the
-estimate rather than state it, and the reader of a panel is a developer deciding whether to send a
-prompt. The requirement that an estimate always names its method is met by the `--json` document,
-which carries all of them.
+The method identifier and its version, the model policy version, the evidence gates, and the
+percentile each pressure contributor ranks at are **not** in the human output. They identify and
+qualify the estimate rather than state it, and the reader of a panel is a developer deciding whether
+to send a prompt. The requirement that an estimate always names its method is met by the `--json`
+document, which carries all of them.
+
+**One method is named on the human surface, and named rather than identified.** An estimate the
+plan-profile prior alone produced — the backoff that reports `initial-generic` — is labelled an
+initial heuristic in the panel and warned about per source beneath the overview. That is a separate
+requirement from naming the method: an interval built from no observation of this source is not a
+measurement of it, and an interface that let it pass beside a calibrated one would be relabelling a
+weak prior as a calibrated probability. The label carries no identifier and no version, because it
+exists to be read rather than parsed.
 
 `status` draws no chart. The window scores remain in `pressure.trend` in `--json`; the drawing of
 them belongs to a surface with room for a series worth drawing.

@@ -211,10 +211,15 @@ public since the freeze, which is exactly what lets a rewrite this large be a pa
 parsing the human output was never inside the contract, and the `--json` document it should have
 been reading is byte-identical to `1.1.2` for the same input.
 
-Two things leave the human output and stay in `--json`: the method with its version, and the
-percentile behind each pressure driver. They identify and qualify an estimate rather than state it.
-`status --verbose` will give them a human home in `1.2.0`; it is an additive option, and an additive
-option belongs in a minor, which is the whole reason it is not in this release.
+Two things leave the human output and stay in `--json`: the method identifier with its version, and
+the percentile behind each pressure driver. They identify and qualify an estimate rather than state
+it. `status --verbose` will give them a human home in `1.2.0`; it is an additive option, and an
+additive option belongs in a minor, which is the whole reason it is not in this release.
+
+The exception is the one method the specification requires the interface itself to label: an
+estimate produced by the plan-profile prior alone is called an initial heuristic, in the panel and
+beneath the overview. That is not the identifier moving back — it carries no `initial-generic@1` —
+but a statement the reader is owed, because such an interval measures nothing about that source.
 
 The defect: every alignment decision counted UTF-16 code units instead of screen columns, so a
 capacity source whose alias is written in CJK or holds an emoji had every measurement in its row
