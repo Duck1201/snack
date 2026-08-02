@@ -7,6 +7,8 @@ import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { isNotFound, isRecord } from "./guards.js";
+
 const recentlyClosed = new Set();
 
 /** @type {((value: unknown) => boolean) | null} */
@@ -290,14 +292,4 @@ function toObservation(event) {
         event.restrictions
       ).map((restriction) => ({ ...restriction, provenance: "spool" })),
   };
-}
-
-/** @param {unknown} value @returns {value is Record<string, unknown>} */
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** @param {unknown} error */
-function isNotFound(error) {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

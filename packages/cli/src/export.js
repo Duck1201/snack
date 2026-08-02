@@ -374,7 +374,7 @@ export function* exportJsonChunks(databaseFile, scope, context) {
  *
  * @param {unknown} value
  */
-export function toCsvField(value) {
+function toCsvField(value) {
   if (value === null || value === undefined) return "";
   const text = String(value);
   return /["\n\r,]/u.test(text) ? `"${text.replaceAll('"', '""')}"` : text;

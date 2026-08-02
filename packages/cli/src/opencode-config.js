@@ -6,6 +6,7 @@ import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser";
 
 import { SnackError, ExitCode } from "./errors.js";
 import { writePrivateAtomic } from "./config.js";
+import { isNotFound, isRecord } from "./guards.js";
 
 const packageName = "@snack-ai/opencode";
 
@@ -306,19 +307,9 @@ function isSnackPluginSpecifier(value) {
   );
 }
 
-/** @param {unknown} value @returns {value is Record<string, unknown>} */
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function configError() {
   return new SnackError("OpenCode configuration could not be read.", {
     code: ExitCode.config,
     reason: "opencode_config_read_error",
   });
-}
-
-/** @param {unknown} error */
-function isNotFound(error) {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

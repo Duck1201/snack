@@ -5,6 +5,7 @@ import { homedir as systemHomedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 
 import { ExitCode, SnackError } from "./errors.js";
+import { numberOrNull } from "./guards.js";
 
 /**
  * Fields every Claude Code turn record must carry for a turn tree to be reconstructable.
@@ -512,11 +513,6 @@ function readUsageSlice(record) {
     cost_decimal: null,
     currency: null,
   };
-}
-
-/** @param {unknown} value */
-function numberOrNull(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /**

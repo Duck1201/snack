@@ -3,6 +3,7 @@ import { homedir as systemHomedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import { ExitCode, SnackError } from "./errors.js";
+import { numberOrNull } from "./guards.js";
 
 const requiredTables = {
   session: [
@@ -551,11 +552,6 @@ function readAffectedSessionIds(database, boundary) {
  * @property {unknown} cache_read_tokens
  * @property {unknown} cache_write_tokens
  */
-
-/** @param {unknown} value */
-function numberOrNull(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
 
 /** @param {unknown} value */
 function stringOrNull(value) {
