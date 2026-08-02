@@ -351,6 +351,24 @@ function machineIsBusy() {
 }
 
 /**
+ * Why this file runs on its own, and why the guard above is not what protects it.
+ *
+ * `node --test` runs test files in parallel, one per core. Measured on twelve cores, this file's
+ * `status` budget read p95 195-207 ms alone and 208-249 ms with the other thirty-six files running
+ * beside it -- against a budget of 250. The worst run cleared it by one millisecond, which is not a
+ * measurement of the product but of the scheduler.
+ *
+ * `machineIsBusy()` did not catch any of that: `loadavg` is a one-minute exponentially damped
+ * average, and it has barely moved by the time a seventy-second suite reaches this file. It stays
+ * as a backstop for a developer machine that is genuinely busy with something else, which is the
+ * case it was written for and the case where it does move.
+ *
+ * The fix is in `package.json`: the suite runs every other file first, then this one alone. It
+ * costs about fifteen seconds and it is what makes PLAN.md's "otherwise idle developer machine"
+ * true of the machine the assertion actually runs on.
+ */
+
+/**
  * @template T
  * @param {() => T} work
  * @returns {{result: T, elapsedMs: number}}

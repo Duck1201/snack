@@ -32,7 +32,7 @@
     "tag": "latest"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test $(ls test/*.test.js | grep -v performance.test.js) && node --test test/performance.test.js"
   },
   "dependencies": {
     "ajv": "^8.20.0",

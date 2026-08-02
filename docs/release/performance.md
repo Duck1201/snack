@@ -10,7 +10,8 @@ guarantees. This file is where the measurement that satisfies that gate is recor
 
 `packages/cli/test/performance.test.js` measures every budget on every run and prints the figure
 through `t.diagnostic`. Three of the assertions return early when `CI` is set, and two more step
-aside when the load average is above half the core count.
+aside when the load average is above half the core count. The file also runs on its own rather than
+beside the rest of the suite, for the reason recorded under `1.2.0`.
 
 That is deliberate, and it is the honest arrangement rather than a convenient one. A shared
 two-vCPU hosted runner measured the incremental-synchronisation budget at 2.06 s against a 2 s
@@ -23,6 +24,52 @@ The measurement below is taken with the **spawned binary**, not with `run()` in-
 loads modules once and hides roughly 100 ms that the installed command pays every time: an
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
+
+## 1.2.0
+
+- Date: 2026-08-02
+- Commit: the `1.2.0` cut, after `status --verbose` and the generated `man snack`
+- Machine: Linux 6.12.63+deb13-amd64, 12 cores, load average 2.48 at the start of the run
+- Toolchain: Node `24.18.1`, npm `11.16.0`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+| Budget | PLAN.md | Measured | `1.1.1` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **194 ms** (p50 187 ms, min 181 ms) | 198 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **204 ms** (p50 195 ms, min 187 ms) | 198 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **448 ms** (categorize 44 ms + write 404 ms) | 446 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **14.8 s** | 15.1 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **14.2 s** | 13.5 s |
+| Steady-state memory | under 150 MB | **passes both readings** | passes both readings |
+
+Every assertion ran; none stepped aside.
+
+### A regression this release introduced, and the flake that turned out not to be one
+
+Validating spool events against the published schema — the change that took the plugin to `1.0.3` —
+loaded Ajv and compiled that schema **at module load**. `spool.js` is reachable from every command
+through `main.js`, so every command paid roughly 65 ms for a validator most of them never call, and
+`status` has a 250 ms budget in total. Measured against the tree before the change: p95 went from
+197-201 ms to 216-229 ms, and back to 192-198 ms once the validator was compiled on first use.
+
+`performance.test.js` was failing about one run in six while that was true. It was read as a flaky
+budget and it was not: it was this regression, sitting close enough to the ceiling to cross it only
+sometimes. The guard against that reading is now structural rather than timed — a test asserts Ajv
+is absent from the module cache after importing `spool.js`, which fails deterministically.
+
+### Why this file now runs on its own
+
+`node --test` runs test files in parallel, one per core, and this file's `status` measurement was
+competing with thirty-six others. Eight full-suite runs on twelve cores read p95 **208-249 ms**
+against the 250 ms budget — passing every time, the worst by one millisecond — while the same
+assertion alone read **195-207 ms**.
+
+`machineIsBusy()` caught none of those eight. `loadavg` is a one-minute exponentially damped
+average, so it has barely moved by the time a seventy-second suite reaches this file; the guard
+works for a developer machine busy with something else, which is what it was written for, and not
+for the suite it lives in. `packages/cli/package.json` therefore runs every other file first and
+this one alone. It costs about fifteen seconds, and it makes PLAN.md's "otherwise idle developer
+machine" true of the machine the assertion actually runs on.
 
 ## 1.1.1
 
