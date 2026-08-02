@@ -105,6 +105,64 @@ was scoped here and deferred to `1.1.1` once the rebuild was priced: `capacity_p
 observations table as a child, so dropping its redundant constraint copies the user's whole history
 out and back, and no pragma that would avoid it survives the migration runner's transaction.
 
+### 1.1.1 - the two findings 1.1.0 did not carry
+
+**Purpose:** close the last two open findings from the Phase 1 review. Both are P3 with a documented
+workaround, both were scoped into `1.1.0` and neither shipped there — one by choice, one after being
+priced. Compatible defect fixes, which is what a patch is for; nothing here adds a command or a flag.
+
+**[Finding 04](../../.scratch/end-to-end-review/issues/04-applied-setup-reports-under-a-dry-run-key.md) — an applied `setup` reports under a `dry_run` key.**
+`setup opencode --json` without `--dry-run` answers `"dry_run": { "observations": 183 }`. The key
+names the opposite of what happened, and `applied` disappears rather than becoming `true`, so a
+consumer cannot tell the two apart from the payload alone.
+
+The constraint is what makes this a patch rather than a rename: `dry_run` is a frozen public payload
+and renaming it needs a major. What lands in a minor or a patch is additive — always emit `applied`,
+`true` or `false`, so the payload is at least self-describing. The rename belongs in
+`docs/compatibility.md` as a candidate for whenever a major is cut, rather than staying an
+unrecorded wart. Test seam: `packages/cli/test/contracts.test.js`, asserting `applied` is present
+and `true` on an applied setup.
+
+**[Finding 12](../../.scratch/end-to-end-review/issues/12-two-setups-in-the-same-millisecond-are-an-internal-error.md) — two `setup` runs in the same millisecond raise `internal_error`.**
+`capacity_period` is `UNIQUE (source_alias, started_at)` and a rotation inserts the new period at the
+same instant it just wrote as the old one's `ended_at`, so the two collide whenever the clock does
+not move. It surfaces as exit `10`. A human cannot type two commands a millisecond apart; a script
+can, and so can any caller that retries.
+
+**This was investigated during `1.1.0` and deferred with the price measured, so the next session
+starts from the measurement rather than the estimate.** The issue file carries the detail; the short
+version is that the obvious fix is not small. Dropping the constraint means a table rebuild, and
+`capacity_period` has two children — `prompt_execution`, the observations table with four indexes,
+and `prediction_attempt`, which carries two immutability triggers. With `foreign_keys = ON` there is
+no way to drop the parent without dropping both, so every existing database copies its entire
+history out and back. `PRAGMA legacy_alter_table = ON` would have avoided touching the children and
+does not survive the migration runner's transaction, exactly as `foreign_keys` does not — probed,
+with the output recorded.
+
+So the choice is open and belongs to whoever picks this up:
+
+- **rebuild the table.** Its one real benefit is that dropping the constraint makes rotation
+  reachable under a frozen clock, which is what hid
+  [finding 05](../../.scratch/end-to-end-review/issues/05-second-setup-discards-the-forecast-evidence.md)
+  — every command test injects a frozen `now`, so no test could reach the rotation path without
+  knowing to advance it, and none did;
+- **classify the collision** as a config-level error with an actionable message instead of
+  `internal_error`. A few lines, fixes the reported symptom, leaves the testing trap in place.
+
+Price the rebuild against a real history before choosing. Use the `sqlite-constraint-migrations`
+skill either way.
+
+**Also available, and optional:** the network boundary gate `1.1.0` shipped proves the paths its
+tests exercise and not the paths they do not. The complement is a static walk of the import graph
+from `cli.js` that fails when any module outside `update.js` imports a networking builtin — it
+catches unexecuted code but not a dependency that opens a socket, so neither is complete alone. The
+note lives beside `denyNetwork()` in `packages/cli/test/fixtures/run-fixture.js`. Worth adding when
+a dependency, rather than this code, becomes the thing to doubt.
+
+**Exit:** each fix carries a test that fails against `1.1.0`; `setup --json` is self-describing
+without renaming a frozen field; and two `setup` runs in the same millisecond do not report an
+internal failure.
+
 ### 1.2.0 - `status --watch` and `man snack`
 
 - `snack status --watch[=SECONDS]`, default 30 s, floor 5 s, not a config key — an AI prompt takes minutes, so 30 s already outpaces the reality it observes;
