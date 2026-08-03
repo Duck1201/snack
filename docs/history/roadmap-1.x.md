@@ -418,6 +418,8 @@ tree. The budget test was right; the reading of it was wrong.
 - fingerprinted schema families, fail closed on drift, `snack setup codex`, and a support matrix page alongside the OpenCode and Claude ones;
 - the prediction method is deliberately unchanged in this release.
 
+**Cut this one starting from `npm run release:evidence`.** `1.2.0..main` changed `packages/cli/src/`, which is inside the CLI's `files` array, so `artifacts.md` records digests for a tarball this tree no longer packs and `release:check` already refuses. The evidence was deliberately left stale: it still describes the published `1.2.0`, which is what `identity.md` cites, and regenerating it before a version exists would have replaced a record of what npm serves with one for a tree nobody can install.
+
 **Exit:** privacy canaries pass against Codex fixtures; an unknown fingerprint refuses with actionable `doctor` output; a Codex source shares a capacity source with any other client on the same lineage without leaking client-specific fields.
 
 ### 1.4.0 - `status --sequence N`
