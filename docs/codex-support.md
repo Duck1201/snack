@@ -108,9 +108,10 @@ resumes after an interrupted turn — contributes its usage and restrictions to 
 `root_turn_id` names. A root that is nowhere in the history (its parent rollout absent, compressed
 or deleted) makes those turns a prompt of their own, keyed by that root.
 
-In `cx-rollout-tokencount-v1` each `task_started` is its own prompt. No field in that family links
-a parent turn to the inter-agent message that triggered it, so this family can split one
-submission into several prompts.
+In `cx-rollout-tokencount-v1` each `task_started` **in a user thread** is its own prompt. No field
+in that family links a parent turn to the inter-agent message that triggered it, so this family can
+split one submission into several prompts. A subagent turn of that family names no root and nothing
+says which prompt spawned it, so it opens no prompt: it is skipped, and `doctor` warns how many.
 
 A **forked subagent** begins with a verbatim copy of its parent's history. Records below
 `subagent_history_start_ordinal` are skipped, so a fork never re-counts its parent. In

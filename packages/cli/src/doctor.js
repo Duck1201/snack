@@ -501,8 +501,9 @@ const clientNames = {
 /**
  * What a Codex history holds that SNACK deliberately does not read, said where a user looks.
  *
- * Both are known undercounts rather than failures: a forked subagent from Codex 0.145-0.147 has no
- * recoverable replay boundary, and a compressed rollout is not read in 1.3.0. `sync` keeps working
+ * Each is a known undercount rather than a failure: a forked subagent from Codex 0.145-0.147 has no
+ * recoverable replay boundary, a subagent turn from that family names no prompt to join, and a
+ * compressed rollout is not read in 1.3.0. `sync` keeps working
  * either way, so each is a warning naming what is missing, never a refusal.
  *
  * @param {string} alias
@@ -513,6 +514,8 @@ function codexCoverageChecks(alias, adapter) {
   const health = adapter.health();
   const skippedForks = "skipped_fork_files" in health ? Number(health.skipped_fork_files) : 0;
   const compressed = "compressed_files" in health ? Number(health.compressed_files) : 0;
+  const subagentTurns =
+    "skipped_subagent_turns" in health ? Number(health.skipped_subagent_turns) : 0;
   /** @type {DoctorCheck[]} */
   const checks = [];
   if (skippedForks > 0) {
@@ -521,6 +524,15 @@ function codexCoverageChecks(alias, adapter) {
         `source_coverage:${alias}:codex:forked_subagents`,
         `${skippedForks} forked subagent rollout(s) from Codex 0.147 or earlier are not counted; ` +
           "their history does not say where the copied parent turns end.",
+      ),
+    );
+  }
+  if (subagentTurns > 0) {
+    checks.push(
+      warn(
+        `source_coverage:${alias}:codex:subagent_turns`,
+        `${subagentTurns} subagent turn(s) from Codex 0.147 or earlier are not counted; ` +
+          "their history does not say which prompt spawned them.",
       ),
     );
   }

@@ -118,6 +118,7 @@ test("a missing sessions directory is an unavailable source, named without a pat
     accessible: false,
     fingerprint: { family: null, families: [], supported: false },
     skipped_fork_files: 0,
+    skipped_subagent_turns: 0,
     compressed_files: 0,
   });
 });
@@ -244,6 +245,21 @@ test("a legacy forked subagent is skipped whole and counted", async () => {
   );
   assert.equal(reported.length, 3);
   assert.equal(adapter.health().skipped_fork_files, 1);
+});
+
+test("a token-count subagent's turns open no prompt of their own, and are counted", async () => {
+  const parentOnly = adapterFor(await codexHome("version-0-147-0.jsonl")).readAll().observations;
+  const adapter = adapterFor(await codexHome(["version-0-147-0.jsonl", "subagent-0-147-0.jsonl"]));
+
+  const { observations } = adapter.readAll();
+  // Only a user thread's task_started opens a prompt, and this family has no root to attach to.
+  assert.deepEqual(
+    observations.map((observation) => observation.source_prompt_id),
+    parentOnly.map((observation) => observation.source_prompt_id),
+  );
+  assert.deepEqual(observations, parentOnly);
+  assert.equal(adapter.health().skipped_subagent_turns, 1);
+  assert.equal(adapter.health().skipped_fork_files, 0);
 });
 
 test("Codex's usage_limit_exceeded is an observed restriction", async () => {

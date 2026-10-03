@@ -669,3 +669,13 @@ path deleted them without replacement (reproduced: 3 slices / 435 tokens became 
 - The legacy-fork rule (§3.1) applies to a forked subagent file with no usage-record turn.
 - Fixture `resumed-0-147-0-by-0-159-3.jsonl`; an end-to-end test syncs `version-0-147-0.jsonl`,
   appends the `0.159` turn, syncs again, and asserts every old prompt keeps its slices.
+
+### R2 — a token-count subagent turn opens no prompt (clarifies §3.2)
+
+§3.2 says only a user thread's `task_started` opens a prompt, but the build opened one for every
+`task_started` in the token-count family, subagent threads included. A subagent turn that carries no
+`root_turn_id` cannot be attached to the parent turn that spawned it (§3.2: no structural field
+links them in that family), so it is **skipped** — its token counts and completion with it — and
+counted in `health().skipped_subagent_turns`, which `doctor` reports as a
+`source_coverage:<alias>:codex:subagent_turns` warning, the same treatment as legacy forks (§3.1).
+Fixture `subagent-0-147-0.jsonl`.

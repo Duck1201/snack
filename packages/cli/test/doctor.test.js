@@ -402,6 +402,7 @@ test("doctor warns about Codex history it deliberately does not read", async () 
   const home = await createCodexHistory(fixture.root, [
     "version-0-147-0.jsonl",
     "fork-0-146-0.jsonl",
+    "subagent-0-147-0.jsonl",
   ]);
   fixture.options.env.CODEX_HOME = home;
   await mkdir(join(home, "archived_sessions"), { recursive: true });
@@ -417,4 +418,7 @@ test("doctor warns about Codex history it deliberately does not read", async () 
   assert.match(String(forks?.message), /^1 forked subagent/u);
   assert.equal(compressed?.status, "warn");
   assert.match(String(compressed?.message), /^1 compressed Codex rollout/u);
+  const turns = checks.find((check) => check.id === "source_coverage:codex:codex:subagent_turns");
+  assert.equal(turns?.status, "warn");
+  assert.match(String(turns?.message), /^1 subagent turn/u);
 });

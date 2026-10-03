@@ -225,6 +225,7 @@ export function createCodexAdapter(options) {
             supported: fingerprint.supported,
           },
           skipped_fork_files: scanned.skippedForkFiles,
+          skipped_subagent_turns: scanned.skippedSubagentTurns,
           compressed_files: scanned.compressedFiles,
         };
       } catch (error) {
@@ -234,6 +235,7 @@ export function createCodexAdapter(options) {
           accessible: drifted,
           fingerprint: { family: null, families: [], supported: false },
           skipped_fork_files: 0,
+          skipped_subagent_turns: 0,
           compressed_files: 0,
         };
       }
@@ -257,6 +259,7 @@ function scan(home) {
   return {
     parsed,
     skippedForkFiles: parsed.filter((file) => file.skippedFork).length,
+    skippedSubagentTurns: parsed.reduce((sum, file) => sum + file.skippedSubagentTurns, 0),
     compressedFiles: listing.compressed,
   };
 }
@@ -400,6 +403,7 @@ function familyRoots(entries) {
  * @property {string[]} families every family a turn of this file belongs to
  * @property {Set<string>} usageTurns turns whose usage Codex recorded per response
  * @property {boolean} skippedFork
+ * @property {number} skippedSubagentTurns subagent turns that name no root, so belong to no prompt
  * @property {Projected[]} records records at or past the fork-replay boundary, in file order
  */
 /**
@@ -507,6 +511,9 @@ function parseFile(home, file, rejected) {
   // re-counts the parent. Undercounting a superseded family's subagents is the bounded error.
   const skippedFork = family === TOKENCOUNT && subagent && meta.forked;
   const start = meta.history_start ?? 0;
+  // A forked subagent begins with a verbatim copy of its parent's history. Counting it would
+  // charge every forked agent with its parent's usage again.
+  const kept = records.filter((record) => record.ordinal >= start);
   return {
     key,
     mtimeMs,
@@ -518,10 +525,27 @@ function parseFile(home, file, rejected) {
     families: [...families].sort(),
     usageTurns,
     skippedFork,
-    // A forked subagent begins with a verbatim copy of its parent's history. Counting it would
-    // charge every forked agent with its parent's usage again.
-    records: records.filter((record) => record.ordinal >= start),
+    skippedSubagentTurns:
+      subagent && !skippedFork
+        ? kept.filter((record) => opensNoPrompt(record, subagent)).length
+        : 0,
+    records: kept,
   };
+}
+
+/**
+ * Whether a turn is a subagent's that names no root turn.
+ *
+ * Only a user thread's `task_started` opens a prompt. A subagent turn joins the prompt its
+ * `root_turn_id` names; in the token-count family there is no such field, and nothing else in the
+ * rollout says which of the parent's turns spawned the agent, so the turn belongs to no prompt.
+ * Opening one would count every subagent turn as a submission the user never made.
+ *
+ * @param {Projected} record
+ * @param {boolean} subagent
+ */
+function opensNoPrompt(record, subagent) {
+  return subagent && record.kind === "task_started" && record.root_turn_id === null;
 }
 
 /**
@@ -870,6 +894,11 @@ function assemblePrompts(unordered) {
           if (record.model !== null) latestModel = record.model;
           break;
         case "task_started": {
+          if (opensNoPrompt(record, file.subagent)) {
+            // Its token counts and completion then have no turn to land on either.
+            current = null;
+            break;
+          }
           const root = record.root_turn_id ?? record.turn_id;
           current = {
             turn_id: record.turn_id,
