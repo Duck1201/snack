@@ -19,12 +19,12 @@ Human warnings go to stderr. Primary human output goes to stdout. JSON mode writ
 ### 12.2 `snack setup`
 
 ```text
-snack setup <opencode|claude> [--dry-run] [--non-interactive] [--json]
-                              [--source <alias>] [--provider <id>]
-                              [--profile <name>] [--plan <label>]
-                              [--plan-profile <name>]
-                              [--enable-prospective-analysis]
-snack setup opencode          [--install-plugin] [--yes]
+snack setup <opencode|claude|codex> [--dry-run] [--non-interactive] [--json]
+                                    [--source <alias>] [--provider <id>]
+                                    [--profile <name>] [--plan <label>]
+                                    [--plan-profile <name>]
+                                    [--enable-prospective-analysis]
+snack setup opencode                [--install-plugin] [--yes]
 ```
 
 Responsibilities:
@@ -38,7 +38,9 @@ Responsibilities:
 - initialize/migrate SNACK storage;
 - test source/spool permissions and report next steps.
 
-The MVP accepts `opencode`; `claude` is accepted from 0.7. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
+The MVP accepts `opencode`; `claude` is accepted from 0.7, and `codex` from 1.3. Claude Code and Codex CLI are read from the histories they already write, so neither registers anything in the client and neither is offered a plugin. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
+
+`setup codex` reads Codex CLI's home: `$CODEX_HOME` when it is set and not empty — a relative value is resolved against the working directory, as Codex resolves it, and the resolved path is what setup records — otherwise `~/.codex`. It reads `sessions/**/rollout-*.jsonl` and `archived_sessions/rollout-*.jsonl` and never lists the home itself; `history.jsonl`, Codex's raw prompt history, is never opened. A home with no sessions directory exits `4` with `source_unavailable`, and a history with no rollout to recognize a family from is refused as unsupported, because setup has no family to record. The supported families and the field allowlist are in [codex-support.md](../codex-support.md).
 
 Setup is guided by default and asks only for what it cannot observe. The source database, its schema fingerprint, the providers present in it, any already-configured sources, and the current plugin registration are all discovered. An unsupported fingerprint fails closed before the first question, so nobody is walked through a questionnaire that cannot lead anywhere. The local account or profile alias is deliberately asked rather than discovered: OpenCode does not expose account identity, and SNACK never reads credentials.
 
@@ -121,6 +123,24 @@ measurement of it, and an interface that let it pass beside a calibrated one wou
 weak prior as a calibrated probability. The label carries no identifier and no version, because it
 exists to be read rather than parsed.
 
+**A figure a client states about itself is quoted on its own row, beside the estimate.** From 1.3, a
+capacity source fed by Codex CLI carries a `reported` row in the panel, after the estimate's rows and
+before `as of`: "Codex states 34% of its 5h window, resets in 2h 30m · 19% of its 7d window, resets
+Fri UTC · 3m ago". The verb is the client's, and the unit is a stated window identified by its
+length, never by the slot Codex wrote it in. A reset within a day is said as a duration; a later one
+as a weekday, and every absolute time on the row says `UTC`, because a bare clock reads as local. A
+window whose reset has passed is not repeated — "Codex's 5h window reset 14:30 UTC; no figure stated
+since". When more than one limit is stated, each is named by its `limit_id` in parentheses; when
+Codex feeds the source and has stated nothing yet, the row says "no figure stated by Codex yet". The
+overview carries no `reported` column. The row is never part of the `next prompt` interval or the
+`pressure` band, and nothing in the forecast reads it
+([ADR-0007](../adr/0007-quote-codex-reported-capacity.md)). In `--json` the same figures are the
+optional `reported_capacity` array on that source's report — one entry per Codex installation and
+limit, its latest statement, each window carrying `reset_passed` — absent for a source no Codex
+installation feeds. A figure is attributed to a source only when the stating thread's provider maps
+to that one source; while the provider maps to more than one source of the installation, it waits
+with that thread's prompts.
+
 `status` draws no chart. The window scores remain in `pressure.trend` in `--json`; the drawing of
 them belongs to a surface with room for a series worth drawing.
 
@@ -180,6 +200,8 @@ Incremental mode imports spool records and source changes after stored cursors. 
 
 Results are reported per source/path, including read, inserted, updated, unchanged, excluded, pending-mapping, rejected-invalid, and failed counts.
 
+A source that fails is counted as `failed` and warned about as `source_sync_failed`, naming the source and the ingestion path (`backfill` or `spool`) and ending "run `snack doctor` for the cause". The warning names no cause and no filesystem path; `doctor` reports the cause, for instance a Codex history that cannot be read. Figures Codex states are stored in the same transaction as the prompts and the cursor; `sync` does not report them in 1.3.
+
 ### 12.6 `snack doctor`
 
 ```text
@@ -192,7 +214,8 @@ Checks:
 - configuration/schema validity;
 - private directory/file permissions;
 - SNACK database integrity and migration state;
-- OpenCode database and Claude JSONL locations, accessibility, schema fingerprints, and versions when configured;
+- OpenCode database, Claude JSONL and Codex CLI rollout locations, accessibility, schema fingerprints, and versions when configured. A Codex source passes while every family present is one SNACK reads, whether or not the family setup recorded is still present, and a Codex history with no rollout yet is a warning rather than a failure;
+- what a Codex history holds that SNACK deliberately does not count, each a `source_coverage:<alias>:codex:<what>` warning: `forked_subagents` (forked subagent rollouts from Codex 0.147 or earlier), `subagent_turns` (subagent turns from that family that name no prompt), `stated_figures` (stated figures that could not be quoted), `compressed_rollouts` (`rollout-*.jsonl.zst`, not read in 1.3);
 - OpenCode plugin or Claude hook registration/version/compatibility;
 - spool writability, rotation, cursor, malformed/rejected counts, and pending schema-valid mappings;
 - source mappings and active periods;
@@ -222,6 +245,8 @@ An export carries two levels of provenance. Row-level versions come from the row
 
 No export contains credentials or text content. Opaque identifiers remain opaque.
 
+Figures Codex CLI states about its own windows are not exported in 1.3. A new table in the export document would fail every consumer's version-2 validator, which is a breaking change and therefore a major; Codex prompts, usage slices and restrictions flow through the existing tables, and `source_bindings.adapter` can hold `codex`.
+
 ### 12.8 `snack data purge`
 
 ```text
@@ -230,6 +255,8 @@ snack data purge (--source <alias> | --all)
                  [--include-config] [--prevent-reimport]
                  [--dry-run] [--yes] [--json]
 ```
+
+Purge also deletes the figures Codex CLI stated within the selected scope — its sources and its window — and counts them as `counts.reported_capacity_observations` (from 1.3, optional). A tombstone blocks re-ingesting those figures as it blocks the prompts.
 
 `--prevent-reimport` records a local tombstone/cursor policy for the selected source range; without it, a later full synchronization may restore records still present in the source. The tombstone is enforced during ingestion rather than through the ingestion cursor, so it survives `--full`, which ignores cursors by definition.
 

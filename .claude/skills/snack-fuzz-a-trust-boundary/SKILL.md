@@ -2,18 +2,18 @@
 name: snack-fuzz-a-trust-boundary
 description: >
   Write a property test that actually finds defects at one of SNACK's trust boundaries — a client
-  adapter (Claude JSONL, OpenCode message/part blobs), the spool NDJSON reader, or argv. Use when
-  asked to fuzz, property-test, or harden ingestion or the CLI surface, and before trusting a green
-  fixture suite as evidence that a parser fails closed.
+  adapter (Claude JSONL, OpenCode message/part blobs, Codex rollouts), the spool NDJSON reader, or
+  argv. Use when asked to fuzz, property-test, or harden ingestion or the CLI surface, and before
+  trusting a green fixture suite as evidence that a parser fails closed.
 license: MIT
 metadata:
   author: Duck
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Fuzz a SNACK trust boundary
 
-SNACK's fail-closed-on-data invariant lives at four seams: two client adapters, the spool reader,
+SNACK's fail-closed-on-data invariant lives at five seams: three client adapters, the spool reader,
 and argv. Each one is a place where input SNACK does not control becomes an observation, a stored
 row, or a published document. This is how to write a property test there that finds something.
 
@@ -29,7 +29,7 @@ seen — a Claude `timestamp` that was not a time reaching `prompt_execution.sta
 a rejected argv token published in the error envelope's `command` field. `npm run check` was green
 before and after each.
 
-When a **new client adapter** is what changed, read "Compare the two adapters" below before writing
+When a **new client adapter** is what changed, read "Compare the adapters" below before writing
 anything — the highest-value finding of this kind was a difference between two readers, not a bug
 inside one.
 
@@ -82,6 +82,7 @@ Every one of these tests asserts the same sentence, and it is worth writing at t
 | -------------- | ---------------------------------------------------------------- |
 | Claude JSONL   | `createClaudeAdapter({projectsDirectory}).readAll()`             |
 | OpenCode blobs | `createSourceAdapter({adapter: "opencode", database}).readAll()` |
+| Codex rollouts | `createCodexAdapter({sessionsDirectory}).readAll()`              |
 | Spool NDJSON   | `readSpoolEvents({spoolDirectory, installationId, cursors})`     |
 | argv           | `run(argv, options)` through `makeRunFixture()`                  |
 
@@ -121,7 +122,7 @@ event's `source_code` is a provider error code and is stored on purpose; a canar
 test for a reason that is not a leak. Testing a policy where it does not apply is how a privacy test
 starts getting edited until it passes.
 
-## Compare the two adapters
+## Compare the adapters
 
 The most valuable finding of this kind was not a bug in one reader but a difference between two.
 
@@ -130,7 +131,12 @@ The OpenCode adapter passes this fuzz cleanly because its fingerprint queries as
 never reaches the read. The Claude adapter had no equivalent check, which is why it — and only it —
 stored a timestamp that was not a time.
 
-**When two adapters exist, run the same property against both and explain any difference.** A
+The Codex adapter goes further: it holds every record it reads to its shape on every read, not on a
+sample, and reads only through `CODEX_FIELD_ALLOWLIST`. When a new client family lands, the semantic
+traps that fuzzing cannot generate — a slot that changed meaning, a resumed file holding two
+families, a fork replay — belong to `snack-support-a-client-schema-family`.
+
+**When several adapters exist, run the same property against each and explain any difference.** A
 boundary that passes for a reason you cannot name has not been tested; it has been visited.
 
 ## Gotchas
@@ -161,8 +167,9 @@ boundary that passes for a reason you cannot name has not been tested; it has be
 
 ## Reference
 
-`packages/cli/test/{claude-adapter,opencode-adapter,spool,main}.property.test.js` are the four
-worked examples. `spool.property.test.js` additionally shows the arbiter pattern: when two
-hand-written validators disagree about the same contract, compile the **published schema** with the
-product's own Ajv configuration (`{allErrors: true, strict: true}`) and make it the referee. That is
-what caught the spool schema failing to compile at all.
+`packages/cli/test/{claude-adapter,opencode-adapter,codex-adapter,spool,main}.property.test.js` are
+the five worked examples; `codex-adapter.property.test.js` (5) is a fork-replay invariant.
+`spool.property.test.js` additionally shows the arbiter pattern: when two hand-written validators
+disagree about the same contract, compile the **published schema** with the product's own Ajv
+configuration (`{allErrors: true, strict: true}`) and make it the referee. That is what caught the
+spool schema failing to compile at all.

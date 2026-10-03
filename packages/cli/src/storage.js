@@ -68,6 +68,40 @@ const OUTCOME_POLICY_VERSION = "opencode-outcome-v1";
  */
 
 /**
+ * One window a client stated about itself: how much of it the client says is used.
+ *
+ * @typedef {object} ReportedCapacityWindow
+ * @property {number} window_minutes   positive integer
+ * @property {number} used_percent     0..100 inclusive
+ * @property {string | null} resets_at ISO-8601 UTC, from epoch seconds
+ */
+
+/**
+ * Everything a client stated at one instant, as its adapter projected it. Quoted, never inferred:
+ * nothing that computes an estimate reads these.
+ *
+ * @typedef {object} ReportedCapacitySnapshot
+ * @property {string} observation_key  64 hex chars; stable across re-reads and file moves
+ * @property {string} observed_at      ISO-8601 UTC (the token count's timestamp)
+ * @property {string | null} limit_id
+ * @property {string | null} plan_type
+ * @property {ReportedCapacityWindow[]} windows  1..2 entries, distinct window_minutes
+ * @property {string} parser_version   "codex-rate-limits-v1"
+ * @property {string} provider         the provider of the thread that stated it; routes the
+ *   snapshot to a capacity source exactly as an observation's provider routes the observation
+ */
+
+/**
+ * @typedef {object} ReportedCapacityCounts
+ * @property {number} inserted   snapshots that stored at least one new window
+ * @property {number} unchanged  snapshots already stored in full
+ * @property {number} rejected   snapshots refused as malformed; nothing of them is stored
+ * @property {number} tombstoned snapshots a `--prevent-reimport` purge covers
+ * @property {number} pending_mapping snapshots stated for a provider this source is not, or one
+ *   that maps to more than one source of this installation; they belong to no source here
+ */
+
+/**
  * @typedef {object} Migration
  * @property {number} number
  * @property {string} name
@@ -387,9 +421,12 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
 /**
  * @param {string} databaseFile
  * @param {ConfiguredSource} source
- * @param {{observations: Observation[], cursor: unknown}} batch An adapter's cursor is opaque
- *   here: storage records where a reader stopped and hands it back, and only the adapter that
- *   wrote it knows what it means.
+ * @param {{observations: Observation[], rejected?: unknown, cursor: unknown, reported_capacity?: ReportedCapacitySnapshot[]}} batch
+ *   An adapter's cursor is opaque here: storage records where a reader stopped and hands it back,
+ *   and only the adapter that wrote it knows what it means. `reported_capacity` is what the client
+ *   stated about its own windows; it is written in the same transaction as the observations and the
+ *   cursor, and its counts are returned only when the batch carried it, so a batch from a client
+ *   that states nothing reports exactly the counts it always has.
  * @param {Date} now
  * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null}} [options]
  */
@@ -977,6 +1014,19 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           counts.excluded += 1;
       }
 
+      /** @type {{reported_capacity?: ReportedCapacityCounts}} */
+      const reportedCounts = {};
+      if (Array.isArray(batch.reported_capacity)) {
+        reportedCounts.reported_capacity = storeReportedCapacity(
+          database,
+          source,
+          batch.reported_capacity,
+          tombstones,
+          timestamp,
+          options.providerMappingCounts,
+        );
+      }
+
       // Records the backfill adapter could not parse are ingestion issues of the backfill path,
       // the same way an invalid spool event is one of the spool path. Counting them is what keeps
       // a quietly incomplete history from looking like a complete one.
@@ -1043,9 +1093,261 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             timestamp,
           );
       }
-      return counts;
+      return { ...counts, ...reportedCounts };
     });
     return store.immediate();
+  } finally {
+    database.close();
+  }
+}
+
+const REPORTED_KEY_PATTERN = /^[0-9a-f]{64}$/u;
+// Millisecond precision optional, always UTC: the shape `Date#toISOString` writes and the only one
+// that orders correctly as text, which is how the purge window and the tombstones compare it.
+const REPORTED_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+// A client's name for its limit or plan, or a parser version: a short identifier and nothing that
+// could carry a sentence. Codex states `codex`, `premium`, `free`, `plus`.
+const REPORTED_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+
+/**
+ * Write what a client stated about its own windows, inside the caller's transaction.
+ *
+ * A malformed snapshot is refused whole and counted, never thrown: one bad statement from a client
+ * must not cost the prompts in the same batch, and half a statement -- one window of two -- is not
+ * what the client said. A snapshot a `--prevent-reimport` purge covers is counted and skipped, the
+ * same rule prompts follow, so a full re-read cannot restore what was deliberately removed.
+ *
+ * @param {Database.Database} database
+ * @param {ConfiguredSource} source
+ * @param {unknown[]} snapshots
+ * One installation can feed several capacity sources, told apart by provider. A snapshot is the
+ * statement of one thread, so it belongs to the source whose provider that thread used, under the
+ * same rule that routes the thread's prompts: a provider this source is not, or one that maps to
+ * more than one source of the installation, attributes nothing here. Without it the first source
+ * to store a snapshot would own it, whichever provider it was.
+ *
+ * @param {{from_at: string | null, until_at: string | null}[]} tombstones
+ * @param {string} timestamp
+ * @param {Map<string, number>} [providerMappingCounts]
+ * @returns {ReportedCapacityCounts}
+ */
+function storeReportedCapacity(
+  database,
+  source,
+  snapshots,
+  tombstones,
+  timestamp,
+  providerMappingCounts,
+) {
+  const counts = { inserted: 0, unchanged: 0, rejected: 0, tombstoned: 0, pending_mapping: 0 };
+  const insert = database.prepare(
+    `INSERT INTO reported_capacity_observation
+       (source_alias, installation_id, observation_key, observed_at, limit_id, plan_type,
+        window_minutes, used_percent, resets_at, parser_version, first_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(installation_id, observation_key, window_minutes) DO NOTHING`,
+  );
+  // Kept in step with the rows, in the same transaction, so the latest statement per group is one
+  // lookup for `status` rather than a ranking of the whole history. An older statement arriving
+  // late -- a rollout read for the first time after newer ones -- does not displace a newer one.
+  const advanceLatest = database.prepare(
+    `INSERT INTO reported_capacity_latest
+       (source_alias, installation_id, limit_key, observation_key, observed_at, row_id)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (source_alias, installation_id, limit_key) DO UPDATE
+        SET observation_key = excluded.observation_key,
+            observed_at = excluded.observed_at,
+            row_id = excluded.row_id
+      WHERE excluded.observed_at > reported_capacity_latest.observed_at
+         OR (excluded.observed_at = reported_capacity_latest.observed_at
+             AND excluded.row_id > reported_capacity_latest.row_id)`,
+  );
+  for (const snapshot of snapshots) {
+    if (!isValidReportedSnapshot(snapshot)) {
+      counts.rejected += 1;
+      continue;
+    }
+    const mappedCount =
+      providerMappingCounts?.get(snapshot.provider) ??
+      Number(snapshot.provider === source.provider);
+    if (snapshot.provider !== source.provider || mappedCount > 1) {
+      counts.pending_mapping += 1;
+      continue;
+    }
+    if (tombstones.length > 0 && isTombstoned(tombstones, snapshot.observed_at)) {
+      counts.tombstoned += 1;
+      continue;
+    }
+    let stored = 0;
+    let newestRow = 0;
+    for (const window of snapshot.windows) {
+      const result = insert.run(
+        source.alias,
+        source.installation_id,
+        snapshot.observation_key,
+        snapshot.observed_at,
+        snapshot.limit_id,
+        snapshot.plan_type,
+        window.window_minutes,
+        window.used_percent,
+        window.resets_at,
+        snapshot.parser_version,
+        timestamp,
+      );
+      if (result.changes > 0) {
+        stored += result.changes;
+        newestRow = Math.max(newestRow, Number(result.lastInsertRowid));
+      }
+    }
+    if (stored > 0) {
+      advanceLatest.run(
+        source.alias,
+        source.installation_id,
+        snapshot.limit_id ?? "",
+        snapshot.observation_key,
+        snapshot.observed_at,
+        newestRow,
+      );
+      counts.inserted += 1;
+    } else counts.unchanged += 1;
+  }
+  return counts;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is ReportedCapacitySnapshot}
+ */
+function isValidReportedSnapshot(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const snapshot = /** @type {Record<string, unknown>} */ (value);
+  if (typeof snapshot.observation_key !== "string") return false;
+  if (!REPORTED_KEY_PATTERN.test(snapshot.observation_key)) return false;
+  if (!isReportedInstant(snapshot.observed_at)) return false;
+  for (const field of ["limit_id", "plan_type"]) {
+    const identifier = snapshot[field];
+    if (identifier === null) continue;
+    if (typeof identifier !== "string" || !REPORTED_IDENTIFIER_PATTERN.test(identifier)) {
+      return false;
+    }
+  }
+  if (typeof snapshot.parser_version !== "string") return false;
+  if (!REPORTED_IDENTIFIER_PATTERN.test(snapshot.parser_version)) return false;
+  if (typeof snapshot.provider !== "string" || snapshot.provider === "") return false;
+  const windows = snapshot.windows;
+  if (!Array.isArray(windows) || windows.length < 1 || windows.length > 2) return false;
+  const lengths = new Set();
+  for (const entry of windows) {
+    if (typeof entry !== "object" || entry === null) return false;
+    const window = /** @type {Record<string, unknown>} */ (entry);
+    if (!Number.isSafeInteger(window.window_minutes) || Number(window.window_minutes) <= 0) {
+      return false;
+    }
+    if (
+      typeof window.used_percent !== "number" ||
+      !Number.isFinite(window.used_percent) ||
+      window.used_percent < 0 ||
+      window.used_percent > 100
+    ) {
+      return false;
+    }
+    if (window.resets_at !== null && !isReportedInstant(window.resets_at)) return false;
+    lengths.add(window.window_minutes);
+  }
+  return lengths.size === windows.length;
+}
+
+/** @param {unknown} value */
+function isReportedInstant(value) {
+  return (
+    typeof value === "string" &&
+    REPORTED_INSTANT_PATTERN.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+/**
+ * @typedef {object} ReportedCapacityRow
+ * @property {string} installation_id
+ * @property {string | null} limit_id
+ * @property {string | null} plan_type
+ * @property {string} observed_at
+ * @property {number} window_minutes
+ * @property {number} used_percent
+ * @property {string | null} resets_at
+ * @property {string} parser_version
+ */
+
+/**
+ * The statement `readReportedCapacity` prepares.
+ *
+ * One row per group in `reported_capacity_latest`, then that statement's windows by the unique key:
+ * the cost is the number of (installation, limit) groups, not the length of the history. A
+ * statement that named no limit is its own group (`limit_key` ''). CROSS JOIN fixes that order:
+ * without table statistics the planner would otherwise drive the join from the history by its
+ * source index and probe the pointers, which is the O(history) read this table exists to avoid.
+ *
+ * Exported so a test can ask SQLite how it plans the very statement this module prepares; a
+ * timing budget would catch a regression to O(history) only on a large enough, quiet enough run.
+ */
+export const readReportedCapacitySql = `SELECT reported.installation_id, reported.limit_id, reported.plan_type,
+          reported.observed_at, reported.window_minutes, reported.used_percent,
+          reported.resets_at, reported.parser_version
+     FROM reported_capacity_latest AS latest
+     CROSS JOIN reported_capacity_observation AS reported
+       ON reported.installation_id = latest.installation_id
+      AND reported.observation_key = latest.observation_key
+      AND reported.source_alias = latest.source_alias
+     JOIN client_installation
+       ON client_installation.id = reported.installation_id
+      AND client_installation.client_kind = 'codex'
+    WHERE latest.source_alias = @source
+    ORDER BY reported.installation_id, reported.limit_id, reported.window_minutes`;
+
+/**
+ * The latest figure each client stated for a capacity source: one entry per installation and limit,
+ * holding every window of that one snapshot.
+ *
+ * Read for display beside the estimate and never by anything that computes one. Two limits are two
+ * figures and are never combined; a snapshot is never merged with an earlier one, because a window
+ * absent from the latest statement is one the client stopped stating, not one it still holds.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {Array<{installation_id: string, client_kind: "codex", limit_id: string | null,
+ *   plan_type: string | null, observed_at: string, windows: ReportedCapacityWindow[],
+ *   parser_version: string}>} one per (installation_id, limit_id): its latest snapshot
+ */
+export function readReportedCapacity(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = /** @type {ReportedCapacityRow[]} */ (
+      database.prepare(readReportedCapacitySql).all({ source: sourceAlias })
+    );
+    /** @type {Map<string, ReturnType<typeof readReportedCapacity>[number]>} */
+    const entries = new Map();
+    for (const row of rows) {
+      const key = JSON.stringify([row.installation_id, row.limit_id]);
+      let entry = entries.get(key);
+      if (entry === undefined) {
+        entry = {
+          installation_id: row.installation_id,
+          client_kind: "codex",
+          limit_id: row.limit_id,
+          plan_type: row.plan_type,
+          observed_at: row.observed_at,
+          windows: [],
+          parser_version: row.parser_version,
+        };
+        entries.set(key, entry);
+      }
+      entry.windows.push({
+        window_minutes: row.window_minutes,
+        used_percent: row.used_percent,
+        resets_at: row.resets_at,
+      });
+    }
+    return [...entries.values()];
   } finally {
     database.close();
   }
@@ -2278,6 +2580,12 @@ function purgeScopeLocked(paths, scope, options) {
       (@source IS NULL OR prediction_attempt.source_alias = @source)
       AND (@since IS NULL OR prediction_attempt.generated_at >= @since)
       AND (@until IS NULL OR prediction_attempt.generated_at < @until)`;
+    // A stated figure is placed in the window by the instant the client stated it, the same instant
+    // a `--prevent-reimport` tombstone is later checked against.
+    const reportedFilter = `
+      (@source IS NULL OR reported_capacity_observation.source_alias = @source)
+      AND (@since IS NULL OR reported_capacity_observation.observed_at >= @since)
+      AND (@until IS NULL OR reported_capacity_observation.observed_at < @until)`;
 
     const apply = database.transaction(() => {
       const counted = {
@@ -2289,6 +2597,12 @@ function purgeScopeLocked(paths, scope, options) {
         predictions: countRows(
           database,
           `SELECT COUNT(*) AS total FROM prediction_attempt WHERE ${attemptFilter}`,
+          parameters,
+        ),
+        // Rows, one per stated window: the unit the table holds and the unit that is deleted.
+        reported_capacity_observations: countRows(
+          database,
+          `SELECT COUNT(*) AS total FROM reported_capacity_observation WHERE ${reportedFilter}`,
           parameters,
         ),
       };
@@ -2321,7 +2635,16 @@ function purgeScopeLocked(paths, scope, options) {
         .prepare(`DELETE FROM prompt_execution WHERE ${promptFilter}`)
         .run(parameters).changes;
 
-      if (deletedPrompts !== counted.prompts || deletedPredictions !== counted.predictions) {
+      const deletedReported = database
+        .prepare(`DELETE FROM reported_capacity_observation WHERE ${reportedFilter}`)
+        .run(parameters).changes;
+      if (deletedReported > 0) recomputeReportedLatest(database, parameters.source);
+
+      if (
+        deletedPrompts !== counted.prompts ||
+        deletedPredictions !== counted.predictions ||
+        deletedReported !== counted.reported_capacity_observations
+      ) {
         throw new SnackError("Purge would have removed a different set than it previewed.", {
           code: ExitCode.storage,
           reason: "purge_scope_mismatch",
@@ -2339,6 +2662,40 @@ function purgeScopeLocked(paths, scope, options) {
     database.exec("DROP TABLE IF EXISTS temp.snack_purge");
     database.close();
   }
+}
+
+/**
+ * Rebuild the latest-statement pointers of the sources a purge touched from the rows that remain.
+ *
+ * A purge can delete the very statement a pointer names, so the pointer cannot be patched; it is
+ * recomputed with the ranking the history defines -- latest instant first, newest row between two
+ * at one instant. A purge is rare and already linear in what it deletes, so the one ranking it costs
+ * here is the price that keeps every `status` read constant.
+ *
+ * @param {import("better-sqlite3").Database} database
+ * @param {string | null} source null for every source
+ */
+function recomputeReportedLatest(database, source) {
+  database
+    .prepare("DELETE FROM reported_capacity_latest WHERE @source IS NULL OR source_alias = @source")
+    .run({ source });
+  database
+    .prepare(
+      `INSERT INTO reported_capacity_latest
+         (source_alias, installation_id, limit_key, observation_key, observed_at, row_id)
+       SELECT source_alias, installation_id, COALESCE(limit_id, ''), observation_key, observed_at, id
+         FROM (
+           SELECT source_alias, installation_id, limit_id, observation_key, observed_at, id,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY source_alias, installation_id, limit_id
+                    ORDER BY observed_at DESC, id DESC
+                  ) AS rank
+             FROM reported_capacity_observation
+            WHERE @source IS NULL OR source_alias = @source
+         )
+        WHERE rank = 1`,
+    )
+    .run({ source });
 }
 
 /** @param {import("better-sqlite3").Database} database @param {string} sql @param {Record<string, unknown>} parameters */

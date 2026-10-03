@@ -39,6 +39,18 @@ const LABEL = 13;
  * @property {{age_seconds: number | null}} freshness
  * @property {{status: string}} synchronization
  * @property {string[]} caveats
+ * @property {ReportedCapacityView[]} [reported_capacity] present only when a Codex installation feeds
+ *   the source
+ */
+
+/**
+ * What Codex CLI stated about one of its limits, as the status payload carries it.
+ *
+ * @typedef {object} ReportedCapacityView
+ * @property {string | null} limit_id
+ * @property {string} stated_at
+ * @property {number} age_seconds
+ * @property {{window_minutes: number, used_percent: number, resets_at: string | null, reset_passed: boolean}[]} windows
  */
 
 /**
@@ -852,6 +864,11 @@ function renderSource(status, paint, verbose) {
       ? [row(paint, "gates", [[describeGates(status.evidence.gates ?? []), undefined, 0]])]
       : []),
     ...methodRows(status, paint, verbose),
+    // Its own row, after the estimate's, so a stated figure is never read as part of the
+    // `next prompt` interval or the `pressure` band it sits beneath (ADR-0007).
+    ...(status.reported_capacity === undefined
+      ? []
+      : [row(paint, "reported", [[describeReported(status.reported_capacity), undefined, 0]])]),
     row(paint, "as of", [
       [
         [
@@ -868,6 +885,79 @@ function renderSource(status, paint, verbose) {
     ...status.caveats.map((caveat) => `  ${paint("!", "gray")} ${caveat}`),
   ];
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Quote what Codex states about its own windows, in its words: it **states** a figure for a
+ * **window**, and SNACK repeats it. Nothing here is inferred, so nothing here says what is left.
+ *
+ * The time a window resets is said relative to when the figure was stated plus its age -- the
+ * moment the panel was built -- so the renderer needs no clock of its own.
+ *
+ * @param {ReportedCapacityView[]} reported
+ */
+function describeReported(reported) {
+  if (reported.length === 0) return "no figure stated by Codex yet";
+  return reported
+    .map((entry) => {
+      const nowMs = Date.parse(entry.stated_at) + entry.age_seconds * 1000;
+      const live = entry.windows.filter((window) => !window.reset_passed);
+      const ended = entry.windows.filter((window) => window.reset_passed);
+      const named = reported.length > 1 && entry.limit_id !== null ? ` (${entry.limit_id})` : "";
+      const parts = [];
+      if (live.length > 0) {
+        parts.push(
+          `Codex${named} states ${live
+            .map((window) => {
+              const resets =
+                window.resets_at === null ? "" : `, resets ${until(window.resets_at, nowMs)}`;
+              return `${Number(window.used_percent.toFixed(1))}% of its ${windowLength(window.window_minutes)} window${resets}`;
+            })
+            .join(" · ")}`,
+        );
+      }
+      for (const window of ended) {
+        parts.push(
+          `Codex's${named} ${windowLength(window.window_minutes)} window reset ${clock(String(window.resets_at))}; no figure stated since`,
+        );
+      }
+      parts.push(`${age(entry.age_seconds)} ago`);
+      return parts.join(" · ");
+    })
+    .join(" · ");
+}
+
+/** @param {number} minutes */
+function windowLength(minutes) {
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+/** @param {string} resetsAt @param {number} nowMs */
+function until(resetsAt, nowMs) {
+  const seconds = Math.max(0, (Date.parse(resetsAt) - nowMs) / 1000);
+  if (seconds >= 86400) {
+    const weekday = new Date(resetsAt).toLocaleDateString("en-US", {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+    return `${weekday} UTC`;
+  }
+  const total = Math.round(seconds / 60);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  return hours === 0 ? `in ${minutes}m` : `in ${hours}h ${minutes}m`;
+}
+
+/**
+ * A time of day, in UTC and saying so. Every absolute time SNACK prints is UTC (`day()` slices the
+ * same instant), and a bare `14:30` would be read as the reader's local time.
+ *
+ * @param {string} timestamp
+ */
+function clock(timestamp) {
+  return `${timestamp.slice(11, 16)} UTC`;
 }
 
 /**

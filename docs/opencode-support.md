@@ -98,9 +98,12 @@ above.
 | --- | --- | --- |
 | OpenCode | `oc-sqlite-msgpart-v1` | none yet |
 | Claude Code | `cc-jsonl-turntree-v1` | none yet |
+| Codex CLI (from `1.3.0`) | `cx-rollout-usagerecord-v1` | `cx-rollout-tokencount-v1` |
 
-Neither client has produced a second family yet, so "plus one previous" currently has nothing to
-name. The row is published anyway, because the shape of the promise is what a user needs to know
+Codex is the first client to have produced a second family: `0.159` replaced the per-turn token
+counts of `0.145`–`0.147` with usage records, and a session resumed across that change carries both
+in one file. OpenCode and Claude Code have not, so "plus one previous" has nothing to name for them.
+Those rows are published anyway, because the shape of the promise is what a user needs to know
 before a client updates underneath them, and an empty column is an honest answer where an absent
 table would leave the question open.
 

@@ -410,7 +410,7 @@ spool event schema at module load cost every command about 65 ms, and `status` h
 It was read as a flaky budget test for several runs before it was measured against the previous
 tree. The budget test was right; the reading of it was wrong.
 
-### 1.2.1 - a machine where `snack` had stopped working
+### 1.2.1 - a machine where `snack` had stopped working — **shipped**
 
 Found by running the installed binary rather than the suite, two months after 1.2.0. Every command
 answered "Storage could not be read" while the database was intact; the cause was a second global
@@ -430,17 +430,29 @@ Pulling that thread found three defects, and the record of each is in
 `status` and `doctor`; a dry-run `update` from a copy under a non-active prefix plans an install into
 that prefix; an install with the flag under both npm 11.16.0 and npm 12 loads the driver.
 
-### 1.3.0 - Codex CLI adapter
+### 1.3.0 - Codex CLI adapter — **shipped**
 
 - read `~/.codex/sessions/**/rollout-*.jsonl` by **field allowlist**, never by exclusion: the same files carry `user_message`, `agent_message`, `cwd`, `workspace_roots`, and `git`. `~/.codex/history.jsonl` is never opened;
-- ingest token usage per turn, and `rate_limit_reached_type` as an observed restriction stated by the source itself;
+- ingest token usage per turn, and `rate_limit_reached_type` as an observed restriction stated by the source itself — together with `task_complete.payload.error.codex_error_info` (`usage_limit_exceeded`, `rate_limit_exceeded`), because the one real refusal observed was recorded only there, with every surrounding `rate_limit_reached_type` null ([ADR-0007 amendment](../adr/0007-quote-codex-reported-capacity.md));
 - ingest and display **reported capacity usage** — `used_percent`, `window_minutes`, `resets_at`, `plan_type` — labelled as reported and shown beside the estimate, never inside it and never in usage pressure ([ADR-0007](../adr/0007-quote-codex-reported-capacity.md));
 - fingerprinted schema families, fail closed on drift, `snack setup codex`, and a support matrix page alongside the OpenCode and Claude ones;
 - the prediction method is deliberately unchanged in this release.
 
-**Cut this one starting from `npm run release:evidence`.** `1.2.0..main` changed `packages/cli/src/`, which is inside the CLI's `files` array, so `artifacts.md` records digests for a tarball this tree no longer packs and `release:check` already refuses. The evidence was deliberately left stale: it still describes the published `1.2.0`, which is what `identity.md` cites, and regenerating it before a version exists would have replaced a record of what npm serves with one for a tree nobody can install.
+**Cut it with `npm run release:prepare`, like any other release.** This entry used to say to start from `npm run release:evidence`, because `artifacts.md` still described the published `1.2.0` while `main` had moved past it. The `1.2.1` cut regenerated that evidence for the tree it published, so by the time `1.3.0` began there was nothing stale to start from; `release:prepare` writes the `1.3.0` evidence in the release's own PR.
 
-**Exit:** privacy canaries pass against Codex fixtures; an unknown fingerprint refuses with actionable `doctor` output; a Codex source shares a capacity source with any other client on the same lineage without leaking client-specific fields.
+**Exit, met.** Privacy canaries planted in every slot the allowlist drops, and in a `history.jsonl` beside the sessions, reach no byte SNACK writes or prints; drift refuses with `source_schema_unsupported` and `doctor` fails the fingerprint and says to check the support matrix; a Codex source shares a capacity source with Claude Code on one lineage, and the binding, the prompts and the export carry nothing Codex-specific. The `1.2` contract corpus, captured before any `1.3` change, still validates.
+
+**Where the plan above was wrong.**
+
+**There were two schema families, and one file can hold both.** The plan said "fingerprinted schema families" and pictured a version check. Codex `0.159` moved per-response usage from `token_count` events to a new `token_usage_record`, and Codex appends to a rollout when a session is resumed, so a thread started by `0.147` and resumed by `0.159` holds turns of both. The first build decided the family per file, reclassified the whole file on its first `0.159` turn, and storage's update path deleted the old turns' usage slices without replacing them — a P1, found in review, reproduced as 3 slices and 435 tokens becoming 1 and 11. The family is now decided per turn, and `doctor` passes while every family present is supported rather than while the one setup recorded is.
+
+**`rate_limit_reached_type` was not where the refusal was.** The plan named it as the restriction signal. The one real refusal in the evidence was recorded only as `task_complete.payload.error.codex_error_info: "usage_limit_exceeded"`, with every surrounding `rate_limit_reached_type` null. Both are read, and neither alone is trusted to be complete; a spending cap (`spend_control_reached`, `*_credits_depleted`) is an operational failure, not a restriction ([ADR-0007 amendment](../adr/0007-quote-codex-reported-capacity.md)).
+
+**`primary` changed meaning between versions.** The plan listed `used_percent` and `window_minutes` as if there were one window. From `0.159` Codex states two, and `primary` went from the 7-day (or 30-day, free) window to a 5-hour one, with the 7-day window moving to `secondary`. A store keyed on the slot would have spliced two windows into one series, so every window is keyed by `window_minutes`, and every figure is kept with the `limit_id` it was stated for. A figure is stored only for the source whose provider the stating thread names.
+
+**The stated figures are not exported.** The plan was silent on `export`. Its document closes `data.tables`, so a new table fails every consumer's version-2 validator — a breaking change, and from `1.0` a major. `export` is unchanged in `1.3`, and the figures stay local.
+
+**Reading the latest figure blew the `status` budget.** Ranking the whole history of statements on every `status` measured 474–658 ms p95 at 200,000 rows against a 250 ms budget. Migration `015` gained `reported_capacity_latest`, a pointer kept in the transaction that inserts, and the read is guarded by its query plan in a test rather than by a clock.
 
 ### 1.4.0 - `status --sequence N`
 

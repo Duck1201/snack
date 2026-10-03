@@ -76,6 +76,17 @@ Claude Code reaches full MVP-feature parity after the OpenCode-only MVP:
 5. Structured error classes such as `rate_limit` remain distinct from overloaded, authentication, billing, server, output-token, and unknown operational failures.
 6. Every MVP command works for Claude-only and shared OpenCode+Claude capacity sources before 1.0.
 
+### 3.7 Codex CLI Scenario (1.3+)
+
+Codex CLI is the third client, read the way Claude Code is:
+
+1. `snack setup codex` discovers the rollouts under `$CODEX_HOME` (else `~/.codex`) — `sessions/**/rollout-*.jsonl` and `archived_sessions/rollout-*.jsonl` — and checks their fingerprint before asking anything. `history.jsonl` is never opened.
+2. Setup registers nothing in Codex's configuration and offers no plugin. Each rollout line is projected onto a field allowlist before anything else reads it; messages, reasoning, tool calls, paths, git metadata, account identifiers and error messages are never read.
+3. Two schema families are supported at once, `cx-rollout-tokencount-v1` (Codex 0.145–0.147) and `cx-rollout-usagerecord-v1` (0.159). The family is decided per turn, because a session started by one version and resumed by the next holds both in one file.
+4. An observed restriction comes from `codex_error_info` (`usage_limit_exceeded`, `rate_limit_exceeded`) or from `rate_limit_reached_type`; a spending cap (`spend_control_reached`, `*_credits_depleted`) is an operational failure, as Claude's `billing` is.
+5. The capacity figures Codex states are **reported capacity usage**: quoted beside the estimate on `status`'s `reported` row and in the optional `reported_capacity` field of `status --json`, never an input to the interval, risk, evidence or usage pressure ([ADR-0007](./adr/0007-quote-codex-reported-capacity.md)). Windows are identified by their length, never by their slot. They are not exported in 1.3.
+6. A Codex source can share a capacity source with OpenCode or Claude Code; nothing Codex-specific is added to the binding, the prompts or the export. The full contract is [codex-support.md](./codex-support.md).
+
 **Section numbers are the addressing scheme and do not change.** They are cited as `§N.N` from
 code comments, tests, ADRs and other documents, so splitting the file by topic preserves the
 numbering rather than renumbering into something tidier. This table says which file holds which

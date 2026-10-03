@@ -33,6 +33,10 @@
         },
         "predictions": {
           "type": "integer"
+        },
+        "reported_capacity_observations": {
+          "description": "Added in 1.3.0, optional. Stated-window rows Codex CLI reported, deleted with the prompts in scope.",
+          "type": "integer"
         }
       }
     },

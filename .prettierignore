@@ -1,6 +1,7 @@
 node_modules/
 coverage/
 graphify-out/
+.claude/worktrees/
 package-lock.json
 AGENTS.md
 CONTEXT.md

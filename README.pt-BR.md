@@ -11,7 +11,7 @@ In English: [README.md](./README.md).
 
 ```bash
 npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # compila o driver SQLite; o npm 12 pula sem isso
-snack setup opencode    # ou: snack setup claude
+snack setup opencode    # ou: snack setup claude, snack setup codex
 snack status
 ```
 
@@ -34,18 +34,22 @@ O SNACK lê esse histórico e transforma em três coisas:
   aconteceu, então dá para conferir se o SNACK vem acertando.
 
 ```text
+$ snack status --source work
 work
-  viability  95-100%   risk low          evidence moderate
-  pressure   high      category typical  ▁▄▅▇█
-  drivers    prompts 100th, input_tokens 100th
-  method     bayesian-pressure-band@1
-  as of      40s ago · sync ok · period since 2026-01-02
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 Pode ir — mas você está vivendo uma das suas horas mais pesadas de todas, então não se assuste se
-isso mudar.
+isso mudar. O método por trás da faixa não aparece neste painel: o `--verbose` o acrescenta, junto
+com os portões de evidência e a posição de cada fator no seu próprio histórico. O `snack status`
+sozinho põe cada fonte numa linha, para compará-las.
 
 ## O que não faz
 
@@ -76,17 +80,17 @@ fonte de capacidade, e o SNACK trata o uso deles como o pote único que de fato 
 
 ## Comandos
 
-| Comando                                       | O que faz                                                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo                                                    |
-| `snack sync`                                  | Importa histórico novo; `--full` relê e reconcilia tudo                                                                               |
-| `snack status`                                | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência e o método |
-| `snack stats`                                 | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                         |
-| `snack doctor`                                | Diagnostica a instalação local sem alterá-la                                                                                          |
-| `snack config`                                | Consulta ou atualiza a configuração local                                                                                             |
-| `snack export`                                | Escreve suas observações e previsões em JSON ou CSV                                                                                   |
-| `snack data purge`                            | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                |
-| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                   |
+| Comando                                     | O que faz                                                                                                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                                              |
+| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                                                       |
+| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência, o método e as versões de política |
+| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                                                 |
+| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                                                  |
+| `snack config`                              | Consulta ou atualiza a configuração local                                                                                                                     |
+| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                                           |
+| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                                        |
+| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                                           |
 
 Todo comando aceita `--json` e emite um documento versionado. Todo comando também está no
 `man snack`, gerado a partir da própria superfície de flags do CLI, então ele não descreve uma
@@ -126,9 +130,43 @@ bloqueia. O Claude Code não precisa de plugin — o histórico JSONL dele já r
 campos estruturados, e é por isso que nenhum hook é registrado nas suas configurações do Claude
 ([ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md)).
 
+## Codex CLI
+
+A partir da `1.3`, `snack setup codex` lê os rollouts que o Codex CLI já escreve em `$CODEX_HOME`
+(`~/.codex` quando não está definido): `sessions/**/rollout-*.jsonl` e `archived_sessions/`. Nada é
+registrado na configuração do Codex e nenhum plugin entra na história. Cada linha é projetada numa
+lista explícita de campos permitidos e o resto é descartado sem ser lido — mensagens, raciocínio,
+chamadas de ferramenta e a saída delas, diretórios de trabalho e metadados de git nunca saem do
+parser. O `~/.codex/history.jsonl`, o histórico bruto de prompts do Codex, nunca é aberto.
+
+O Codex também declara um número próprio: uma fração de cada janela que ele acompanha, a duração
+dessa janela e quando ela reinicia. O SNACK o cita — é **uso de capacidade reportado**, a declaração
+do cliente, não do SNACK — numa linha só dele, ao lado da estimativa:
+
+```text
+$ snack status --source codex
+codex
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
+```
+
+A linha `reported` nunca faz parte do intervalo de `next prompt`, do nível de evidência nem da
+pressão de uso; nada na previsão a lê, e um teste garante que a estimativa é idêntica com e sem ela
+([ADR-0007](./docs/adr/0007-quote-codex-reported-capacity.md)). No `--json` ela é o array opcional
+`reported_capacity` no relatório daquela fonte. Na `1.3` ela fica local: o `export` não a carrega.
+As versões do Codex suportadas e o que é lido estão em
+[docs/codex-support.md](./docs/codex-support.md).
+
 ## Como chegamos aqui
 
-Onze releases, cada uma com um único trabalho. Nada foi adiante antes de a anterior estar provada.
+Cada release teve um único trabalho. Nada foi adiante antes de a anterior estar provada.
 
 | Versão          | O que acrescentou                                                                                                                                                                                                                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -144,6 +182,8 @@ Onze releases, cada uma com um único trabalho. Nada foi adiante antes de a ante
 | `1.0.0`         | Primeira release estável. SemVer estrito nos contratos públicos, cadeias de migração ensaiadas a partir de toda release publicada, artefatos testados num registry isolado antes de o npm vê-los.                                                                                                                              |
 | `1.0.1` `1.0.2` | As primeiras releases guiadas por _usar_ o produto. Instalar a `1.0.0` publicada do npm e rodá-la contra um histórico real achou doze defeitos, três deles bloqueadores, todos invisíveis para uma suíte de testes verde.                                                                                                      |
 | `1.1.0`–`1.1.3` | Feito para ser lido. `snack update` põe o CLI e o plugin de captura em versões que combinam, e é o único comando que alcança a rede. `status` virou um painel e `stats` um par de tabelas, ambos escritos em palavras em vez de linhas para decifrar. Três patches saíram de rodar a build publicada contra um histórico real. |
+| `1.2.0` `1.2.1` | `status --verbose` dá ao método e aos portões de evidência um caminho humano, `man snack` é gerado da própria superfície de flags do CLI e verificado pela build, e um driver SQLite que não carrega é nomeado em vez de reportado como armazenamento danificado.                                                              |
+| `1.3.0`         | Codex CLI, o terceiro cliente, lido dos rollouts por lista de campos permitidos. O número que o Codex declara sobre as próprias janelas é citado ao lado da estimativa, nunca dentro dela.                                                                                                                                     |
 
 O plano completo por estágios, com critérios de saída por onda e tudo que ficou deliberadamente de
 fora, está no [PLAN.md](./PLAN.md).
@@ -154,8 +194,9 @@ fora, está no [PLAN.md](./PLAN.md).
 comportamento · [docs/architecture.md](./docs/architecture.md) para módulos e fluxo de dados ·
 [docs/compatibility.md](./docs/compatibility.md) para o que os contratos publicados prometem ·
 [CONTEXT.md](./CONTEXT.md) para o vocabulário do domínio ·
-[docs/opencode-support.md](./docs/opencode-support.md) e
-[docs/claude-support.md](./docs/claude-support.md) para as famílias de schema suportadas ·
+[docs/opencode-support.md](./docs/opencode-support.md),
+[docs/claude-support.md](./docs/claude-support.md) e
+[docs/codex-support.md](./docs/codex-support.md) para as famílias de schema suportadas ·
 [docs/troubleshooting.md](./docs/troubleshooting.md) quando algo recusar.
 
 Contribuições: [CONTRIBUTING.md](./CONTRIBUTING.md). Segurança: [SECURITY.md](./SECURITY.md).

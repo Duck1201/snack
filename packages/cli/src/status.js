@@ -94,6 +94,37 @@ export function createSourceStatus(
   };
 }
 
+/**
+ * Shape what Codex CLI stated about its own capacity windows for the status document.
+ *
+ * Kept apart from `createSourceStatus` on purpose: nothing here reaches the forecast, the risk
+ * label, the evidence level, or usage pressure. A figure the client states is quoted beside the
+ * estimate and never folded into it (ADR-0007).
+ *
+ * @param {{installation_id: string, limit_id: string | null, plan_type: string | null, observed_at: string, windows: {window_minutes: number, used_percent: number, resets_at: string | null}[], parser_version: string}[]} rows
+ *   one per installation and limit: its latest snapshot
+ * @param {Date} now
+ */
+export function describeReportedCapacity(rows, now) {
+  return rows.map((row) => ({
+    client: /** @type {const} */ ("codex"),
+    installation_id: row.installation_id,
+    limit_id: row.limit_id,
+    plan_type: row.plan_type,
+    stated_at: row.observed_at,
+    age_seconds: Math.max(0, Math.round((now.getTime() - Date.parse(row.observed_at)) / 1000)),
+    windows: row.windows.map((window) => ({
+      window_minutes: window.window_minutes,
+      used_percent: window.used_percent,
+      resets_at: window.resets_at,
+      // A window whose reset has passed no longer describes anything: the figure was for a window
+      // that has ended. It is kept so a reader can see when it ended, and is never repeated.
+      reset_passed: window.resets_at !== null && Date.parse(window.resets_at) <= now.getTime(),
+    })),
+    parser_version: row.parser_version,
+  }));
+}
+
 /** @param {import("./prediction.js").Forecast["contributors"]} contributors */
 function priorMass(contributors) {
   return contributors.prior.alpha + contributors.prior.beta;

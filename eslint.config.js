@@ -3,7 +3,7 @@ import jsdoc from "eslint-plugin-jsdoc";
 
 export default [
   {
-    ignores: ["node_modules/**", "coverage/**", "graphify-out/**"],
+    ignores: ["node_modules/**", "coverage/**", "graphify-out/**", ".claude/worktrees/**"],
   },
   js.configs.recommended,
   jsdoc.configs["flat/recommended-typescript-flavor"],

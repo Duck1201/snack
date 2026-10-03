@@ -71,6 +71,19 @@ SNACK would register user-scoped command hooks only after a setup dry-run, exact
 
 Claude hooks emit the existing content-free event schema and use the same bounded fail-open behavior as the OpenCode plugin. Managed settings may prohibit user hooks; setup/doctor reports that as unsupported live capture while allowing compatible read-only backfill. Hook failure never blocks Claude Code.
 
+### 10.7 Codex CLI Backfill Path (1.3+)
+
+The Codex adapter reads `sessions/**/rollout-*.jsonl` and `archived_sessions/rollout-*.jsonl` under `$CODEX_HOME` (else `~/.codex`) without modifying them and never opens `history.jsonl`. Rollouts carry prompt text, tool output, working directories and git metadata in the same records as the metadata, so each parsed line is projected onto an explicit field allowlist and dropped; the projection reads through an accessor that refuses any path not on the list. [ADR-0007](../adr/0007-quote-codex-reported-capacity.md) and its 1.3.0 amendment govern it, and [codex-support.md](../codex-support.md) is the matrix.
+
+It must validate, on every record it reads rather than on a sample:
+
+- the per-turn schema family — a turn with a `root_turn_id` or a `token_usage_record` is `cx-rollout-usagerecord-v1`, any other `cx-rollout-tokencount-v1` — so a session resumed across Codex versions keeps each turn's usage;
+- user versus subagent threads, the fork-replay boundary, and the subagent turns of the older family that name no prompt and are skipped and counted;
+- token fields, with cached input and reasoning separated from input and output;
+- restriction evidence from `codex_error_info` and `rate_limit_reached_type`, and spending caps as operational failures.
+
+A record that breaks its shape refuses the whole history before canonical writes. A stated figure that breaks its shape drops only itself and is counted, because it is quoted and never an input. Only an absent directory or rollout is absence; an unreadable one makes the source unavailable. Stated figures are emitted as reported capacity usage snapshots beside the observations, routed by the stating thread's provider, and never enter the observation contract.
+
 ## 11. Configuration and Local Paths
 
 SNACK follows XDG conventions on Linux/WSL and platform-appropriate equivalents on macOS while presenting paths through `snack config path` and `doctor`.

@@ -7,6 +7,7 @@ import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
   createClaudeHistory,
+  createCodexHistory,
   createOpenCodeDatabase,
   executeOpenCodeSql,
   makeRunFixture,
@@ -447,4 +448,125 @@ test("one Claude history cannot be bound to two capacity sources", async () => {
   const exitCode = await setup("personal");
   assert.equal(exitCode, 3);
   assert.equal(JSON.parse(fixture.stdout.value).errors[0].code, "source_mapping_ambiguous");
+});
+
+/** @param {string} alias */
+function codexFlags(alias) {
+  return [
+    "--non-interactive",
+    "--source",
+    alias,
+    "--provider",
+    "openai",
+    "--profile",
+    "default",
+    "--plan",
+    "plus",
+  ];
+}
+
+test("setup codex configures a source and sync reads its rollouts", async () => {
+  const fixture = await makeRunFixture("snack-setup-codex-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+    "subagent-0-159-3.jsonl",
+    "version-0-147-0.jsonl",
+  ]);
+
+  await run(["node", "snack", "setup", "codex", ...codexFlags("codex"), "--json"], fixture.options);
+  const configured = JSON.parse(fixture.stdout.value);
+
+  assert.equal(configured.status, "ok");
+  assert.equal(configured.command, "setup codex");
+  assert.equal(configured.data.source.adapter, "codex");
+  assert.ok(
+    ["cx-rollout-tokencount-v1", "cx-rollout-usagerecord-v1"].includes(
+      configured.data.fingerprint.family,
+    ),
+  );
+  assert.equal(configured.data.dry_run.observations, 3);
+  assert.equal(configured.data.dry_run.applied, true);
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "sync", "--full", "--json"], fixture.options);
+  const synced = JSON.parse(fixture.stdout.value);
+  assert.equal(synced.status, "ok");
+  assert.equal(synced.data.sources[0].inserted, 3);
+  // Stated figures are counted inside storage and kept out of the frozen sync payload in 1.3.
+  assert.ok(!("reported_capacity" in synced.data.sources[0]));
+
+  const config = await readFile(fixture.paths.configFile, "utf8");
+  assert.match(config, /"adapter": "codex"/u);
+  assert.match(config, /"sessions": /u);
+  assert.doesNotMatch(config, /"database"|"projects"/u);
+
+  // A second sync with nothing new reads nothing new.
+  fixture.stdout.value = "";
+  await run(["node", "snack", "sync", "--json"], fixture.options);
+  const again = JSON.parse(fixture.stdout.value);
+  assert.equal(again.data.sources[0].inserted, 0);
+});
+
+test("setup codex fails closed when there is no sessions directory", async () => {
+  const fixture = await makeRunFixture("snack-setup-codex-missing-");
+  fixture.options.env.CODEX_HOME = join(fixture.root, "no-such-codex-home");
+
+  const exitCode = await run(
+    ["node", "snack", "setup", "codex", ...codexFlags("codex"), "--json"],
+    fixture.options,
+  );
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 4);
+  assert.equal(document.errors[0].code, "source_unavailable");
+  assert.doesNotMatch(fixture.stdout.value, /no-such-codex-home/u);
+  await assert.rejects(readFile(fixture.paths.configFile, "utf8"));
+});
+
+test("setup codex refuses a drifted history before it asks anything", async () => {
+  const fixture = await makeRunFixture("snack-setup-codex-drift-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+    "drifted-usage.jsonl",
+  ]);
+  const { prompt, asked } = scriptedPrompt(defaultAnswers);
+  fixture.options.prompt = prompt;
+
+  const exitCode = await run(["node", "snack", "setup", "codex", "--json"], fixture.options);
+  const document = JSON.parse(fixture.stdout.value);
+
+  assert.equal(exitCode, 4);
+  assert.equal(document.errors[0].code, "source_schema_unsupported");
+  assert.match(document.errors[0].message, /Codex CLI history fingerprint is unsupported/u);
+  assert.deepEqual(asked, []);
+  await assert.rejects(readFile(fixture.paths.configFile, "utf8"));
+});
+
+test("guided setup codex offers the provider its rollouts name, and no plugin", async () => {
+  const fixture = await makeRunFixture("snack-setup-codex-guided-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root);
+  const { prompt, asked } = scriptedPrompt({ ...defaultAnswers, provider: "openai" });
+  fixture.options.prompt = prompt;
+
+  const exitCode = await run(["node", "snack", "setup", "codex"], fixture.options);
+
+  assert.equal(exitCode, 0, fixture.stderr.value);
+  const provider = asked.find((question) => question.id === "provider");
+  assert.equal(provider?.default, "openai");
+  assert.ok(!asked.some((question) => question.id === "install_plugin"));
+  assert.match(fixture.stdout.value, /Configured Codex CLI source work\./u);
+});
+
+test("a dry run of setup codex changes nothing", async () => {
+  const fixture = await makeRunFixture("snack-setup-codex-dry-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root);
+
+  const exitCode = await run(
+    ["node", "snack", "setup", "codex", ...codexFlags("codex"), "--dry-run"],
+    fixture.options,
+  );
+
+  assert.equal(exitCode, 0);
+  assert.match(fixture.stdout.value, /Validated Codex CLI source codex; no changes applied\./u);
+  await assert.rejects(readFile(fixture.paths.configFile, "utf8"));
 });

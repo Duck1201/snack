@@ -42,8 +42,10 @@ if (!npmCli) throw new Error("Run upgrade smoke through npm.");
  * `docs/compatibility.md` declares, so the direct `0.6.0 -> candidate` chain is the one the stable
  * gate turns on; the rest are the representative adjacent and intermediate chains, one per minor,
  * taking each minor's newest patch because that is what an installation on that minor actually has.
+ * `1.2.1` is the newest published schema level (migration 013), so it is the chain that runs 014
+ * and 015 over a database a real release wrote.
  */
-const FLOORS = ["0.6.0", "0.6.1", "0.7.0", "0.8.2", "0.9.0"];
+const FLOORS = ["0.6.0", "0.6.1", "0.7.0", "0.8.2", "0.9.0", "1.2.1"];
 
 const requested = process.argv.slice(2);
 const floors = requested.length > 0 ? requested : FLOORS;

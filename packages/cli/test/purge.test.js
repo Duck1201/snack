@@ -4,7 +4,12 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
-import { purgeScope } from "../src/storage.js";
+import {
+  initializeDatabase,
+  purgeScope,
+  readReportedCapacity,
+  storeObservations,
+} from "../src/storage.js";
 import {
   cleanupRunFixtures,
   createOpenCodeDatabase,
@@ -379,4 +384,153 @@ test("only a purge that removes the watermark resets the ingestion cursor", asyn
 
   assert.equal(exitCode, 0);
   assert.equal(count(fixture.resolved.databaseFile, "ingestion_cursor"), 0);
+});
+
+const CODEX_INSTALLATION = "33333333-4444-4555-8666-777777777777";
+
+/** @param {string} alias */
+function codexSource(alias) {
+  return {
+    alias,
+    installation_id: CODEX_INSTALLATION,
+    adapter: "codex",
+    provider: "openai",
+    profile: "default",
+    plan: "plus",
+    fingerprint: "cx-rollout-usagerecord-v1",
+  };
+}
+
+/** @param {number} n @param {string} observedAt */
+function statedFigure(n, observedAt) {
+  return {
+    observation_key: n.toString(16).padStart(64, "0"),
+    observed_at: observedAt,
+    limit_id: "codex",
+    plan_type: "plus",
+    windows: [
+      { window_minutes: 300, used_percent: 34, resets_at: null },
+      { window_minutes: 10080, used_percent: 19, resets_at: null },
+    ],
+    parser_version: "codex-rate-limits-v1",
+    provider: "openai",
+  };
+}
+
+/**
+ * @param {string} databaseFile
+ * @param {string} alias
+ * @param {ReturnType<typeof statedFigure>[]} reported
+ */
+function storeStated(databaseFile, alias, reported) {
+  return storeObservations(
+    databaseFile,
+    codexSource(alias),
+    { observations: [], cursor: null, reported_capacity: reported },
+    new Date("2026-01-03T00:00:00.000Z"),
+  );
+}
+
+/** A database holding stated figures for two sources, on either side of a purge window. */
+async function makeStatedFigures() {
+  const fixture = await makeRunFixture("snack-purge-reported-");
+  await initializeDatabase(fixture.paths, { applicationVersion: "1.3.0" });
+  const { databaseFile } = fixture.paths;
+  storeStated(databaseFile, "codex", [
+    statedFigure(1, "2026-01-01T10:00:00.000Z"),
+    statedFigure(2, "2026-01-02T10:00:00.000Z"),
+    statedFigure(3, "2026-01-02T23:59:59.999Z"),
+  ]);
+  storeStated(databaseFile, "neighbour", [statedFigure(4, "2026-01-02T10:00:00.000Z")]);
+  return fixture;
+}
+
+test("purge deletes the stated figures in its window, counts them, and previews the same count", async () => {
+  const fixture = await makeStatedFigures();
+  const { databaseFile } = fixture.paths;
+  const scope = {
+    source: "codex",
+    since: "2026-01-02T00:00:00.000Z",
+    until: "2026-01-02T23:59:59.999Z",
+  };
+
+  const preview = await purgeScope(fixture.paths, scope, { now: new Date(), preview: true });
+  assert.equal(count(databaseFile, "reported_capacity_observation"), 8);
+  const result = await purgeScope(fixture.paths, scope, { now: new Date() });
+
+  // One snapshot, two stated windows: rows are what is deleted and what is counted.
+  assert.equal(preview.counts.reported_capacity_observations, 2);
+  assert.deepEqual(result.counts, preview.counts);
+  // The half-open window keeps its upper bound, and the neighbour keeps everything.
+  assert.equal(count(databaseFile, "reported_capacity_observation"), 6);
+
+  const all = await purgeScope(fixture.paths, {}, { now: new Date() });
+  assert.equal(all.counts.reported_capacity_observations, 6);
+  assert.equal(count(databaseFile, "reported_capacity_observation"), 0);
+});
+
+test("after a purge, status quotes the latest figure that is still stored", async () => {
+  const fixture = await makeStatedFigures();
+  const { databaseFile } = fixture.paths;
+  const latest = (/** @type {string} */ alias) =>
+    readReportedCapacity(databaseFile, alias).map((entry) => entry.observed_at);
+  assert.deepEqual(latest("codex"), ["2026-01-02T23:59:59.999Z"]);
+
+  // Removing the newest statement must bring the one before it back, not leave a stale pointer.
+  await purgeScope(
+    fixture.paths,
+    { source: "codex", since: "2026-01-02T12:00:00.000Z" },
+    { now: new Date() },
+  );
+  assert.deepEqual(latest("codex"), ["2026-01-02T10:00:00.000Z"]);
+  assert.deepEqual(latest("neighbour"), ["2026-01-02T10:00:00.000Z"]);
+  // A statement stored after the purge is the latest again, and an older one arriving late is not.
+  storeStated(databaseFile, "codex", [
+    statedFigure(5, "2026-01-02T11:00:00.000Z"),
+    statedFigure(6, "2026-01-01T09:00:00.000Z"),
+  ]);
+  assert.deepEqual(latest("codex"), ["2026-01-02T11:00:00.000Z"]);
+
+  await purgeScope(fixture.paths, { source: "codex" }, { now: new Date() });
+  assert.deepEqual(latest("codex"), []);
+  assert.deepEqual(latest("neighbour"), ["2026-01-02T10:00:00.000Z"]);
+});
+
+test("a --prevent-reimport tombstone refuses the stated figures it covers, and only those", async () => {
+  const fixture = await makeStatedFigures();
+  const { databaseFile } = fixture.paths;
+
+  await purgeScope(
+    fixture.paths,
+    { source: "codex", until: "2026-01-02T12:00:00.000Z" },
+    { now: new Date(), preventReimport: true },
+  );
+  assert.equal(count(databaseFile, "reported_capacity_observation"), 4);
+
+  const again = storeStated(databaseFile, "codex", [
+    statedFigure(1, "2026-01-01T10:00:00.000Z"),
+    statedFigure(2, "2026-01-02T10:00:00.000Z"),
+    statedFigure(3, "2026-01-02T23:59:59.999Z"),
+  ]);
+
+  // A full re-read is exactly what a tombstone exists to survive.
+  assert.deepEqual(again.reported_capacity, {
+    inserted: 0,
+    unchanged: 1,
+    rejected: 0,
+    tombstoned: 2,
+    pending_mapping: 0,
+  });
+  assert.equal(count(databaseFile, "reported_capacity_observation"), 4);
+});
+
+test("the purge payload names the stated figures it removed, beside prompts and forecasts", async () => {
+  const fixture = await makePurgeableHistory();
+
+  await run(
+    ["node", "snack", "data", "purge", "--source", "work", "--dry-run", "--json"],
+    fixture.options,
+  );
+
+  assert.equal(JSON.parse(fixture.stdout.value).data.counts.reported_capacity_observations, 0);
 });

@@ -10,7 +10,7 @@ description: >
 license: MIT
 metadata:
   author: Duck
-  version: "2.1"
+  version: "2.2"
 ---
 
 # Verify SNACK against the real CLI, not only the test suite
@@ -40,10 +40,12 @@ it".
 
 ## Which path this run takes
 
-The procedure below is the common path. Four branches leave it:
+The procedure below is the common path. Five branches leave it:
 
 - **A source adapter changed** — its fixtures are not evidence about the real source; read
   `references/adapter-reconciliation.md`.
+- **A client shipped a new on-disk shape** (Codex CLI, Claude Code, OpenCode) — measure and decide
+  with `.claude/skills/snack-support-a-client-schema-family/SKILL.md` first; reconcile here after.
 - **The capture plugin changed** — drive the real OpenCode host; read `references/opencode-host.md`.
   The packed-plugin host test is that harness; keep it runnable.
 - **You are about to record a defect** seen from a shell loop rather than from a test file — see
@@ -78,7 +80,10 @@ rm -rf $ROOT
 ```
 
 `HOME` must be set too: `resolveOpenCodeConfig` falls back to `$HOME/.config` when `XDG_CONFIG_HOME`
-is unset, and a leaked real `HOME` would write into your own OpenCode configuration.
+is unset, and a leaked real `HOME` would write into your own OpenCode configuration. It also keeps
+`~/.claude` and `~/.codex` out of the run unless you point `CLAUDE_CONFIG_DIR` or `CODEX_HOME` at a
+real history on purpose — both adapters only read, and `CODEX_HOME` must never be widened to read
+`history.jsonl`.
 
 ### What the fakes cannot reach — check each
 

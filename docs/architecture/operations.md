@@ -84,6 +84,7 @@ Performance tests use generated histories up to and beyond 100,000 prompts and i
 - temporary SQLite databases across every migration;
 - sanitized OpenCode schema/version fixtures;
 - sanitized Claude JSONL schema-version fixtures (0.7+);
+- synthetic Codex CLI rollout fixtures per family, including a rollout resumed across families (1.3+);
 - WAL/live-read behavior;
 - plugin spool crash/truncation/rotation;
 - setup diff, backup, rollback, and idempotence;

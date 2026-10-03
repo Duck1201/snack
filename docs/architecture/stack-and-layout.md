@@ -145,6 +145,7 @@ Ingestion owns:
 - internal `SourceAdapter` contract;
 - OpenCode SQLite reader and schema fingerprints;
 - Claude Code JSONL reader and schema fingerprints (0.7+);
+- Codex CLI rollout reader, field allowlist, per-turn schema families, and the reported capacity usage it yields (1.3+);
 - spool-event reader/validator;
 - source observation normalization;
 - source identity/revision reconciliation;
@@ -211,6 +212,8 @@ Conceptual operations:
 - `health()`: report accessibility and compatibility.
 
 Every observation contains stable source identity, revision/order, parser version, and field-level completeness. An adapter cannot emit a canonical usage record directly; normalization/reconciliation remains shared.
+
+The Codex CLI adapter (1.3+) also returns, beside its observations, the reported capacity usage its rollouts state: versioned, content-free snapshots that storage writes in the same transaction as the observations and the cursor. They are a second output of the read, not a field of any observation, so nothing that builds a forecast can receive one. Its `fingerprint()` reports every family present rather than one, because a Codex history holds two at once.
 
 ### 6.2 Repository Ports
 

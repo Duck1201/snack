@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import { currentTarballDigests } from "./release-evidence.mjs";
+import { supportMatrixIncomplete } from "./support-matrix-gate.mjs";
 
 const identity = await readFile(new URL("../docs/release/identity.md", import.meta.url), "utf8");
 const platforms = await readFile(
@@ -12,6 +13,7 @@ const opencodeSupport = await readFile(
   "utf8",
 );
 const claudeSupport = await readFile(new URL("../docs/claude-support.md", import.meta.url), "utf8");
+const codexSupport = await readFile(new URL("../docs/codex-support.md", import.meta.url), "utf8");
 const compatibility = await readFile(new URL("../docs/compatibility.md", import.meta.url), "utf8");
 const performance = await readFile(
   new URL("../docs/release/performance.md", import.meta.url),
@@ -36,8 +38,11 @@ if (/Status: in progress\./u.test(opencodeSupport)) {
 }
 // Each client gets the same gate. A published support matrix is a claim about what SNACK reads,
 // and shipping one that still says its own validation is unfinished publishes the claim anyway.
-if (/^Status:(?![^\n]*\bcomplete\b)/mu.test(claudeSupport)) {
+if (supportMatrixIncomplete(claudeSupport)) {
   throw new Error("Release blocked: Claude Code support validation is incomplete.");
+}
+if (supportMatrixIncomplete(codexSupport)) {
+  throw new Error("Release blocked: Codex CLI support validation is incomplete.");
 }
 // From 0.9 the frozen contract is a release artifact of its own. A release that publishes schemas
 // without publishing what they promise is a freeze nobody outside the repository can rely on.

@@ -20,17 +20,19 @@ exception, and it only installs packages.
 
 ```bash
 npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # builds the SQLite driver; npm 12 skips it otherwise
-snack setup opencode    # or: snack setup claude
+snack setup opencode    # or: snack setup claude, snack setup codex
 snack status
 ```
 
 ```text
+$ snack status --source work
 work
-  viability  95-100%   risk low          evidence moderate
-  pressure   high      category typical  ▁▄▅▇█
-  drivers    prompts 100th, input_tokens 100th
-  method     bayesian-pressure-band@1
-  as of      40s ago · sync ok · period since 2026-01-02
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
@@ -41,28 +43,61 @@ is the answer; the second is the context that makes the answer honest.
 
 Here is what each piece means, no statistics required:
 
-| You see             | It means                                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------------ |
-| `95-100% viability` | A range, not a promise. Somewhere in there is the chance your next prompt completes.             |
-| `risk low`          | Read off the **bottom** of that range, never the middle. A wide range can never look confident.  |
-| `evidence moderate` | How much your own history actually backs this up. A fresh install says `very_low`, and means it. |
-| `pressure high`     | You, right now, compared to you on a normal day. Nothing to do with your provider's limits.      |
-| `prompts 100th`     | The percentile that is driving it — this is your busiest hour on record.                         |
-| `category typical`  | How big your next prompt looks next to your usual ones.                                          |
+| You see                                        | It means                                                                                                                            |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `96-100% chance it goes through`               | A range, not a promise. Somewhere in there is the chance your next prompt completes.                                                |
+| `risk low`                                     | Read off the **bottom** of that range, never the middle. A wide range can never look confident.                                     |
+| `evidence moderate`                            | How much your own history actually backs this up. A fresh install says `very_low`, and means it.                                    |
+| `pressure high`                                | You, right now, compared to you on a normal day. Nothing to do with your provider's limits.                                         |
+| `higher than every window in your own history` | Where this window ranks among your own — this is your busiest hour on record.                                                       |
+| `typical prompt`                               | How big your next prompt looks next to your usual ones.                                                                             |
+| `drivers`                                      | What is pushing the pressure up: here, how many prompts you sent and how much input they carried.                                   |
+| `as of`                                        | How old the newest usage is, whether the last sync worked, and when the current capacity period (this plan, on this account) began. |
+| `!`                                            | What SNACK cannot claim. They are on every panel; on a thin history the first one says the starting assumption still dominates.     |
+
+The method, and the evidence gate holding the level down, are one flag away. `--verbose` adds them
+to the same panel, and ranks each driver:
+
+```text
+$ snack status --source work --verbose
+  ...
+  drivers      prompt count higher than every window in your own history, input tokens higher than every window in your own history
+  gates        sample high · restrictions moderate (limiting) · relevance moderate (limiting) · completeness high
+  method       bayesian-pressure-band@1 · model stage5-prediction-v2
+  ...
+```
+
+Two gates hold this one at `moderate`: `restrictions`, because SNACK has not yet seen a refusal at
+this pressure, and `relevance`, because the estimate pools prompts of every size at this pressure
+rather than only prompts like yours. More prompts alone will not lift it. Plain `snack status`, with
+no `--source`, puts every source on one row so you can compare them.
 
 And `snack stats` shows you what your week actually looked like:
 
 ```text
-work: plan profile generic@1.0.0 (bundled, as of 2026-01-01).
-  pressure high (local baseline); trend rising over 4 windows against 14 baseline windows.
-  calibration: backtest brier 0.010 (sample 980, coverage 1.00) over 980 forecasts.
-  PT1H: 9 prompts; tokens in 22,620 / out 11,580; cost USD 0.24; duration p50 13.0s p90 44.0s.
-  P1D:  87 prompts; restrictions rate_limit 2; cost USD 1.99; effective sample 70.06 prompts.
-  P7D: 449 prompts; restrictions rate_limit 10; tokens in 909,266 / out 488,902; cost USD 10.06.
+$ snack stats
+work · anthropic max · generic@1.0.0 · pressure high, rising
+
+  WINDOW  PROMPTS  COUNTED    REFUSED     SET ASIDE  COST  TYPICAL  SLOWEST 10%
+  1h        28       28          —            0       —      25s        40s
+  5h        38       38          —            0       —      22s        38s
+  1d        41       41          —            0       —      23s        40s
+  7d        234      234    2 rate limit      0       —      25s        40s
+
+  WINDOW  INPUT  OUTPUT  REASONING  CACHE READ  CACHE WRITE
+  1h      3.23K  37.7K       —        1.83M        41.8K
+  5h      4.08K  53.5K       —        2.60M        67.1K
+  1d      4.49K  56.9K       —        2.76M        70.7K
+  7d      25.2K   316K       —        14.7M        466K
+
+  3 forecasts checked against what happened next
+  observed up to 2026-10-03T08:57:06.752Z
 ```
 
-449 prompts in seven days, ten times told no, ten dollars and six cents, and a median prompt that
-took twelve seconds. That is a week of your working life, measured — and it never left your laptop.
+234 prompts in seven days, twice told no, a typical prompt that took twenty-five seconds, and almost
+fifteen million tokens read back from cache. Cost reads `—` because Claude Code does not record it,
+and SNACK does not make one up. That is a week of your working life, measured — and it never left
+your laptop.
 
 ## The one thing SNACK refuses to do
 
@@ -77,31 +112,36 @@ So SNACK shows you what it can actually see: your own usage, an honest range, ho
 behind it, and which method produced it. When it knows little, it says so loudly, and a fresh
 install gets a wide range and `very_low` evidence rather than false comfort.
 
+One client does state a figure of its own. Codex CLI records, for each window it tracks, a fraction,
+the window's length and when it resets. SNACK quotes that as the client's statement — on a
+`reported` row beside the estimate, never inside it — and does not turn it into a claim about any
+capacity, including the one Codex is talking about.
+
 Nothing you write is stored. Not prompt text, not responses, not credentials, not even your project
 paths. That is not a policy note — it is a test that pushes canary strings through every command and
 fails the build if a single one shows up in any byte SNACK writes.
 
 ## The commands
 
-| Command                                       | What it does                                                                                                                                                       |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snack setup opencode` / `snack setup claude` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                          |
-| `snack status`                                | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method and the policy versions. |
-| `snack stats`                                 | What your usage really looks like over rolling horizons, and how well past forecasts scored.                                                                       |
-| `snack sync`                                  | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                           |
-| `snack export`                                | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                               |
-| `snack data purge`                            | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                  |
-| `snack config`                                | Reads and edits local configuration.                                                                                                                               |
-| `snack doctor`                                | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                       |
-| `snack update`                                | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                            |
+| Command                                     | What it does                                                                                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                          |
+| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method and the policy versions. |
+| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored.                                                                       |
+| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                           |
+| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                               |
+| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                  |
+| `snack config`                              | Reads and edits local configuration.                                                                                                                               |
+| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                       |
+| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                            |
 
 Every command takes `--json` and answers with one versioned document, so scripting it never means
 parsing prose. Every command is also in `man snack`, which ships in the package and is generated
 from the CLI's own flag surface — an undocumented flag fails the build rather than reaching you.
 
-Two clients can share one capacity source. If OpenCode and Claude Code bill against the same
-account, map them to the same alias and SNACK will treat their usage as the single pool it really
-is.
+Two clients can share one capacity source. If OpenCode, Claude Code or Codex CLI bill against the
+same account, map them to the same alias and SNACK will treat their usage as the single pool it
+really is.
 
 ---
 
@@ -272,13 +312,62 @@ snack setup opencode --non-interactive \
   features only. The text itself is never stored, and no option accepts it on the command line,
   where other processes could read it.
 
+`snack setup claude` and `snack setup codex` take the same flags without `--install-plugin`: both
+clients are read from the history they already write, and nothing is registered in either.
+
+## Codex CLI
+
+```bash
+snack setup codex --non-interactive --source work --provider openai --profile default --plan plus
+```
+
+SNACK looks in `$CODEX_HOME` when it is set — a relative value is resolved the way Codex resolves
+it, and setup records the resolved path — and in `~/.codex` otherwise. It reads
+`sessions/**/rollout-*.jsonl` and `archived_sessions/rollout-*.jsonl`, and nothing else in that
+directory. Setup checks the history's fingerprint before asking anything and exits `4` when there is
+no sessions directory.
+
+Each rollout line is projected onto an explicit field allowlist, and the rest is dropped unread:
+messages, reasoning, tool calls and their output, working directories, git metadata, account
+identifiers and error messages never leave the parser. `~/.codex/history.jsonl`, which holds Codex's
+raw prompt history, is never opened. Codex `0.145`–`0.147` and `0.159` write two different schema
+families, and a session started by one and resumed by the other holds both in one file; each turn is
+read by its own family. A refusal is observed from `codex_error_info` as well as from
+`rate_limit_reached_type`, because the one real refusal on record was written only in the first.
+
+The figure Codex states about its own windows is quoted on the `reported` row of `snack status`:
+
+```text
+$ snack status --source codex
+codex
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
+```
+
+Windows are named by their length, never by Codex's `primary`/`secondary` slot, which changed
+meaning between versions. A window whose reset has passed is not repeated. The row is not part of
+the `next prompt` interval, the evidence level or the usage pressure, and nothing in the forecast
+reads it. In `--json` it is the optional `reported_capacity` array on that source's report. It stays
+local in `1.3`: `export` does not include it, and `data purge` deletes it with the rest of the
+scope. `snack doctor` warns about what a Codex history holds that SNACK deliberately does not count
+— forked subagents from Codex `0.147` or earlier, compressed `rollout-*.jsonl.zst` files, and stated
+figures that could not be quoted.
+
 ## Supported clients
 
 Support is decided by a structural fingerprint, not by a version string, and an unrecognized shape
 refuses rather than guesses. The published matrices are
-[OpenCode](https://github.com/Duck1201/snack/blob/main/docs/opencode-support.md) and
-[Claude Code](https://github.com/Duck1201/snack/blob/main/docs/claude-support.md); the promise is
-the newest validated schema family plus one previous, per client.
+[OpenCode](https://github.com/Duck1201/snack/blob/main/docs/opencode-support.md),
+[Claude Code](https://github.com/Duck1201/snack/blob/main/docs/claude-support.md) and
+[Codex CLI](https://github.com/Duck1201/snack/blob/main/docs/codex-support.md); the promise is the
+newest validated schema family plus one previous, per client.
 
 Requires Node.js 24 on Linux, macOS, or Windows through WSL2.
 

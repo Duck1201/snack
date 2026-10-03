@@ -38,6 +38,13 @@ On the Claude adapter this found three defects a green `npm run check` could not
 
 Restrictions went 13/17 → 17/17 and prompts 374 → 423. Nothing in the fixture suite moved.
 
+On the Codex adapter the same count is per class of evidence the rollouts carry: prompts, usage
+slices, restrictions (count `task_complete.error.codex_error_info` as well as
+`rate_limit_reached_type` — the first real refusal came only through the former), stated figures,
+and every skip `doctor` reports (legacy forks, unlinked subagent turns, compressed rollouts). The
+first real read is recorded in `docs/codex-support.md`; count only inside `sessions/` and
+`archived_sessions/`, never `history.jsonl` beside them.
+
 Run the same reconciliation once more at the end: the number is the check.
 
 ## Gotchas
