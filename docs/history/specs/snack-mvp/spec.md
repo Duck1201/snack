@@ -64,7 +64,7 @@ four smaller ones. Three blocked the MVP:
 
 ## Open items
 
-- `.scratch/` holds no issue files for this stage: every finding from the independent passes was
+- This directory holds no issue files for this stage: every finding from the independent passes was
   fixed in the same session it was reported, so none outlived triage.
 - `snack stats` answers a dense hundred-thousand-prompt week in 3.4 s. That is inside the memory
   budget and has no stated time budget, but it is the slowest interactive path in the MVP and the

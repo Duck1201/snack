@@ -12,7 +12,7 @@ mixing it with the part that does not made both harder to trust.
 
 **Subject:** the published `1.0.0`, installed from npm. Not a workspace build and not a staging tarball — the review exists to exercise what a user actually receives, and the artifact that traverses the npm publish path is the one this project has never observed under real use.
 
-**Outcome:** twelve findings, three of them P1, shipped as [`1.0.1`](../release/identity.md). Full record in `.scratch/end-to-end-review/spec.md`.
+**Outcome:** twelve findings, three of them P1, shipped as [`1.0.1`](../release/identity.md). Full record in [`specs/end-to-end-review/spec.md`](specs/end-to-end-review/spec.md).
 
 The phase paid for itself in the first hour, and what it proved is worth stating plainly: **`npm run check` was green the entire time.** Every defect it found was invisible to a suite of 413 tests, and each one names its own blind spot — fixtures with one provider per source where real histories have five; fixtures small enough that reading all of them costs nothing; an injected prompt port that never sees an already-closed stream; a constant naming another package's version with nothing tying the two together; and a host test asserting that an event was written rather than where it landed.
 
@@ -28,13 +28,13 @@ What held: the content-free invariant, swept with 1186 canaries built from the r
 
 **Purpose:** close the P2/P3 findings Phase 1 left open. Compatible defect fixes, which is what a patch is for; nothing here adds a command, a flag, or a field.
 
-- **an OpenCode prompt with no assistant reply is emitted, not dropped** ([finding 01](../../.scratch/end-to-end-review/issues/01-opencode-drops-unanswered-prompts.md)). Eleven of 194 real prompts vanished without reaching any counter, so a source could not be reconciled against its own history. `docs/specification.md` §4.3 already defines the state they are in — completion `unknown`, outcome `excluded` — and the adapter simply never produced it;
-- **a provider mapped after the first sync attributes its backlog without `--full`, and `doctor` names the providers it is waiting on** ([02](../../.scratch/end-to-end-review/issues/02-late-provider-mapping-recovers-nothing.md), [03](../../.scratch/end-to-end-review/issues/03-pending-mapping-warning-is-a-dead-end.md)). The pending rows are already retained; nothing replays them, and nothing says which providers they belong to or what to do;
-- **the Claude fingerprint check stops re-reading the whole history on every command** ([06](../../.scratch/end-to-end-review/issues/06-fingerprint-check-reads-the-whole-history-every-command.md)). A no-op `sync` reads and parses 222 MB to sample 200 records per file: 238 MB of process RSS, O(total history) where the cursor was designed to make it O(new data).
+- **an OpenCode prompt with no assistant reply is emitted, not dropped** ([finding 01](specs/end-to-end-review/issues/01-opencode-drops-unanswered-prompts.md)). Eleven of 194 real prompts vanished without reaching any counter, so a source could not be reconciled against its own history. `docs/specification.md` §4.3 already defines the state they are in — completion `unknown`, outcome `excluded` — and the adapter simply never produced it;
+- **a provider mapped after the first sync attributes its backlog without `--full`, and `doctor` names the providers it is waiting on** ([02](specs/end-to-end-review/issues/02-late-provider-mapping-recovers-nothing.md), [03](specs/end-to-end-review/issues/03-pending-mapping-warning-is-a-dead-end.md)). The pending rows are already retained; nothing replays them, and nothing says which providers they belong to or what to do;
+- **the Claude fingerprint check stops re-reading the whole history on every command** ([06](specs/end-to-end-review/issues/06-fingerprint-check-reads-the-whole-history-every-command.md)). A no-op `sync` reads and parses 222 MB to sample 200 records per file: 238 MB of process RSS, O(total history) where the cursor was designed to make it O(new data).
 
-- **the steady-state memory budget names its unit** ([07](../../.scratch/end-to-end-review/issues/07-steady-state-memory-budget-does-not-name-its-unit.md)). `1.0.0` passed a heap cap while peak process RSS over a real history was 238 MB, so the product's own budget had two answers. Both are now stated, and after the fingerprint fix both pass.
+- **the steady-state memory budget names its unit** ([07](specs/end-to-end-review/issues/07-steady-state-memory-budget-does-not-name-its-unit.md)). `1.0.0` passed a heap cap while peak process RSS over a real history was 238 MB, so the product's own budget had two answers. Both are now stated, and after the fingerprint fix both pass.
 
-[Finding 08](../../.scratch/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md) was scoped into this release and then **retracted**: `setup` cancels cleanly on `Ctrl+D` and refuses without a terminal, and the reported hang was the review's own harness tearing down a pty while the command was still working. The fix was written and reverted rather than shipped, because a refactor justified by a defect that does not exist is not what a patch is for. The finding is kept, marked invalid, with the analysis — a red result from a harness is not evidence until the harness is shown able to tell a wait from an exit, which is the same rule this project already applies to a failing test.
+[Finding 08](specs/end-to-end-review/issues/08-setup-hangs-when-stdin-is-already-closed.md) was scoped into this release and then **retracted**: `setup` cancels cleanly on `Ctrl+D` and refuses without a terminal, and the reported hang was the review's own harness tearing down a pty while the command was still working. The fix was written and reverted rather than shipped, because a refactor justified by a defect that does not exist is not what a patch is for. The finding is kept, marked invalid, with the analysis — a red result from a harness is not evidence until the harness is shown able to tell a wait from an exit, which is the same rule this project already applies to a failing test.
 
 **Exit, met:** each fix carries a test that fails against `1.0.1`; a source reconciles against its raw history exactly; and a no-op `sync` over a real history does not scale with what the cursor already covers.
 
@@ -100,7 +100,7 @@ The panel also gained a `drivers` row the design did not have: specification §1
 pressure contributors in the default human detail, and a forecast whose drivers are only in `--json`
 is two contracts.
 
-[Finding 12](../../.scratch/end-to-end-review/issues/12-two-setups-in-the-same-millisecond-are-an-internal-error.md)
+[Finding 12](specs/end-to-end-review/issues/12-two-setups-in-the-same-millisecond-are-an-internal-error.md)
 was scoped here and deferred to `1.1.1` once the rebuild was priced: `capacity_period` has the
 observations table as a child, so dropping its redundant constraint copies the user's whole history
 out and back, and no pragma that would avoid it survives the migration runner's transaction.
@@ -111,7 +111,7 @@ out and back, and no pragma that would avoid it survives the migration runner's 
 workaround, both were scoped into `1.1.0` and neither shipped there — one by choice, one after being
 priced. Compatible defect fixes, which is what a patch is for; nothing here adds a command or a flag.
 
-**[Finding 04](../../.scratch/end-to-end-review/issues/04-applied-setup-reports-under-a-dry-run-key.md) — an applied `setup` reports under a `dry_run` key.**
+**[Finding 04](specs/end-to-end-review/issues/04-applied-setup-reports-under-a-dry-run-key.md) — an applied `setup` reports under a `dry_run` key.**
 `setup opencode --json` without `--dry-run` answers `"dry_run": { "observations": 183 }`. The key
 names the opposite of what happened, and `applied` disappears rather than becoming `true`, so a
 consumer cannot tell the two apart from the payload alone.
@@ -123,7 +123,7 @@ and renaming it needs a major. What lands in a minor or a patch is additive — 
 unrecorded wart. Test seam: `packages/cli/test/contracts.test.js`, asserting `applied` is present
 and `true` on an applied setup.
 
-**[Finding 12](../../.scratch/end-to-end-review/issues/12-two-setups-in-the-same-millisecond-are-an-internal-error.md) — two `setup` runs in the same millisecond raise `internal_error`.**
+**[Finding 12](specs/end-to-end-review/issues/12-two-setups-in-the-same-millisecond-are-an-internal-error.md) — two `setup` runs in the same millisecond raise `internal_error`.**
 `capacity_period` is `UNIQUE (source_alias, started_at)` and a rotation inserts the new period at the
 same instant it just wrote as the old one's `ended_at`, so the two collide whenever the clock does
 not move. It surfaces as exit `10`. A human cannot type two commands a millisecond apart; a script
@@ -143,7 +143,7 @@ So the choice is open and belongs to whoever picks this up:
 
 - **rebuild the table.** Its one real benefit is that dropping the constraint makes rotation
   reachable under a frozen clock, which is what hid
-  [finding 05](../../.scratch/end-to-end-review/issues/05-second-setup-discards-the-forecast-evidence.md)
+  [finding 05](specs/end-to-end-review/issues/05-second-setup-discards-the-forecast-evidence.md)
   — every command test injects a frozen `now`, so no test could reach the rotation path without
   knowing to advance it, and none did;
 - **classify the collision** as a config-level error with an actionable message instead of
@@ -197,7 +197,7 @@ once. Figures in [docs/release/performance.md](../release/performance.md).
 **The alternative was not taken, and the reason it existed is now covered.** Classifying the
 collision as a config-level error would have fixed the exit code and left the testing trap: a frozen
 clock could still not reach the rotation path, which is what hid
-[finding 05](../../.scratch/end-to-end-review/issues/05-second-setup-discards-the-forecast-evidence.md).
+[finding 05](specs/end-to-end-review/issues/05-second-setup-discards-the-forecast-evidence.md).
 The rebuild removes the trap, and the regression test is precisely the one nothing could write
 before — a rotation with the clock held still.
 

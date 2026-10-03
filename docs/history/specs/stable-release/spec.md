@@ -2,7 +2,7 @@
 
 Status: **complete**. `@snack-ai/cli@1.0.0` and `@snack-ai/opencode@1.0.0` published from `6a59791`,
 tagged `v1.0.0`, `latest` and `stable` both resolving to `1.0.0`. No release candidate was
-published. The record is in [docs/release/identity.md](../../docs/release/identity.md).
+published. The record is in [docs/release/identity.md](../../../release/identity.md).
 
 Product contracts live in `docs/compatibility.md`, `docs/specification.md` and
 `docs/architecture.md`; this file records what was decided while building it and what remains.

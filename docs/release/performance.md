@@ -199,7 +199,7 @@ contention is a measurement of the contention.
 `1.0.1` passed the gate as written — a `--max-old-space-size=150` heap cap — while peak process RSS
 over a real 222 MB Claude history was 238 MB. The two readings disagreed about whether the product
 met its own stated budget, which is what
-[finding 07](../../.scratch/end-to-end-review/issues/07-steady-state-memory-budget-does-not-name-its-unit.md)
+[finding 07](../history/specs/end-to-end-review/issues/07-steady-state-memory-budget-does-not-name-its-unit.md)
 was about.
 
 They no longer disagree. Measured over the same real history, with nothing to synchronise:
@@ -246,7 +246,7 @@ fixture: `status --no-sync` p95 190 ms over 603 real prompts across two capacity
 the shape the widened query was the reason to check.
 
 Phase 1's own measurements against the **published `1.0.0`** and a real 222 MB Claude history are
-recorded separately in `.scratch/end-to-end-review/spec.md`, along with two findings this file
+recorded separately in `docs/history/specs/end-to-end-review/spec.md`, along with two findings this file
 should eventually answer: the steady-state budget does not name its unit, and a no-op `sync` costs
 238 MB of process RSS because the Claude fingerprint check re-reads the whole history.
 

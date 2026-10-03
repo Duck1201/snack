@@ -5,7 +5,7 @@ and four more as `1.0.2`, published from `45a7a95` by run
 [30715693993](https://github.com/Duck1201/snack/actions/runs/30715693993); `latest` and `stable`
 both resolve to `1.0.2`. Every fix was written test-first at an agreed seam, then re-verified
 against the **published** artifact rather than the tree — the record is in
-[docs/release/identity.md](../../docs/release/identity.md).
+[docs/release/identity.md](../../../release/identity.md).
 
 |           |                                                  |
 | --------- | ------------------------------------------------ |
