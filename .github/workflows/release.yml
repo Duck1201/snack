@@ -224,8 +224,8 @@ jobs:
       # precondition (the confirmation, CI, the gate, both packages readable, the registry digests),
       # and when this run did not publish, the registry must name this commit as the one it was
       # published from, so a release is never created for a version this commit did not cut, and
-      # the channel tag must name this version, so a release is never marked for a channel that
-      # serves another one.
+      # each package's channel tag must name the version this commit carries, so a release is never
+      # marked for a channel that serves another one.
       - name: Tag the published commit and create its GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -245,12 +245,24 @@ jobs:
             fi
             # The verify step checks the channel tag only for a package this run published, so a
             # retry would otherwise mark the release Latest, under "npm ${DIST_TAG}", with nothing
-            # having checked that the channel names this version.
-            channel="$(npm view @snack-ai/cli "dist-tags.${DIST_TAG}" 2>/dev/null || true)"
-            if [ "${channel}" != "${version}" ]; then
-              echo "::error::@snack-ai/cli@${DIST_TAG} resolves to '${channel}', not ${version}; this run will not create its release"
-              exit 1
+            # having checked that the channel names this version. Both packages: the notes cover the
+            # plugin version this commit carries whenever its CHANGELOG has that section, under the
+            # same channel. A release that did not move the plugin passes, because the channel
+            # still names the version this commit carries -- the check is that the channel resolves
+            # to this commit's version, not that this run moved it.
+            channels=("@snack-ai/cli:${version}")
+            if grep -qxF "## ${plugin_version}" packages/opencode/CHANGELOG.md; then
+              channels+=("@snack-ai/opencode:${plugin_version}")
             fi
+            for entry in "${channels[@]}"; do
+              name="${entry%%:*}"
+              expected="${entry#*:}"
+              channel="$(npm view "${name}" "dist-tags.${DIST_TAG}" 2>/dev/null || true)"
+              if [ "${channel}" != "${expected}" ]; then
+                echo "::error::${name}@${DIST_TAG} resolves to '${channel}', not ${expected}; this run will not create its release"
+                exit 1
+              fi
+            done
             echo "Recording v${version}, published from ${GITHUB_SHA} by an earlier run." >> "$GITHUB_STEP_SUMMARY"
           fi
           notes="${RUNNER_TEMP}/notes.md"

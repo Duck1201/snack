@@ -31,15 +31,20 @@ async function stepScript(name) {
 
 /**
  * Run the tag step with `gh` and `npm` stubbed: no GitHub release exists yet, the registry says the
- * version was published from this commit, and `dist-tags.<tag>` resolves to `channel`.
+ * version was published from this commit, and `dist-tags.<tag>` resolves to `channel` for the CLI
+ * and to `pluginChannel` for the plugin -- by default the plugin version this commit carries, which
+ * is what a release that did not move the plugin leaves on the channel.
  *
- * @param {{published: string, channel: string}} state
+ * @param {{published: string, channel: string, pluginChannel?: string}} state
  */
 async function tagStep(state) {
   const directory = await mkdtemp(join(tmpdir(), "snack-release-workflow-"));
   try {
     const version = JSON.parse(
       await readFile(join(root, "packages/cli/package.json"), "utf8"),
+    ).version;
+    const pluginVersion = JSON.parse(
+      await readFile(join(root, "packages/opencode/package.json"), "utf8"),
     ).version;
     const calls = join(directory, "calls");
     await writeFile(calls, "");
@@ -55,7 +60,8 @@ async function tagStep(state) {
           `echo "npm $*" >> "${calls}"`,
           `case "$*" in`,
           `  *gitHead*) echo "deadbeef" ;;`,
-          `  *dist-tags.*) echo "${state.channel}" ;;`,
+          `  *@snack-ai/opencode*dist-tags.*) echo "${state.pluginChannel ?? pluginVersion}" ;;`,
+          `  *@snack-ai/cli*dist-tags.*) echo "${state.channel}" ;;`,
           `  *) exit 1 ;;`,
           `esac`,
         ].join("\n"),
@@ -63,7 +69,9 @@ async function tagStep(state) {
     );
     await chmod(join(directory, "gh"), 0o755);
     await chmod(join(directory, "npm"), 0o755);
-    const result = spawnSync("bash", ["-e", "-c", await stepScript(TAG_STEP)], {
+    // The runner's own invocation for a `run:` block: `bash --noprofile --norc -eo pipefail {0}`.
+    const script = await stepScript(TAG_STEP);
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
       cwd: root,
       encoding: "utf8",
       env: {
@@ -79,7 +87,7 @@ async function tagStep(state) {
         RUNNER_TEMP: directory,
       },
     });
-    return { ...result, version, calls: await readFile(calls, "utf8") };
+    return { ...result, version, pluginVersion, calls: await readFile(calls, "utf8") };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -102,4 +110,21 @@ test("a run that did not publish records the release once the channel names this
   const result = await tagStep({ published: "", channel: probe.version });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.calls, new RegExp(`gh release create v${probe.version} `, "u"));
+});
+
+test("a run that did not publish creates no release while the plugin's channel names another version", async () => {
+  // The notes cover the plugin version this commit carries, under the same "npm <tag>", so its
+  // channel must serve it too. A release that did not move the plugin passes: the channel still
+  // names the version this commit carries (the test above).
+  const probe = await tagStep({ published: "", channel: "" });
+  const result = await tagStep({ published: "", channel: probe.version, pluginChannel: "0.0.1" });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(
+    result.stdout + result.stderr,
+    new RegExp(
+      `@snack-ai/opencode@latest resolves to '0\\.0\\.1', not ${probe.pluginVersion.replaceAll(".", "\\.")}`,
+      "u",
+    ),
+  );
+  assert.doesNotMatch(result.calls, /gh release create/u);
 });

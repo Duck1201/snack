@@ -49,4 +49,5 @@ Also in this release:
   been applied … apply them".
 - `npm run upgrade:smoke` now upgrades a database written by the published `1.3.0` as well.
 - The release workflow retries a registry pack that fails on propagation and, when retried, records
-  a release a previous run published, only once the channel's dist-tag names the version.
+  a release a previous run published, only once each package's channel dist-tag names the version
+  this commit carries — the plugin's included, which a release that did not move it still passes.

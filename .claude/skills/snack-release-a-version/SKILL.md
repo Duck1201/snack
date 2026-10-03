@@ -90,9 +90,10 @@ refusing:
      restart with a new patch rather than patching in place;
    - `::error::… resolves to '…', not <version>` is a dist-tag mismatch, not propagation: the
      version is on the registry but the channel names another one (moved by hand, or another publish
-     took it). Read `npm view @snack-ai/cli dist-tags`, move the tag yourself if this version should
-     hold it, then rerun; a retry that did not publish refuses to create the release until the
-     channel names this version;
+     took it). Read `npm view @snack-ai/cli dist-tags` (and `@snack-ai/opencode`'s, when the error
+     names it), move the tag yourself if this version should hold it, then rerun; a retry that did
+     not publish refuses to create the release until each package's channel names the version the
+     commit carries — an unmoved plugin's channel already does;
    - a verify step failing with anything else — `::error::registry propagation`, a version not yet
      readable, an `npm pack` error — is registry propagation, not a defect. Rerun the failed jobs
      with `gh run rerun <id> --failed`, which keeps the run's inputs; dispatching again means
