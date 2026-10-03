@@ -17,7 +17,6 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "pack:check": "npm pack --workspace @snack-ai/cli --dry-run",
     "pack:smoke": "node scripts/package-smoke.mjs",
     "release:check": "node scripts/check-release-readiness.mjs",
     "release:evidence": "node scripts/release-evidence.mjs",
