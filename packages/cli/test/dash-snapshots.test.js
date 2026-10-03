@@ -141,7 +141,7 @@ function delivered(databaseFile) {
   );
 }
 
-test("eight hours with no new observation: 28,800 frames, 480 syncs, a snapshot only when the print moved", async () => {
+test("eight hours with no new observation: 28,800 frames, 480 syncs, a snapshot only when the print moved", async (t) => {
   const fixture = await makeRunFixture("snack-dash-eight-hours-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   const setup = ["setup", "opencode", "--non-interactive", "--source", "work"];
@@ -199,6 +199,9 @@ test("eight hours with no new observation: 28,800 frames, 480 syncs, a snapshot 
   assert.equal(work.length, 481);
   assert.equal(snapshots.length, changes(work));
   assert.ok(snapshots.length <= 2, String(snapshots.length));
+  t.diagnostic(
+    `eight hours: ${frames - startFrames} frames, ${sync.started} syncs, ${watch.seen.recomputes} recomputes, ${snapshots.length} snapshots, ${changes(work)} reference key changes, lock held ${watch.seen.lockHeld} times`,
+  );
 });
 
 /** A seeded source and a sync that plants the scripted prompts due by each sync's instant. */
@@ -217,7 +220,7 @@ async function scripted() {
   return { source, start };
 }
 
-test("eight hours with 40 new prompts: a snapshot exactly when what status would print changed", async () => {
+test("eight hours with 40 new prompts: a snapshot exactly when what status would print changed", async (t) => {
   const { source, start } = await scripted();
   // Forty prompts at scripted instants: some restricted, some in a burst that moves the band.
   /** @type {{at: Date, restricted?: boolean}[]} */
@@ -250,6 +253,9 @@ test("eight hours with 40 new prompts: a snapshot exactly when what status would
   assert.equal(snapshots.length, changes(keys));
   // Non-vacuity: the evidence moved what is printed more than once.
   assert.ok(snapshots.length > 2, String(snapshots.length));
+  t.diagnostic(
+    `forty prompts: ${keys.length} recomputes, ${snapshots.length} snapshots, ${changes(keys)} reference key changes`,
+  );
   // No two consecutive snapshots print the same thing.
   const printed = snapshots.map((row) => {
     const shown = shownInterval({ lower: Number(row.lower), upper: Number(row.upper) });
