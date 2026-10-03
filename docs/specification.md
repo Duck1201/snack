@@ -45,7 +45,7 @@ The primary user is an individual developer who operates AI coding clients local
 
 1. `snack status` runs an incremental synchronization unless `--no-sync` is supplied.
 2. With one source, status shows its detailed assessment.
-3. With multiple sources and no selection, status shows a concise table for all sources.
+3. With multiple sources and no selection, status shows a concise table for all sources; `--verbose`, and from 1.4 `--sequence <n>`, take the detailed shape for each source instead.
 4. `--source <alias>` selects a detailed source assessment.
 5. `--prompt-file <path>` or `--prompt-file -` enables prospective analysis for the selected source.
 6. The forecast displays its assumptions, interval, risk, evidence, method, pressure, freshness, and caveats.
