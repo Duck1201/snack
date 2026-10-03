@@ -18,11 +18,7 @@ import {
   writePrivateAtomic,
 } from "./config.js";
 import {
-  ANALYTICS_POLICY,
-  TREND_POLICY,
   compareOutcomeGroups,
-  computeUsagePressure,
-  computeUsageTrend,
   horizonWindow,
   parseHorizon,
   summarizeUsageProfile,
@@ -61,7 +57,7 @@ import {
   scoreVariant,
   summarizeCalibration,
 } from "./calibration.js";
-import { REPORTED_CAPACITY_POLICY, walkStatedHistory } from "./reported-capacity.js";
+import { REPORTED_CAPACITY_POLICY } from "./reported-capacity.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { renderStats, renderStatus, renderStatusTable } from "./render.js";
@@ -72,22 +68,16 @@ import {
   removeAcknowledgedSegments,
   removeFullyConsumedSegments,
 } from "./spool.js";
+import { PREDICTION_POLICY, SEQUENCE_MAX_LENGTH, WEIGHTING_VARIANTS } from "./prediction.js";
+import { analyzePromptText, categorizePromptSize } from "./prompt-features.js";
+import {} from "./status.js";
 import {
-  PREDICTION_POLICY,
-  SEQUENCE_MAX_LENGTH,
-  WEIGHTING_VARIANTS,
-  classifyIngestionCompleteness,
-} from "./prediction.js";
-import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
-import {
-  attachShadow,
-  attachShadows,
-  createShadowStatus,
-  createSourceStatus,
-  createWeightingShadows,
-  describeReportedCapacity,
-  prepareForecastInput,
-} from "./status.js";
+  buildSourceReports,
+  computeSourcePressure,
+  confirmPredictionDelivery,
+  recategorizeSource,
+  restateSource,
+} from "./source-report.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
   assertReadableStorage,
@@ -105,24 +95,12 @@ import {
   readShadowForecasts,
   readPredictionAttemptCount,
   readPredictionSnapshots,
-  recordPredictionAttempt,
-  recordPredictionDelivery,
   readUsageWindowRows,
   readSpoolCursors,
-  readSpoolIssueCount,
-  readPendingMappingCount,
   purgeScope,
-  readReportedCapacity,
-  readSourceSummary,
-  readStatedTimeline,
-  readStatedBandRows,
-  readStatedBandProjection,
-  writeStatedBands,
-  hasForeignPromptSince,
   rollbackDatabaseInitialization,
   storeObservations,
   withStorageOperationLock,
-  writeSizeCategories,
 } from "./storage.js";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -741,7 +719,7 @@ export async function run(argv, options = {}) {
         commandOptions.sequence === undefined
           ? undefined
           : parseSequenceLength(commandOptions.sequence);
-      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>, shadow?: import("./status.js").ShadowView, shadows: (import("./status.js").ShadowView | import("./status.js").WeightingShadowView)[]})[]} */
+      /** @type {import("./source-report.js").SourceReport[]} */
       const statuses = [];
       /** @type {number[]} */
       const attemptIds = [];
@@ -772,9 +750,14 @@ export async function run(argv, options = {}) {
         } else {
           await assertReadableStorage(paths.databaseFile);
         }
-        for (const source of selected) {
-          let synchronization = { performed: false, status: "not_requested" };
-          if (commandOptions.sync !== false) {
+        const built = await buildSourceReports({
+          databaseFile: paths.databaseFile,
+          config: current,
+          selected,
+          inScope,
+          now,
+          synchronize: async (source) => {
+            if (commandOptions.sync === false) return { performed: false, status: "not_requested" };
             try {
               /** @type {Awaited<ReturnType<typeof synchronizeSource>>} */
               const syncResults = [];
@@ -791,145 +774,35 @@ export async function run(argv, options = {}) {
                   })),
                 );
               }
-              synchronization = {
+              return {
                 performed: true,
                 status: syncResults.some((result) => result.failed > 0) ? "failed" : "ok",
               };
             } catch {
-              synchronization = { performed: true, status: "failed" };
+              return { performed: true, status: "failed" };
             }
-          }
-          // Absent unless a Codex installation feeds this capacity source; a source no Codex
-          // installation feeds never takes the branches below, and its report is the 1.4 one.
-          const quotesCodex = inScope.some(
-            (entry) => entry.alias === source.alias && isCodexSource(entry),
-          );
-          if (synchronization.performed) {
-            recategorizeSource(paths.databaseFile, source.alias);
-            if (quotesCodex) {
-              restateSource(paths.databaseFile, source.alias);
-            }
-            linkPrimaryEvaluations(paths.databaseFile, source.alias, "stage5-evaluation-v1");
-          }
-          const summary = readSourceSummary(paths.databaseFile, source.alias);
-          const { profile: planProfile, warnings } = resolvePlanProfile(source);
-          statusWarnings.push(...warnings);
-          const pressure = computeSourcePressure({
-            databaseFile: paths.databaseFile,
-            source,
-            planProfile,
-            horizon: primaryHorizon(current),
-            now,
-            // The usage-pressure sparkline is drawn from these window scores. They reach the
-            // `--json` payload too, in the `pressure.trend` slot `status.schema.json` has declared
-            // since the 0.9 freeze -- see the amended 1.1.0 exit criterion in PLAN.md.
-            includeTrend: true,
-          });
-          /** @type {{category: string, prospective: object} | null} */
-          let prospective = null;
-          if (typeof commandOptions.promptFile === "string") {
-            try {
-              prospective = await analyzeProspectivePrompt({
-                promptFile: commandOptions.promptFile,
-                stdin,
-                databaseFile: paths.databaseFile,
-                alias: source.alias,
-              });
-            } catch {
-              // The text is discarded either way; a missing or unreadable file must not
-              // cost the user their forecast, and no part of the error is reported.
-              statusWarnings.push({
-                code: "prospective_analysis_failed",
-                message: "The prompt could not be analyzed; assuming a typical prompt.",
-              });
-            }
-          }
-          const outcomes = readOutcomeRows(paths.databaseFile, source.alias, {
-            limit: PREDICTION_POLICY.evidence_window_prompts,
-          });
-          const history = {
-            outcomes,
-            windowSeconds: parseHorizon(primaryHorizon(current)),
-            completeness: classifyIngestionCompleteness({
-              synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
-              issues: readSpoolIssueCount(paths.databaseFile, source.alias),
-              pendingMappings: readPendingMappingCount(paths.databaseFile, source),
-              pendingSpoolObservations: readPendingSpoolObservations(paths.databaseFile, source)
-                .length,
-            }),
-            ...(prospective
-              ? { category: prospective.category, prospective: prospective.prospective }
-              : {}),
-          };
-          // Prepared once: the answer and every weighting variant read this very input, so the
-          // outcomes are banded once and a variant can differ from the answer only by its weights.
-          const prepared = prepareForecastInput(source, summary, now, pressure, history);
-          const sourceStatus = createSourceStatus(
-            source,
-            summary,
-            now,
-            synchronization,
-            pressure,
-            history,
-            sequenceLength === undefined ? { prepared } : { sequenceLength, prepared },
-          );
-          // The weighting variants, in shadow on every source: computed beside the answer from the
-          // same prepared input, recorded with its attempt, and never the answer (1.6.0).
-          const weighting = createWeightingShadows(
-            prepared,
-            options.weightingVariants ?? WEIGHTING_VARIANTS,
-          );
-          // Attached after the forecast is built, and beside it: what Codex states about its own
-          // windows is quoted, never an input to the interval, the risk, the evidence or pressure
-          // (ADR-0007).
-          /** @type {import("./storage.js").PredictionShadowRow | undefined} */
-          let shadowRow;
-          if (quotesCodex) {
-            const latest = readReportedCapacity(paths.databaseFile, source.alias);
-            // The `reported-capacity` method, in shadow: computed and recorded beside the
-            // baseline, never the answer (ADR-0007, amended 1.5.0). It reads the same evidence
-            // window the baseline did and none of what the baseline produced.
-            const shadow = createShadowStatus({
-              now,
-              latest,
-              periodStart: summary.active_period_floor,
-              foreignPromptAfter: (installationId, since) =>
-                hasForeignPromptSince(paths.databaseFile, source.alias, installationId, since),
-              outcomes,
-              expectedCategory: sourceStatus.expected_prompt_category,
-              prior: {
-                strength: planProfile.prior_strength,
-                viability: planProfile.prior_viability,
-              },
-              dataCompleteness: sourceStatus.completeness.level,
-            });
-            shadowRow = shadow.row;
-            statuses.push(
-              attachShadows(
-                attachShadow(sourceStatus, describeReportedCapacity(latest, now), shadow.view),
-                weighting.views,
-              ),
-            );
-          } else {
-            statuses.push(attachShadows(sourceStatus, weighting.views));
-          }
-          if (summary.active_period_id !== null) {
-            attemptIds.push(
-              recordPredictionAttempt(
-                paths.databaseFile,
-                // The baseline's forecast: the answer the user is shown. The shadow never is.
-                toPredictionAttempt(source.alias, summary.active_period_id, sourceStatus, now),
-                // The sequence the same invocation answered rides with its attempt, in its own
-                // table: a `prediction_attempt` row is scored against one prompt, and a sequence
-                // scored that way would corrupt the live calibration stream (ADR-0008).
-                sourceStatus.sequence === undefined
-                  ? undefined
-                  : toPredictionSequence(sourceStatus),
-                shadowRow,
-                weighting.rows,
-              ),
-            );
-          }
+          },
+          ...(typeof commandOptions.promptFile === "string"
+            ? {
+                prospective: (/** @type {string} */ alias) =>
+                  analyzeProspectivePrompt({
+                    promptFile: commandOptions.promptFile,
+                    stdin,
+                    databaseFile: paths.databaseFile,
+                    alias,
+                  }),
+              }
+            : {}),
+          ...(sequenceLength === undefined ? {} : { sequenceLength }),
+          ...(options.weightingVariants === undefined
+            ? {}
+            : { weightingVariants: options.weightingVariants }),
+          record: true,
+        });
+        statusWarnings.push(...built.warnings);
+        for (const source of built.sources) {
+          statuses.push(source.report);
+          if (source.attemptId !== null) attemptIds.push(source.attemptId);
         }
         await removeConsumedPendingSegments(paths, configuredSources);
       });
@@ -2558,80 +2431,6 @@ function byCapacitySource(sources) {
  */
 
 /**
- * Shape a status result as the immutable attempt row that records it.
- *
- * Only approved aggregates travel: the pressure contributors keep their dimension and
- * numbers, never anything derived from prompt content.
- *
- * @param {string} alias
- * @param {number} capacityPeriodId
- * @param {ReturnType<typeof createSourceStatus>} status
- * @param {Date} now
- * @returns {Record<string, unknown>}
- */
-function toPredictionAttempt(alias, capacityPeriodId, status, now) {
-  return {
-    source_alias: alias,
-    capacity_period_id: capacityPeriodId,
-    generated_at: now.toISOString(),
-    method_id: status.method.id,
-    method_version: status.method.version,
-    model_policy_version: status.model_policy_version,
-    risk_policy_version: status.risk.policy_version,
-    evidence_policy_version: status.evidence.policy_version,
-    weight_policy_version: status.pressure.policy_version,
-    analytics_policy_version: status.pressure.policy_version,
-    category_policy_version:
-      /** @type {{policy_version?: string} | null} */ (status.prospective)?.policy_version ?? null,
-    lower: status.viability.lower,
-    point: status.viability.point,
-    upper: status.viability.upper,
-    coverage_target: status.viability.coverage_target,
-    risk_label: status.risk.label,
-    evidence_level: status.evidence.level,
-    expected_size_category: status.expected_prompt_category,
-    backoff_level: status.contributors.backoff_level,
-    pressure_band: status.pressure.band,
-    pressure_score: /** @type {{score?: number | null}} */ (status.pressure).score ?? null,
-    pressure_contributors_json: JSON.stringify(
-      /** @type {{contributors?: unknown[]}} */ (status.pressure).contributors ?? [],
-    ),
-    plan_profile_id: status.source.plan_profile.id,
-    plan_profile_version: status.source.plan_profile.version,
-    data_as_of: status.freshness.as_of,
-    completeness: status.completeness.level,
-  };
-}
-
-/**
- * Shape a status result's sequence answer as the row recorded beside its attempt.
- *
- * The posterior is stored because the parent attempt does not carry it, and a later calibration
- * must be able to reproduce the answer without recalculating the past.
- *
- * @param {ReturnType<typeof createSourceStatus>} status
- * @returns {import("./storage.js").PredictionSequenceRow}
- */
-function toPredictionSequence(status) {
-  const sequence = /** @type {import("./prediction.js").SequenceAssessment} */ (status.sequence);
-  return {
-    length: sequence.length,
-    method_id: sequence.method.id,
-    method_version: sequence.method.version,
-    lower: sequence.viability.lower,
-    point: sequence.viability.point,
-    upper: sequence.viability.upper,
-    coverage_target: sequence.viability.coverage_target,
-    risk_label: sequence.risk.label,
-    risk_policy_version: sequence.risk.policy_version,
-    width_too_wide: sequence.width.too_wide ? 1 : 0,
-    width_policy_version: sequence.width.policy_version,
-    posterior_alpha: status.contributors.evidence_window.alpha,
-    posterior_beta: status.contributors.evidence_window.beta,
-  };
-}
-
-/**
  * Read the length `--sequence` was given, or refuse it.
  *
  * Only the canonical spelling of a whole number is accepted -- no sign, no leading zero, no
@@ -2651,25 +2450,6 @@ function parseSequenceLength(value) {
     });
   }
   return length;
-}
-
-/**
- * Confirm that forecasts reached the user, promoting the attempts to snapshots.
- *
- * @param {string} databaseFile
- * @param {number[]} attemptIds
- * @param {{now: Date, format: string, invocationId: string}} delivery
- */
-function confirmPredictionDelivery(databaseFile, attemptIds, delivery) {
-  for (const id of attemptIds) {
-    recordPredictionDelivery(databaseFile, {
-      prediction_attempt_id: id,
-      delivered_at: delivery.now.toISOString(),
-      channel: "stdout",
-      format: delivery.format,
-      invocation_id: delivery.invocationId,
-    });
-  }
 }
 
 /**
@@ -2714,211 +2494,6 @@ async function analyzeProspectivePrompt(input) {
       baseline_sample: sized.baseline_sample,
     },
   };
-}
-
-/**
- * Recompute the derived size categories of a source after ingestion.
- *
- * ponytail: recategorizes the whole source on every sync. The chronological suffix from
- * the earliest changed prompt would be enough; narrow this if the sync budget demands it.
- *
- * @param {string} databaseFile
- * @param {string} alias
- */
-function recategorizeSource(databaseFile, alias) {
-  const categorized = categorizeHistory(readCategorizationRows(databaseFile, alias));
-  writeSizeCategories(
-    databaseFile,
-    categorized.map((row) => ({
-      prompt_execution_id: row.prompt_execution_id,
-      size_category: row.size_category,
-      category_policy_version: row.category_policy_version,
-      category_baseline_as_of: row.category_baseline_as_of,
-    })),
-  );
-}
-
-/**
- * Recompute the stated band the prompts of a source's active period began in, and store the ones
- * that moved.
- *
- * The projection the `reported-capacity` shadow reads (migration 018), recomputed in chronological
- * order as size categories are, because a statement read late -- a rollout file met for the first
- * time after newer ones -- moves the prompts after it, and so does a purge. Each band is resolved
- * at its prompt's own start from statements strictly earlier.
- *
- * Only the suffix that can have moved is recomputed: the prompts from the source's frontier, which
- * the ingestion and purge transactions lower as they commit, so a process stopped between a commit
- * and this call leaves the frontier where the next one finds it. Nothing older than one
- * statement-age limit before the frontier can bind a prompt after it, so the walk starts there. A
- * source never projected, or projected under another policy version, is recomputed whole; one
- * whose frontier is clear costs one primary-key read.
- *
- * @param {string} databaseFile
- * @param {string} alias
- */
-function restateSource(databaseFile, alias) {
-  const version = REPORTED_CAPACITY_POLICY.version;
-  const { frontier, stale_from: read } = readStatedBandProjection(databaseFile, alias, version);
-  if (frontier === null) return;
-  const lookback =
-    frontier === ""
-      ? ""
-      : new Date(
-          Date.parse(frontier) - REPORTED_CAPACITY_POLICY.max_age_seconds * 1000,
-        ).toISOString();
-  // NaN for the whole period, which no start is before.
-  const frontierMs = Date.parse(frontier);
-  const floor = readSourceSummary(databaseFile, alias).active_period_floor;
-  const rows = readStatedBandRows(databaseFile, alias, { from: lookback });
-  const timeline =
-    rows.length === 0
-      ? []
-      : readStatedTimeline(databaseFile, alias, {
-          from: floor !== null && floor > lookback ? floor : lookback,
-        });
-  /** @type {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} */
-  const moved = [];
-  walkStatedHistory(
-    rows.map((row) => ({ ...row, outcome: /** @type {const} */ ("success") })),
-    timeline,
-    { periodStart: floor },
-    (row, state) => {
-      // Before the frontier the lookback is incomplete, and nothing there can have moved. Compared
-      // as instants: a start stored with an offset can sort before the frontier as text.
-      if (Date.parse(row.started_at) < frontierMs) return;
-      if (row.stated_band !== state.band || row.stated_band_policy_version !== version) {
-        moved.push({
-          prompt_execution_id: row.prompt_execution_id,
-          stated_band: state.band,
-          stated_band_policy_version: version,
-        });
-      }
-    },
-  );
-  writeStatedBands(databaseFile, alias, moved, version, read);
-}
-
-/**
- * The first configured horizon drives the pressure shown alongside a forecast.
- *
- * @param {Record<string, unknown>} config
- * @returns {string}
- */
-function primaryHorizon(config) {
-  const configured = /** @type {{horizons?: unknown}} */ (config.analysis)?.horizons;
-  return Array.isArray(configured) && typeof configured[0] === "string"
-    ? configured[0]
-    : /** @type {string} */ (defaultConfig.analysis.horizons[0]);
-}
-
-/**
- * Rank the current analysis window against the preceding windows of the same length.
- *
- * The trend is reported by `stats` only. `status` answers whether the next prompt is viable,
- * and a direction over past windows is not part of that answer.
- *
- * @param {{databaseFile: string, source: {alias: string}, planProfile: import("./plan-profile.js").PlanProfile, horizon: string, now: Date, includeTrend?: boolean}} input
- */
-function computeSourcePressure(input) {
-  const horizonSeconds = parseHorizon(input.horizon);
-  const windowCount = ANALYTICS_POLICY.pressure_baseline_windows;
-  // One read covers the current window and every baseline window behind it. Reading each
-  // window separately meant one SQLite connection and one scan per window.
-  const span = horizonWindow(input.now, horizonSeconds * (windowCount + 1));
-  const rows = readUsageWindowRows(input.databaseFile, input.source.alias, span);
-
-  /** @type {import("./storage.js").UsageWindowRow[][]} */
-  const buckets = Array.from({ length: windowCount + 1 }, () => []);
-  for (const row of rows) {
-    // Windows are half-open as `[start, end)`, so an age of exactly one horizon still
-    // belongs to the newer window.
-    const ageSeconds = (input.now.getTime() - Date.parse(row.started_at)) / 1000;
-    const bucket = Math.ceil(ageSeconds / horizonSeconds) - 1;
-    buckets[bucket]?.push(row);
-  }
-
-  const current = summarizeWindow(/** @type {typeof rows} */ (buckets[0]), input.now);
-  /** @type {Record<string, number[]>} */
-  const baselines = {};
-  /** @type {Record<string, number[]>} */
-  const trendBaselines = {};
-  /** @type {Record<string, number>[]} */
-  const trendWindows = [];
-  let observedWindows = 0;
-  for (let offset = 1; offset <= windowCount; offset += 1) {
-    const past = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
-    // A window with no prompts means the tool was not used then, which is absence of
-    // observation rather than evidence of low usage. Ranking against it would call a
-    // brand new user's first prompt the heaviest window on record.
-    if (past.values.prompts === 0) continue;
-    observedWindows += 1;
-    for (const [dimension, value] of Object.entries(past.values)) {
-      (baselines[dimension] ??= []).push(value);
-      // The trend ranks the recent windows against what came before all of them, so the
-      // windows it compares are excluded from the baseline it compares them against.
-      if (offset > TREND_POLICY.windows) (trendBaselines[dimension] ??= []).push(value);
-    }
-  }
-  for (let offset = TREND_POLICY.windows - 1; offset >= 0; offset -= 1) {
-    const window = summarizeWindow(/** @type {typeof rows} */ (buckets[offset]), input.now);
-    if ((window.values.prompts ?? 0) > 0) trendWindows.push(window.values);
-  }
-  const trend =
-    input.includeTrend === true
-      ? {
-          trend: computeUsageTrend({
-            windows: trendWindows,
-            baselines: trendBaselines,
-            profileWeights: input.planProfile.weights,
-            effectiveSampleSize: current.effectiveSampleSize,
-          }),
-        }
-      : {};
-  if (observedWindows < ANALYTICS_POLICY.pressure_minimum_baseline_windows) {
-    return {
-      horizon: input.horizon,
-      score: null,
-      band: "unknown",
-      policy_version: ANALYTICS_POLICY.version,
-      baseline_kind: "insufficient",
-      completeness: "partial",
-      contributors: [],
-      baseline_windows: observedWindows,
-      ...trend,
-    };
-  }
-  return {
-    horizon: input.horizon,
-    baseline_windows: observedWindows,
-    ...trend,
-    ...computeUsagePressure({
-      current: current.values,
-      baselines,
-      profileWeights: input.planProfile.weights,
-      effectiveSampleSize: current.effectiveSampleSize,
-    }),
-  };
-}
-
-/**
- * @param {import("./storage.js").UsageWindowRow[]} rows
- * @param {Date} now
- */
-function summarizeWindow(rows, now) {
-  const profile = summarizeUsageProfile(rows, [], {
-    horizon: "",
-    window: { from: "", to: "" },
-    now,
-  });
-  /** @type {Record<string, number>} */
-  const values = { prompts: profile.prompts.count };
-  for (const [dimension, summary] of Object.entries(profile.dimensions)) {
-    if ("value" in summary) {
-      values[dimension] = summary.value;
-    }
-  }
-  return { values, effectiveSampleSize: profile.effective_sample_size.value };
 }
 
 /**
