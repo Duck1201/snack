@@ -84,5 +84,7 @@ assertions, and delivery principle 9 rejects those.
 - Read relevant accepted ADRs in `docs/adr/` before changing behavior; surface conflicts rather
   than silently overriding them. `docs/specification.md` defines behavior, while executable code
   and configuration win if prose is stale.
-- Issues/specs live under `.scratch/`; follow `docs/agents/issue-tracker.md`. Triage labels are in
+- Issues/specs for open work live under `.scratch/`; follow `docs/agents/issue-tracker.md`, which
+  also says how a closed feature moves to `docs/history/specs/`. Triage labels are in
   `docs/agents/triage-labels.md`, and domain-document conventions are in `docs/agents/domain.md`.
+- What ships next, and each release's exit criteria, is in `docs/history/roadmap-1.x.md`.

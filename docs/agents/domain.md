@@ -7,20 +7,7 @@ How the engineering skills should consume this repo's domain documentation when 
 - **`CONTEXT.md`** at the repo root.
 - **`docs/adr/`** for ADRs that touch the area you're about to work in.
 
-If these files don't exist, **proceed silently**. Don't flag their absence or suggest creating them upfront. The `/domain-modeling` skill creates them lazily when terms or decisions actually get resolved.
-
-## File structure
-
-This repo uses a single-context layout:
-
-```
-/
-|-- CONTEXT.md
-|-- docs/adr/
-|   |-- 0001-example-decision.md
-|   `-- 0002-another-decision.md
-`-- src/
-```
+This repo uses a single-context layout: one `CONTEXT.md` at the root, ADRs numbered `docs/adr/NNNN-<slug>.md`.
 
 ## Use the glossary's vocabulary
 

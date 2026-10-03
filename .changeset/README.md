@@ -1,4 +1,5 @@
 # Changesets
 
-Add a changeset for every user-visible package change after the initial `0.1.0` technical preview.
-Publishing remains a manually approved GitHub Actions operation.
+Add a changeset (`npx changeset`) for every change to a file named in a package's `files` array —
+that includes its READMEs, not only `src/`. Publishing is the manually dispatched release workflow;
+see `.claude/skills/snack-release-a-version/`.

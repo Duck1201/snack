@@ -96,7 +96,7 @@ declared. Additive; no behaviour changed.
 
 Beta hardening found four defects on frozen surfaces. Each is a fix, a diagnostic, or a correction
 to the form of a contract rather than to what it says, which is what the freeze permits. The
-reasoning is recorded per defect in `.scratch/contract-freeze/issues/`.
+reasoning is recorded per defect in `docs/history/specs/contract-freeze/issues/`.
 
 | Change | Why it is not a reset |
 | --- | --- |

@@ -3,7 +3,7 @@
 Status: **built and verified against the real binary.** Target `1.1.0`. Decisions below were taken
 before any code; the implementation is a separate session.
 
-Governed by [ADR-0010](../../docs/adr/0010-snack-update-may-reach-the-network.md), which is the
+Governed by [ADR-0010](../../../adr/0010-snack-update-may-reach-the-network.md), which is the
 prerequisite and is already accepted: this is the only command in the product permitted to make a
 network request.
 

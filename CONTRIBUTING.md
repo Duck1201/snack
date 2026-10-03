@@ -87,7 +87,7 @@ node --test --test-name-pattern "full sync converges" packages/cli/test/main.tes
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org). The subject says what
   changed; the body says why, and what you ruled out. Assume the reader is a stranger at 3am.
 - Any user-visible change needs a changeset: `npx changeset`, choosing `patch` for a fix and `minor`
-  for behaviour. The stage version is the product version; see [`PLAN.md`](./PLAN.md).
+  for behaviour. The `@snack-ai/cli` version is the product version; see [`PLAN.md`](./PLAN.md).
 - Say what you verified and how. "Tests pass" is the baseline, not the report.
 
 ## Reporting problems

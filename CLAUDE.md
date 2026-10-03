@@ -42,16 +42,17 @@ reaches is formatted — including `.claude/skills/**`, where one overlong line 
 - `CONTEXT.md` — the domain glossary. Every domain term has an explicit _Avoid_ list of synonyms
   (e.g. never say "remaining quota", "percentage used", "quota window"). Use these words in code,
   output strings, comments, and docs.
-- `PLAN.md` — product boundaries, MVP command list, delivery principles, staged roadmap with
-  per-wave exit criteria, defect severity (P0/P1 block releases).
+- `PLAN.md` — product boundaries, command list, delivery principles, the 1.x release table, defect
+  severity (P0/P1 block releases).
+- `docs/history/roadmap-1.x.md` — per-release scope and exit criteria, including what is planned
+  next. `docs/history/specs/` holds the closed specs and defect write-ups the roadmap cites.
 - `docs/specification.md` — product behavior and prediction contracts.
 - `docs/compatibility.md` — the surfaces frozen at 0.9, their versions, and the freeze-reset rule.
   Read before touching the `--json` envelope, a payload, `export`, exit codes, or the flag surface.
 - `docs/architecture.md` — module responsibilities, ports, data flow, conceptual data model.
 - `docs/adr/000N-*.md` — accepted decisions. Surface conflicts explicitly instead of overriding
   them.
-- `AGENTS.md` + `docs/agents/` — issue tracker lives as Markdown under `.scratch/`, triage
-  vocabulary.
+- `AGENTS.md` + `docs/agents/` — open issues live as Markdown under `.scratch/`, triage vocabulary.
 
 ## Architecture
 
@@ -114,7 +115,7 @@ and a row in `docs/claude-support.md`, which `contracts.test.js` asserts against
 
 ## Release
 
-Changesets. Both packages publish to `latest`. The stage version is the product version.
+Changesets. Both packages publish to `latest`. The `@snack-ai/cli` version is the product version.
 `release:check` blocks publishing unless seven `^… gate: passed$` lines are present — trademark, npm
 trusted publisher, GitHub npm environment, WSL, freeze, performance, artifact evidence, spread
 across `docs/release/*.md` and `docs/compatibility.md` — and both support matrices have cleared

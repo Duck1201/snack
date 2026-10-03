@@ -1,6 +1,7 @@
 # Issue tracker: Local Markdown
 
 Issues and specs (you may know a spec as a PRD) for this repo live as markdown files in `.scratch/`.
+`.scratch/` holds **open work only**; when it is empty, nothing is in flight.
 
 ## Conventions
 
@@ -18,13 +19,6 @@ Create a new file under `.scratch/<feature-slug>/` (creating the directory if ne
 
 Read the file at the referenced path. The user will normally pass the path or the issue number directly.
 
-## Wayfinding operations
+## When a feature closes
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
-
-- **Map**: `.scratch/<effort>/map.md` - the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+Once the spec's `Status:` line says it shipped (or was closed) and every issue under it is `fixed`, `done`, `invalid` or `wontfix`, move the whole directory with `git mv .scratch/<feature-slug> docs/history/specs/` in the change that closes it. The directory keeps its shape, so links between its own files survive; fix any link elsewhere that pointed into `.scratch/<feature-slug>/`. The roadmap and the release records cite these files as the causal account of a defect, so they are archived, never deleted.

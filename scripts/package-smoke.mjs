@@ -6,6 +6,8 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { packResults } from "./npm-pack.mjs";
+
 const execute = promisify(execFile);
 const workspace = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const npmCli = process.env.npm_execpath;
@@ -204,5 +206,5 @@ async function packWorkspace(cwd, packageName, destination, manifestFile) {
   } finally {
     await manifest.close();
   }
-  return JSON.parse(await readFile(manifestFile, "utf8"));
+  return packResults(await readFile(manifestFile, "utf8"));
 }
