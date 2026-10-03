@@ -683,7 +683,10 @@ export async function run(argv, options = {}) {
     .option("--source <alias>", "capacity-source alias")
     .option("--no-sync", "use already synchronized observations")
     .option("--prompt-file <path>", "analyze an unsent prompt from a file, or - for stdin")
-    .option("--sequence <n>", "also assess whether the next <n> prompts all complete (1-100)")
+    .option(
+      "--sequence <n>",
+      "also estimate the chance that all of the next <n> go through (1-100)",
+    )
     .option("--verbose", "add the evidence gates, the method and the policy versions")
     .option("--json", "emit one versioned JSON document")
     .action(async function status(commandOptions) {

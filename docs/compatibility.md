@@ -335,7 +335,7 @@ migration, and `npm run upgrade:smoke` now upgrades a database left by the publi
 ## What 1.4.0 adds, and why it is a minor
 
 **One new option, additive to the flag surface.** `status --sequence <n>` also assesses sequence
-viability: the probability that the next `n` prompts all complete without an observed restriction.
+viability: the probability that all of the next `n` complete without an observed restriction.
 `n` is a whole number from 1 to 100 in its canonical decimal spelling; anything else exits `2`
 (`usage`) with the reason `sequence_length_invalid`, a new reason on an existing exit code, and the
 rejected value is never echoed. The cap is argv policy: raising it later is additive, lowering it

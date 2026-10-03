@@ -197,6 +197,45 @@ test("no command promises a number of prompts a plan still allows", async () => 
   }
 });
 
+test("no help page or manual sets a number directly before the word prompts", async () => {
+  // CONTEXT.md, Sequence viability: the user's count is said as "all 10 go through" or a "10-prompt"
+  // estimate, never "10 prompts" -- that phrase is one word away from an allowance. The help and the
+  // manual are where a placeholder (`<n>`, `n`, `N`) stands in for that number.
+  const beforePrompts = /(?:\b\d[\d,]*|<n>|\bN|\bn)\s+prompts?\b/u;
+  const fixture = await makeRunFixture("snack-vocabulary-help-");
+  const pages = [];
+  for (const command of [
+    [],
+    ["status"],
+    ["stats"],
+    ["sync"],
+    ["setup"],
+    ["setup", "opencode"],
+    ["setup", "claude"],
+    ["setup", "codex"],
+    ["doctor"],
+    ["config"],
+    ["config", "get"],
+    ["config", "set"],
+    ["config", "path"],
+    ["export"],
+    ["data"],
+    ["data", "purge"],
+    ["update"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...command, "--help"], fixture.options);
+    const text = `${fixture.stdout.value}\n${fixture.stderr.value}`;
+    pages.push(text);
+    assert.doesNotMatch(text, beforePrompts, `\`snack ${command.join(" ")} --help\``);
+  }
+  assert.match(pages.join("\n"), /--sequence <n>/u);
+  const manual = await readFile(new URL("../man/snack.1", import.meta.url), "utf8");
+  assert.match(manual, /--sequence/u);
+  assert.doesNotMatch(manual, beforePrompts, "man/snack.1");
+});
+
 test("the export manifest cannot smuggle the vocabulary the interface refuses", async () => {
   const fixture = await makeRunFixture("snack-vocabulary-export-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);

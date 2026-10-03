@@ -142,8 +142,8 @@ to that one source; while the provider maps to more than one source of the insta
 with that thread's prompts.
 
 **With `--sequence <n>`, a second estimate beneath the first.** From 1.4, `--sequence <n>` also
-assesses **sequence viability**: the probability that the next `n` prompts, one after another, all
-complete without an observed restriction. `n` is the user's own number, a whole number from 1 to
+assesses **sequence viability**: the probability that prompts sent one after another — all of the
+next `n` — complete without an observed restriction. `n` is the user's own number, a whole number from 1 to
 100 written in its canonical decimal form; anything else — `0`, `101`, `010`, `+5`, `5.0`, `1e1`,
 a leading space, an empty value, other scripts' digits — exits `2` with `sequence_length_invalid` and the
 message `--sequence takes a whole number from 1 to 100.`, never repeating the rejected value. It is
