@@ -1,0 +1,27 @@
+{
+  "schema_version": "2",
+  "command": "setup codex",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "source": {
+      "alias": "codex",
+      "installation_id": "290a7968-b559-435c-972b-c5fd671a74f2",
+      "adapter": "codex",
+      "provider": "openai",
+      "profile": "default",
+      "plan": "plus",
+      "plan_profile": "generic"
+    },
+    "fingerprint": {
+      "family": "cx-rollout-tokencount-v1",
+      "supported": true
+    },
+    "dry_run": {
+      "observations": 3,
+      "applied": true
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

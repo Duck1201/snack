@@ -1,0 +1,63 @@
+{
+  "schema_version": "2",
+  "command": "config get",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "key": null,
+    "value": {
+      "schema_version": 1,
+      "sources": [
+        {
+          "alias": "work",
+          "installation_id": "360d882f-2477-49d6-aeb6-0060a496a50e",
+          "adapter": "opencode",
+          "database": "{{root}}/opencode.db",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "plan_profile": "generic",
+          "fingerprint": "oc-sqlite-msgpart-v1"
+        },
+        {
+          "alias": "personal",
+          "installation_id": "1eb913a0-add0-4cff-bc29-11992d7a5453",
+          "adapter": "claude",
+          "projects": "{{root}}/claude-home/projects",
+          "provider": "anthropic",
+          "profile": "default",
+          "plan": "pro",
+          "plan_profile": "generic",
+          "fingerprint": "cc-jsonl-turntree-v1"
+        },
+        {
+          "alias": "codex",
+          "installation_id": "290a7968-b559-435c-972b-c5fd671a74f2",
+          "adapter": "codex",
+          "sessions": "{{root}}/codex/sessions",
+          "provider": "openai",
+          "profile": "default",
+          "plan": "plus",
+          "plan_profile": "generic",
+          "fingerprint": "cx-rollout-tokencount-v1"
+        }
+      ],
+      "analysis": {
+        "horizons": [
+          "PT1H",
+          "PT5H",
+          "P1D",
+          "P7D"
+        ]
+      },
+      "presentation": {
+        "json": false
+      },
+      "prospective_analysis": {
+        "enabled": false
+      }
+    }
+  },
+  "warnings": [],
+  "errors": []
+}
