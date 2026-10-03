@@ -102,6 +102,63 @@ because no refusal of yours is in its evidence yet: "Your recent history has no 
 from, so the low end of this interval comes from SNACK's starting assumption rather than from your
 history." The bottom of `29-100%` is SNACK's assumption, not something you have seen happen.
 
+How far a sequence answer can reach is documented forward. The answer weights recent history more —
+a 30-prompt recency half-life in the same conditions — so the evidence behind it saturates near an
+effective sample of 44: beyond that, a longer history does not narrow the interval any further.
+[How far the answer reaches](./docs/specification/analysis.md#how-far-the-answer-reaches) tabulates
+it in one direction only, a history and a length in and the typical interval out. Read backwards, to
+find the length at which an interval stops informing, it would be a count worked out for you — the
+one thing `--sequence` refuses to do.
+
+## Leave it open: `snack dash`
+
+From `1.6`, `snack dash` puts every capacity source on one full-screen view that stays current while
+you work. Above, every source on one row, with the columns plain `snack status` prints. Below, the
+selected source in detail: the `next prompt` line, the evidence, the pressure with a marker on a
+scale, a plot of the last 24 hours, what drove it, and the caveats.
+
+```text
+ snack dash · 2 capacity sources                    synced 6s ago · next in 54s
+   SOURCE  NEXT PROMPT   RISK   EVIDENCE  PRESSURE  LAST SEEN   SYNC
+ ▸ work      96-100%     low    moderate    low      35m ago     ok
+   home      84-100%     low    very_low  unknown    3h ago      ok
+ ──────────────────────────────────────────────────────────────────────────────
+ work
+   next prompt  96-100% chance it goes through · risk low
+   evidence     moderate — some history, but few refusals seen yet
+   pressure     low · lower than every window in your own history · typical pr…
+                lightest ├●────────────────────────┤ heaviest
+   by hour      ▃···········▆▅▇▃▆▅▅▁▃▃▃▁  each hour against your own history
+                24h ago              now
+   drivers      prompt count, input tokens
+   as of        35m ago · period since 2026-10-03
+   ! The estimate is not yet calibrated against observed outcomes.
+   ! Real provider capacity is unknown.
+   ! Usage pressure compares this window with local history; it is not a share
+     of capacity.
+
+ ↑↓ select   s next N   r sync now   ? help   q quit
+```
+
+The scale is a marker between your own lightest and heaviest hours, never a filled bar: a bar reads
+as how much of a tank is gone, and SNACK does not know the tank. In the `by hour` plot each hour is
+ranked against your own history, and `·` is an hour with no prompts at all, never a quiet one.
+
+`↑` `↓` select a source. `s` shows or hides a `next N` row under `next prompt`, and `+` and `-` move
+`N` by one, from 1 to 100; it starts at 10 and is always yours. When that interval is too wide to
+inform, the row prints no figure — only the sentence `status --sequence` would print, with the
+prior-tail line when it applies — and the keys never skip or stop at a length because of it. `r`
+synchronizes now, `?` opens the help, `q` quits. On its own the dash synchronizes 60 seconds after
+the previous synchronization ended, in a child process, and the redraw every second reads nothing
+from storage. Shadow estimates are never on this screen; `snack status --verbose` is where they are.
+A warning a reading carried — a plan profile that could not be read, say — is printed once when you
+quit, after the terminal is restored.
+
+It needs a terminal. `snack dash | cat`, a redirected input or `--json` exit `2` and point at
+`snack status`, which gives the same reading through a pipe. Every forecast the screen draws is
+recorded as a `status` run's is, and only when what it shows changes, so a screen left open all day
+does not count as a thousand forecasts.
+
 ## Quickstart
 
 Requires Node.js 24 on Linux, macOS, or Windows through WSL2.
@@ -120,17 +177,18 @@ treat their usage as the single pool it really is.
 
 ## Commands
 
-| Command                                     | What it does                                                                                                                                                                                                                                                    |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                                                                                                                                              |
-| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                                                                                                                                 |
-| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method, the policy versions and, on a Codex source, the shadow estimate; `--sequence <n>` adds the chance that all of the next `<n>` go through |
-| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail and, on a Codex source, calibration per method                                                                                                                                 |
-| `snack doctor`                              | Diagnose the local installation without changing it                                                                                                                                                                                                             |
-| `snack config`                              | Inspect or update local configuration                                                                                                                                                                                                                           |
-| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                                                                                                                                          |
-| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                                                                                                                                 |
-| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                                                                                                                                           |
+| Command                                     | What it does                                                                                                                                                                                                                                 |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                                                                                                                           |
+| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                                                                                                              |
+| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method, the policy versions and the shadow estimates; `--sequence <n>` adds the chance that all of the next `<n>` go through |
+| `snack dash`                                | Watch every source on one live full-screen view; needs a terminal                                                                                                                                                                            |
+| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail and calibration per method                                                                                                                                  |
+| `snack doctor`                              | Diagnose the local installation without changing it                                                                                                                                                                                          |
+| `snack config`                              | Inspect or update local configuration                                                                                                                                                                                                        |
+| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                                                                                                                       |
+| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                                                                                                              |
+| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                                                                                                                        |
 
 Every command takes `--json` and emits one versioned document. Every command is also in `man snack`,
 generated from the CLI's own flag surface so it cannot describe a version you are not running.
@@ -216,28 +274,37 @@ three places only — the `shadow` row of `status --verbose`, which says it is n
 ```text
 $ snack status --source codex --verbose
 codex
-  next prompt  92-100% chance it goes through · risk low
+  next prompt  94-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   ...
   method       bayesian-pressure-band@1 · model stage5-prediction-v2
-  reported     Codex states 86% of its 5h window, resets in 3h 50m · 30% of its 7d window, resets Mon UTC · 4m ago
-  shadow       reported-capacity@1 would say 96-100% · risk low · evidence very_low — recorded to compare, not the answer above
+  reported     Codex states 85% of its 5h window, resets in 1h 32m · 30% of its 7d window, resets Thu UTC · 4m ago
+  shadow       reported-capacity@1 would say 90-100% · risk low · evidence low — recorded to compare, not the answer above
                reads what Codex states about its 5h window — in the near band · reported-capacity-v1
+               bayesian-pressure-band-hl50@1 would say 95-100% · risk low · evidence moderate
+               bayesian-pressure-band-hl100@1 would say 96-100% · risk low · evidence moderate
+               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt
   as of        3m ago · sync ok · period since 2026-10-03
   ...
 ```
 
-the additive `shadow` member of that source's report in `status --json`, and the `by method` block
-of `stats --verbose` (`calibration.by_method` in `--json`), where each method is scored on its own
-and the shadow once more on exactly the outcomes the baseline was scored on:
+— the three `shadow` lines after `reported-capacity-v1` are the longer recency half-lives every
+source gets from `1.6`, [below](#longer-memories-in-shadow) — the additive `shadow` member of that
+source's report in `status --json` (from `1.6` also the first entry of `shadows`), and the
+`by method` block of `stats --verbose` (`calibration.by_method` in `--json`), where each method is
+scored on its own and each shadow once more on exactly the outcomes the baseline was scored on:
 
 ```text
 $ snack stats --verbose
   ...
   by method
-    bayesian-pressure-band@1  answer · live not available yet · backtest brier 0.003, sample 333
-    reported-capacity@1       shadow · live not available yet · backtest brier 0.003, sample 333
-                              same outcomes as the baseline · live not available yet · backtest brier 0.003 against 0.003, sample 333, 1 restricted
+    bayesian-pressure-band@1        answer · live not available yet · backtest brier 0.004, sample 297
+    reported-capacity@1             shadow · live not available yet · backtest brier 0.004, sample 281
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 281, 1 restricted
+    bayesian-pressure-band-hl50@1   shadow · live not available yet · backtest brier 0.004, sample 297
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 297, 1 restricted
+    bayesian-pressure-band-hl100@1  shadow · live not available yet · backtest brier 0.004, sample 297
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 297, 1 restricted
 ```
 
 Why not let it answer? On the real Codex history it was designed from, 65 days held one refusal,
@@ -247,6 +314,30 @@ release promotes it only if its own calibration beats the baseline's by a rule w
 (`reported-capacity-promotion-v1`): on a real Codex history, at least 200 checked live forecasts, at
 least 5 restrictions both live and in the backtest, and a strictly lower Brier score than the
 baseline's on the same outcomes in both. Until then no setting turns it on, or off.
+
+## Longer memories, in shadow
+
+The answer weighs recent history more than old: an outcome's weight halves over seven days, and
+halves again with every 30 outcomes after it in the same conditions — a 30-prompt **recency
+half-life**. From `1.6`, every source — OpenCode, Claude Code and Codex alike — also gets two more
+shadow estimates, `bayesian-pressure-band-hl50@1` and `bayesian-pressure-band-hl100@1`: the answer's
+own model with a 50- and a 100-prompt recency half-life, and nothing else changed. A longer memory
+narrows the interval on a steady history; it is also slower to notice a change.
+
+Both are recorded and calibrated beside the answer and never shown as it. `status --verbose` lists
+what each would say under `shadow`, as above; `status --json` carries every shadow estimate in a new
+`shadows` array on every source, while the Codex `shadow` member stays exactly as `1.5` wrote it;
+and `stats --verbose` (`calibration.by_method` in `--json`) now scores every source per method, each
+variant paired with the answer on the same outcomes. The default panel, `--sequence` and
+`snack dash` never show them.
+
+Either may become the answer only in a later minor, by the same kind of rule as above
+(`recency-variant-promotion-v1`), plus one condition that its calibration cannot buy: a longer
+memory may only become the answer if it still notices a provider changing its behaviour as fast as
+the current one does. That is the collapse test the 30-prompt half-life was chosen by — in a
+simulated sudden drop in how often prompts go through, at most 2 runs in 25 may still look safe
+twenty outcomes into the drop — and today both variants fail it. `npm run collapse:check` in the
+repository prints the counts.
 
 ## How it got here
 
@@ -270,6 +361,7 @@ Each release had a single job. Nothing shipped until the thing before it was pro
 | `1.3.0`         | Codex CLI, the third client, read from its rollouts by field allowlist. The figure Codex states about its own windows is quoted beside the estimate, never inside it.                                                                                                                                                                         |
 | `1.4.0`         | `status --sequence <n>`: the chance that all of the next `<n>` go through, from the same posterior, with its own interval, risk label and named method, and a plain word when that interval is too wide to inform. The number is always yours; SNACK never derives one.                                                                       |
 | `1.5.0`         | A second method, `reported-capacity@1`, run in shadow on Codex sources: it groups history by the band of the figure Codex states, is recorded and calibrated beside the baseline, and never answers unless its own calibration beats the baseline's by a rule written before it shipped.                                                      |
+| `1.6.0`         | `snack dash`, every source on one live screen, with a marker on a scale where a filled bar would have claimed a tank. Two longer recency half-lives run in shadow on every source, and neither may answer unless it also passes the collapse test the answer's half-life was chosen by.                                                       |
 
 The full staged plan, with per-wave exit criteria and everything deliberately left out, is in
 [PLAN.md](./PLAN.md).

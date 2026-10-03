@@ -103,6 +103,67 @@ ainda: "Your recent history has no restriction to learn from, so the low end of 
 from SNACK's starting assumption rather than from your history." O piso de `29-100%` é a suposição
 do SNACK, não algo que você viu acontecer.
 
+Até onde uma resposta de sequência alcança está documentado no sentido direto. A resposta pesa mais
+o histórico recente — o peso de um desfecho cai à metade a cada 30 desfechos posteriores nas mesmas
+condições — então a evidência por trás dela satura perto de uma amostra efetiva de 44: dali em
+diante, um histórico mais longo não estreita mais o intervalo.
+[How far the answer reaches](./docs/specification/analysis.md#how-far-the-answer-reaches) tabula
+isso num sentido só: um histórico e um comprimento entram, o intervalo típico sai. Lida de trás para
+frente, para achar o comprimento em que um intervalo deixa de informar, ela seria uma contagem
+calculada para você — a única coisa que o `--sequence` se recusa a fazer.
+
+## Deixe aberto: `snack dash`
+
+A partir da `1.6`, o `snack dash` põe todas as fontes de capacidade numa só tela cheia, que se
+mantém atual enquanto você trabalha. Em cima, cada fonte numa linha, com as colunas que o
+`snack status` simples imprime. Embaixo, a fonte selecionada em detalhe: a linha `next prompt`, a
+evidência, a pressão com um marcador numa escala, um gráfico das últimas 24 horas, o que a puxou, e
+as ressalvas.
+
+```text
+ snack dash · 2 capacity sources                    synced 6s ago · next in 54s
+   SOURCE  NEXT PROMPT   RISK   EVIDENCE  PRESSURE  LAST SEEN   SYNC
+ ▸ work      96-100%     low    moderate    low      35m ago     ok
+   home      84-100%     low    very_low  unknown    3h ago      ok
+ ──────────────────────────────────────────────────────────────────────────────
+ work
+   next prompt  96-100% chance it goes through · risk low
+   evidence     moderate — some history, but few refusals seen yet
+   pressure     low · lower than every window in your own history · typical pr…
+                lightest ├●────────────────────────┤ heaviest
+   by hour      ▃···········▆▅▇▃▆▅▅▁▃▃▃▁  each hour against your own history
+                24h ago              now
+   drivers      prompt count, input tokens
+   as of        35m ago · period since 2026-10-03
+   ! The estimate is not yet calibrated against observed outcomes.
+   ! Real provider capacity is unknown.
+   ! Usage pressure compares this window with local history; it is not a share
+     of capacity.
+
+ ↑↓ select   s next N   r sync now   ? help   q quit
+```
+
+A escala é um marcador entre as suas próprias horas mais leve e mais pesada, nunca uma barra
+preenchida: uma barra se lê como quanto de um tanque já foi, e o SNACK não conhece o tanque. No
+gráfico `by hour` cada hora é comparada com o seu próprio histórico, e `·` é uma hora sem nenhum
+prompt, nunca uma hora calma.
+
+`↑` `↓` selecionam uma fonte. `s` mostra ou esconde uma linha `next N` sob `next prompt`, e `+` e
+`-` mudam `N` de um em um, de 1 a 100; começa em 10 e é sempre seu. Quando esse intervalo é largo
+demais para informar, a linha não imprime número nenhum — só a frase que o `status --sequence`
+imprimiria, com a linha da cauda da suposição inicial quando ela se aplica — e as teclas nunca pulam
+nem param num comprimento por causa disso. `r` sincroniza agora, `?` abre a ajuda, `q` sai. Por
+conta própria o dash sincroniza 60 segundos depois que a sincronização anterior terminou, num
+processo filho, e o redesenho a cada segundo não lê nada do armazenamento. Estimativas-sombra nunca
+aparecem nesta tela; o lugar delas é o `snack status --verbose`. Um aviso que uma leitura trouxe —
+um perfil de plano que não pôde ser lido, por exemplo — é impresso uma vez quando você sai, depois
+que o terminal é restaurado.
+
+Ele precisa de um terminal. `snack dash | cat`, uma entrada redirecionada ou `--json` saem com `2` e
+apontam para o `snack status`, que dá a mesma leitura por um pipe. Toda previsão que a tela desenha
+é registrada como a de uma execução do `status`, e só quando o que ela mostra muda, então uma tela
+deixada aberta o dia inteiro não conta como mil previsões.
+
 ## Começando
 
 Requer Node.js 24 em Linux, macOS ou Windows via WSL2.
@@ -121,17 +182,18 @@ fonte de capacidade, e o SNACK trata o uso deles como o pote único que de fato 
 
 ## Comandos
 
-| Comando                                     | O que faz                                                                                                                                                                                                                                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                                                                                                                                                                     |
-| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                                                                                                                                                                              |
-| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência, o método, as versões de política e, numa fonte do Codex, a estimativa-sombra; `--sequence <n>` acrescenta a chance de que todos os próximos `<n>` passem |
-| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo e, numa fonte do Codex, a calibração por método                                                                                                                                                        |
-| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                                                                                                                                                                         |
-| `snack config`                              | Consulta ou atualiza a configuração local                                                                                                                                                                                                                                            |
-| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                                                                                                                                                                  |
-| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                                                                                                                                                               |
-| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                                                                                                                                                                  |
+| Comando                                     | O que faz                                                                                                                                                                                                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                                                                                                                                                 |
+| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                                                                                                                                                          |
+| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência, o método, as versões de política e as estimativas-sombra; `--sequence <n>` acrescenta a chance de que todos os próximos `<n>` passem |
+| `snack dash`                                | Acompanha todas as fontes numa tela cheia ao vivo; precisa de um terminal                                                                                                                                                                                        |
+| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo e a calibração por método                                                                                                                                                          |
+| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                                                                                                                                                     |
+| `snack config`                              | Consulta ou atualiza a configuração local                                                                                                                                                                                                                        |
+| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                                                                                                                                              |
+| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                                                                                                                                           |
+| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                                                                                                                                              |
 
 Todo comando aceita `--json` e emite um documento versionado. Todo comando também está no
 `man snack`, gerado a partir da própria superfície de flags do CLI, então ele não descreve uma
@@ -221,28 +283,38 @@ três lugares — a linha `shadow` do `status --verbose`, que diz que ela não �
 ```text
 $ snack status --source codex --verbose
 codex
-  next prompt  92-100% chance it goes through · risk low
+  next prompt  94-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   ...
   method       bayesian-pressure-band@1 · model stage5-prediction-v2
-  reported     Codex states 86% of its 5h window, resets in 3h 50m · 30% of its 7d window, resets Mon UTC · 4m ago
-  shadow       reported-capacity@1 would say 96-100% · risk low · evidence very_low — recorded to compare, not the answer above
+  reported     Codex states 85% of its 5h window, resets in 1h 32m · 30% of its 7d window, resets Thu UTC · 4m ago
+  shadow       reported-capacity@1 would say 90-100% · risk low · evidence low — recorded to compare, not the answer above
                reads what Codex states about its 5h window — in the near band · reported-capacity-v1
+               bayesian-pressure-band-hl50@1 would say 95-100% · risk low · evidence moderate
+               bayesian-pressure-band-hl100@1 would say 96-100% · risk low · evidence moderate
+               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt
   as of        3m ago · sync ok · period since 2026-10-03
   ...
 ```
 
-o membro aditivo `shadow` no relatório daquela fonte em `status --json`, e o bloco `by method` do
-`stats --verbose` (`calibration.by_method` no `--json`), onde cada método é avaliado por si e a
-sombra mais uma vez exatamente nos desfechos em que a linha de base foi avaliada:
+— as três linhas `shadow` depois de `reported-capacity-v1` são as meias-vidas de recência mais
+longas que toda fonte recebe a partir da `1.6`, [abaixo](#memórias-mais-longas-em-sombra) — o membro
+aditivo `shadow` no relatório daquela fonte em `status --json` (a partir da `1.6`, também a primeira
+entrada de `shadows`), e o bloco `by method` do `stats --verbose` (`calibration.by_method` no
+`--json`), onde cada método é avaliado por si e cada sombra mais uma vez exatamente nos desfechos em
+que a linha de base foi avaliada:
 
 ```text
 $ snack stats --verbose
   ...
   by method
-    bayesian-pressure-band@1  answer · live not available yet · backtest brier 0.003, sample 333
-    reported-capacity@1       shadow · live not available yet · backtest brier 0.003, sample 333
-                              same outcomes as the baseline · live not available yet · backtest brier 0.003 against 0.003, sample 333, 1 restricted
+    bayesian-pressure-band@1        answer · live not available yet · backtest brier 0.004, sample 297
+    reported-capacity@1             shadow · live not available yet · backtest brier 0.004, sample 281
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 281, 1 restricted
+    bayesian-pressure-band-hl50@1   shadow · live not available yet · backtest brier 0.004, sample 297
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 297, 1 restricted
+    bayesian-pressure-band-hl100@1  shadow · live not available yet · backtest brier 0.004, sample 297
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 297, 1 restricted
 ```
 
 Por que não deixá-la responder? No histórico real do Codex a partir do qual ela foi desenhada, 65
@@ -253,6 +325,31 @@ de base por uma regra escrita agora (`reported-capacity-promotion-v1`): num hist
 ao menos 200 previsões ao vivo conferidas, ao menos 5 restrições tanto ao vivo quanto no backtest, e
 um Brier estritamente menor que o da linha de base nos mesmos desfechos, nos dois. Até lá nenhuma
 configuração a liga, nem a desliga.
+
+## Memórias mais longas, em sombra
+
+A resposta pesa mais o histórico recente que o antigo: o peso de um desfecho cai à metade em sete
+dias, e cai à metade de novo a cada 30 desfechos posteriores nas mesmas condições — a sua
+**meia-vida de recência** (_recency half-life_). A partir da `1.6`, toda fonte — OpenCode, Claude
+Code e Codex igualmente — recebe mais duas estimativas-sombra, `bayesian-pressure-band-hl50@1` e
+`bayesian-pressure-band-hl100@1`: o próprio modelo da resposta com meias-vidas de recência de 50 e
+de 100, e nada mais mudado. Uma memória mais longa estreita o intervalo num histórico estável;
+também demora mais para perceber uma mudança.
+
+As duas são registradas e calibradas ao lado da resposta e nunca mostradas como ela. O
+`status --verbose` lista o que cada uma diria sob `shadow`, como acima; o `status --json` traz toda
+estimativa-sombra num novo array `shadows` em toda fonte, enquanto o membro `shadow` do Codex fica
+exatamente como a `1.5` o escrevia; e o `stats --verbose` (`calibration.by_method` no `--json`)
+agora avalia toda fonte por método, cada variante pareada com a resposta nos mesmos desfechos. O
+painel padrão, o `--sequence` e o `snack dash` nunca as mostram.
+
+Qualquer uma delas só pode virar a resposta numa minor futura, pelo mesmo tipo de regra acima
+(`recency-variant-promotion-v1`), mais uma condição que a calibração não compra: uma memória mais
+longa só pode virar a resposta se ainda perceber um provedor mudando de comportamento tão rápido
+quanto a atual percebe. É o teste de colapso pelo qual a meia-vida de 30 da resposta foi escolhida —
+numa queda súbita simulada de quantos prompts passam, no máximo 2 execuções em 25 podem ainda
+parecer seguras vinte desfechos depois do início da queda — e hoje as duas variantes falham nele. O
+`npm run collapse:check` no repositório imprime as contagens.
 
 ## Como chegamos aqui
 
@@ -276,6 +373,7 @@ Cada release teve um único trabalho. Nada foi adiante antes de a anterior estar
 | `1.3.0`         | Codex CLI, o terceiro cliente, lido dos rollouts por lista de campos permitidos. O número que o Codex declara sobre as próprias janelas é citado ao lado da estimativa, nunca dentro dela.                                                                                                                                     |
 | `1.4.0`         | `status --sequence <n>`: a chance de que todos os próximos `<n>` passem, do mesmo posterior, com intervalo, rótulo de risco e método nomeado próprios, e uma palavra clara quando esse intervalo é largo demais para informar. O número é sempre seu; o SNACK nunca deriva um.                                                 |
 | `1.5.0`         | Um segundo método, `reported-capacity@1`, rodando em sombra nas fontes do Codex: agrupa o histórico pela faixa do número que o Codex declara, é registrado e calibrado ao lado da linha de base, e nunca responde a não ser que a calibração dele vença a da linha de base por uma regra escrita antes de ser lançado.         |
+| `1.6.0`         | `snack dash`, todas as fontes numa tela ao vivo, com um marcador numa escala onde uma barra preenchida teria afirmado um tanque. Duas meias-vidas de recência mais longas rodam em sombra em toda fonte, e nenhuma pode responder sem passar também no teste de colapso pelo qual a meia-vida da resposta foi escolhida.       |
 
 O plano completo por estágios, com critérios de saída por onda e tudo que ficou deliberadamente de
 fora, está no [PLAN.md](./PLAN.md).

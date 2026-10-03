@@ -164,17 +164,18 @@ fails the build if a single one shows up in any byte SNACK writes.
 
 ## The commands
 
-| Command                                     | What it does                                                                                                                                                                                                                                                                        |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                                                                                                                                           |
-| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method, the policy versions and, on a Codex source, the shadow estimate; `--sequence <n>` adds the chance that all of the next `<n>` go through. |
-| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored — per method on a Codex source, under `--verbose`.                                                                                                                                      |
-| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                                                                                                                                            |
-| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                                                                                                                                                |
-| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                                                                                                                                   |
-| `snack config`                              | Reads and edits local configuration.                                                                                                                                                                                                                                                |
-| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                                                                                                                                        |
-| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                                                                                                                                             |
+| Command                                     | What it does                                                                                                                                                                                                                                                     |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                                                                                                                        |
+| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method, the policy versions and the shadow estimates; `--sequence <n>` adds the chance that all of the next `<n>` go through. |
+| `snack dash`                                | Every source on one live full-screen view, kept current while you work. Needs a terminal.                                                                                                                                                                        |
+| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored — per method, under `--verbose`.                                                                                                                                     |
+| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                                                                                                                         |
+| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                                                                                                                             |
+| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                                                                                                                |
+| `snack config`                              | Reads and edits local configuration.                                                                                                                                                                                                                             |
+| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                                                                                                                     |
+| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                                                                                                                          |
 
 Every command takes `--json` and answers with one versioned document, so scripting it never means
 parsing prose. Every command is also in `man snack`, which ships in the package and is generated
@@ -183,6 +184,58 @@ from the CLI's own flag surface — an undocumented flag fails the build rather 
 Two clients can share one capacity source. If OpenCode, Claude Code or Codex CLI bill against the
 same account, map them to the same alias and SNACK will treat their usage as the single pool it
 really is.
+
+## Leave it open: `snack dash`
+
+From `1.6`, `snack dash` is the screen to keep beside your editor: every capacity source on one row,
+with the columns plain `snack status` prints, and the selected one in detail beneath — the
+`next prompt` line, the evidence, the pressure with a marker on a scale, a plot of the last 24
+hours, what drove it, and the caveats.
+
+```text
+ snack dash · 2 capacity sources                    synced 6s ago · next in 54s
+   SOURCE  NEXT PROMPT   RISK   EVIDENCE  PRESSURE  LAST SEEN   SYNC
+ ▸ work      96-100%     low    moderate    low      35m ago     ok
+   home      84-100%     low    very_low  unknown    3h ago      ok
+ ──────────────────────────────────────────────────────────────────────────────
+ work
+   next prompt  96-100% chance it goes through · risk low
+   evidence     moderate — some history, but few refusals seen yet
+   pressure     low · lower than every window in your own history · typical pr…
+                lightest ├●────────────────────────┤ heaviest
+   by hour      ▃···········▆▅▇▃▆▅▅▁▃▃▃▁  each hour against your own history
+                24h ago              now
+   drivers      prompt count, input tokens
+   as of        35m ago · period since 2026-10-03
+   ! The estimate is not yet calibrated against observed outcomes.
+   ! Real provider capacity is unknown.
+   ! Usage pressure compares this window with local history; it is not a share
+     of capacity.
+
+ ↑↓ select   s next N   r sync now   ? help   q quit
+```
+
+| You see                   | It means                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `▸`                       | The selected source; `↑` `↓` move it.                                                                                                            |
+| `lightest ├●──┤ heaviest` | Where this hour sits between your own lightest and heaviest. A marker, never a filled bar: a bar would claim to know how much of a tank is gone. |
+| `by hour`                 | The last 24 hours, each against your own history. `·` is an hour with no prompts at all, never a quiet one.                                      |
+| `synced 6s ago`           | It synchronizes on its own 60 seconds after the previous synchronization ended, in a child process; `r` does it now.                             |
+
+`s` shows or hides a `next N` row under `next prompt` — the `--sequence` answer for the selected
+source — and `+` and `-` move `N` by one, from 1 to 100; it starts at 10 and is always yours. When
+that interval is too wide to inform, the row prints no figure: only the sentence `status --sequence`
+would print, with the prior-tail line when it applies. The keys never skip or stop at a length
+because of it. `?` opens the help and `q` quits.
+
+Shadow estimates are never on this screen; `snack status --verbose` is where they are. A warning a
+reading carried — a plan profile that could not be read, say — has no room on the screen, so it is
+printed once when you quit, after the terminal is restored. Every forecast the screen draws is
+recorded the way a `status` run's is, and only when what it shows changes: a screen left open all
+day does not count as a thousand forecasts.
+
+It needs a terminal. `snack dash | cat`, a redirected input, `TERM=dumb` or `--json` exit `2` and
+point at `snack status`, which gives the same reading through a pipe.
 
 ---
 
@@ -303,6 +356,21 @@ prediction attempt, with the posterior that produced it, but it is not exported 
 calibrated: a sequence scored as if it predicted one prompt would corrupt the live calibration
 stream.
 
+How far the answer reaches is documented forward only. The answer weights recent history more — a
+30-prompt recency half-life in the same conditions — so the evidence behind it saturates near an
+effective sample of 44, and beyond that a longer history does not narrow the interval any further.
+[How far the answer reaches](https://github.com/Duck1201/snack/blob/main/docs/specification/analysis.md#how-far-the-answer-reaches)
+tabulates it as a history and a length in, the typical interval out. Read backwards, to find where
+an interval stops informing, it would be the probability-to-`n` inversion this section refuses, done
+by hand.
+
+When the interval is too wide and no restriction carries weight in the evidence
+(`sequence-prior-tail-v1`), a second caveat follows the first: "Your recent history has no
+restriction to learn from, so the low end of this interval comes from SNACK's starting assumption
+rather than from your history." With no restriction of yours left to count, the low end is the
+prior's own tail raised to `n`, and that is the one explanation of the width that is true of your
+data.
+
 #### Calibration: does any of this work?
 
 Claiming 90% is easy. Being right 90% of the time is the part that has to be measured, and SNACK
@@ -328,14 +396,39 @@ Every figure is reported beside its sample size, and never as zero when the samp
 `not_available` and `0.000` are very different statements, and conflating them is how a dashboard
 starts flattering itself.
 
-Methods are never averaged together either. On a Codex source, where the shadow estimate is computed
-beside the answer, `calibration.by_method` scores each named method on its own forecasts, and scores
-the shadow a second time, `paired`, on exactly the outcomes the answering method was scored on — the
-comparison the rule for ever promoting it is written in.
+Methods are never averaged together either. Wherever a shadow estimate is computed beside the answer
+— on every source from `1.6` — `calibration.by_method` scores each named method on its own
+forecasts, and scores each shadow a second time, `paired`, on exactly the outcomes the answering
+method was scored on: the comparison the rules for ever promoting one are written in.
 
 Under simulation at 1,500 trials per rate, empirical coverage measured 0.911 / 0.880 / 0.863 / 0.864
 against true restriction rates of 0.02 / 0.05 / 0.10 / 0.25. The declared `0.8` target is therefore
 a **floor**, not an exact claim, and it is documented as one.
+
+#### Longer memories, in shadow
+
+The seven-day decay is not the only weighting. An outcome's weight also halves with every 30
+outcomes after it in the same cell — a 30-prompt **recency half-life** — so with a steady history
+the effective sample saturates near 44 rather than growing without end. That is deliberate: it is
+how quickly the answer notices a provider that has started saying no more often.
+
+From `1.6`, two more named methods run in shadow on every source: `bayesian-pressure-band-hl50@1`
+and `bayesian-pressure-band-hl100@1`, the answer's model with a 50- and a 100-prompt recency
+half-life and nothing else changed. A longer memory narrows the interval on a steady history; it is
+slower to notice a change. Both are recorded beside every answer (`prediction_shadow`, migration
+`019`), calibrated per method with a `paired` comparison, shown under `shadow` by `status --verbose`
+and listed in the `shadows` array of every `status --json` report. Neither is ever the answer, and
+`--sequence` stays the answer's.
+
+Either may displace the 30 only in a later minor, under `recency-variant-promotion-v1`: on real
+histories, at least 200 checked live forecasts, at least 5 restrictions live and in the backtest,
+and a strictly lower Brier score than the answer's on the same outcomes in both — and one condition
+calibration cannot buy. A longer memory may only become the answer if it still notices a provider
+changing its behaviour as fast as the current one does. That is the collapse test the 30-prompt
+half-life was chosen by: in a simulated drop from 0.99 to 0.70 viability, at a six-minute and at a
+two-hour cadence, at most 2 runs in 25 may still claim a lower bound above 0.9 twenty outcomes into
+the drop. Today the answer passes it and both variants fail it; `npm run collapse:check` in the
+repository prints the counts.
 
 #### Versioning
 
@@ -447,28 +540,38 @@ the answer:
 ```text
 $ snack status --source codex --verbose
 codex
-  next prompt  92-100% chance it goes through · risk low
+  next prompt  94-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   ...
   method       bayesian-pressure-band@1 · model stage5-prediction-v2
-  reported     Codex states 86% of its 5h window, resets in 3h 50m · 30% of its 7d window, resets Mon UTC · 4m ago
-  shadow       reported-capacity@1 would say 96-100% · risk low · evidence very_low — recorded to compare, not the answer above
+  reported     Codex states 85% of its 5h window, resets in 1h 32m · 30% of its 7d window, resets Thu UTC · 4m ago
+  shadow       reported-capacity@1 would say 90-100% · risk low · evidence low — recorded to compare, not the answer above
                reads what Codex states about its 5h window — in the near band · reported-capacity-v1
+               bayesian-pressure-band-hl50@1 would say 95-100% · risk low · evidence moderate
+               bayesian-pressure-band-hl100@1 would say 96-100% · risk low · evidence moderate
+               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt
   as of        3m ago · sync ok · period since 2026-10-03
   ...
 ```
 
-in `status --json` as the additive `shadow` member — the method, whether it was computed and why
-not, the binding window without its figure, and when computed its interval, risk and evidence — and
-in `stats --verbose` as a `by method` block (`calibration.by_method` in `--json`):
+— the three lines after `reported-capacity-v1` are the
+[longer recency half-lives](#longer-memories-in-shadow) every source gets from `1.6` — in
+`status --json` as the additive `shadow` member — the method, whether it was computed and why not,
+the binding window without its figure, and when computed its interval, risk and evidence; from `1.6`
+also the first entry of `shadows` — and in `stats --verbose` as a `by method` block
+(`calibration.by_method` in `--json`):
 
 ```text
 $ snack stats --verbose
   ...
   by method
-    bayesian-pressure-band@1  answer · live not available yet · backtest brier 0.003, sample 333
-    reported-capacity@1       shadow · live not available yet · backtest brier 0.003, sample 333
-                              same outcomes as the baseline · live not available yet · backtest brier 0.003 against 0.003, sample 333, 1 restricted
+    bayesian-pressure-band@1        answer · live not available yet · backtest brier 0.004, sample 297
+    reported-capacity@1             shadow · live not available yet · backtest brier 0.004, sample 281
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 281, 1 restricted
+    bayesian-pressure-band-hl50@1   shadow · live not available yet · backtest brier 0.004, sample 297
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 297, 1 restricted
+    bayesian-pressure-band-hl100@1  shadow · live not available yet · backtest brier 0.004, sample 297
+                                    same outcomes as the baseline · live not available yet · backtest brier 0.004 against 0.004, sample 297, 1 restricted
 ```
 
 The method reads the **binding window** — of Codex's latest statement, the window with the highest
@@ -487,7 +590,8 @@ started was 20%. A later minor release promotes it only if its own calibration b
 under `reported-capacity-promotion-v1`: on a real Codex history, at least 200 checked live
 forecasts, at least 5 restrictions both live and in the backtest, and a strictly lower Brier score
 than the baseline's on the same outcomes in both. No setting turns it on or off. A source no Codex
-installation feeds never computes it, and its output is what `1.4` printed.
+installation feeds never computes it; its `--verbose` panel shows only the longer recency
+half-lives.
 
 ## Supported clients
 
