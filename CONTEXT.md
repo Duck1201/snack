@@ -17,7 +17,7 @@ The estimated probability that a stated number of consecutive prompts all comple
 _Avoid_: Feature viability, prompts remaining, budget, real capacity, N prompts left
 
 **Too wide to inform**:
-A sequence-viability interval wider than half the probability scale, under the versioned `sequence-width-v1` policy. Such an interval contains even odds, so it cannot say whether all the prompts going through is more likely than not, and the reader is told so in words: "The 10-prompt interval is too wide to say much; a shorter sequence, or more history, narrows it." It describes the estimate, never capacity or a count; a narrow interval near zero is informative and is not too wide.
+A sequence-viability interval wider than half the probability scale, under the versioned `sequence-width-v1` policy. Such an interval contains even odds, so it cannot say whether all the prompts going through is more likely than not, and the reader is told so in words, with no remedy, because neither a shorter sequence nor more history always narrows it: "The 10-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not." It describes the estimate, never capacity or a count; a narrow interval near zero is informative and is not too wide.
 _Avoid_: Unreliable, failed, garbage, low confidence, out of range
 
 **Observed restriction**:

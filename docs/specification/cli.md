@@ -168,12 +168,14 @@ one. `--sequence` takes the panel shape even without a source selection, as `--v
 row's label carries `n`, and a header built for it would change width with every invocation.
 `--verbose` continues the method block with the sequence method, `sequence-<method>@1 · next <n>`.
 
-Each report carries a caveat naming what the estimate assumes: "The 10-prompt estimate assumes each
-prompt meets the conditions the next one does; it does not model usage pressure rising as they are
-sent." When the sequence interval is wider than half the probability scale (`sequence-width-v1`), a
-second caveat says so plainly — "The 10-prompt interval is too wide to say much; a shorter
-sequence, or more history, narrows it." (at `n = 1`: "more history narrows it") — so that a `0-78%`
-reads as an honest "not enough to say" rather than as a broken tool. Both are shared beneath the
+For `n` of 2 or more, each report carries a caveat naming what the estimate assumes: "The
+10-prompt estimate assumes each prompt meets the conditions the next one does; it does not model
+usage pressure rising as they are sent." At `n = 1` there is no next prompt to assume about, and the
+caveat is omitted. When the sequence interval is wider than half the probability scale
+(`sequence-width-v1`), a further caveat says so plainly — "The 10-prompt interval is too wide to say
+much; it cannot tell whether all of them going through is more likely than not." — so that a
+`0-78%` reads as an honest "not enough to say" rather than as a broken tool. It names no remedy:
+neither a shorter sequence nor more history always narrows the interval. Both are shared beneath the
 panels when every source carries them, by the rule above. In `--json` each report gains the
 optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without
 `--sequence` it is absent and every byte is what 1.3 emitted. The mathematics is

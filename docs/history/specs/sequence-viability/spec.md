@@ -448,7 +448,8 @@ identifier, then the sequence identifier.
 
 ### 6.3 Caveat
 
-When `--sequence` is given, each report's `caveats` gains, last:
+When `--sequence` is given with `N ≥ 2`, each report's `caveats` gains, last (at `N = 1` it is
+omitted; see §10, *Deviations*):
 
 > `The 10-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`
 
@@ -598,9 +599,10 @@ in words, instead of leaving the reader to think the tool failed.
   (`31-82%`), and not for 30 successes at `N = 5` or `10`, 38/2 at `N = 5`, or `Beta(1,1)` at
   `N = 50`.
 - **Vocabulary.** `CONTEXT.md` gains **Too wide to inform**. The caveat, last in `caveats` after the
-  §6.3 assumption caveat: "The 10-prompt interval is too wide to say much; a shorter sequence, or
-  more history, narrows it." At `N = 1`, where a shorter sequence does not exist: "The 1-prompt
-  interval is too wide to say much; more history narrows it." The number is written `10-prompt`,
+  §6.3 assumption caveat, the same sentence for every `N`: "The 10-prompt interval is too wide to say
+  much; it cannot tell whether all of them going through is more likely than not." It is true by the
+  rule itself and recommends nothing (see *Deviations*, the remedy-free width caveat, for why the
+  first wording's advice was withdrawn). The number is written `10-prompt`,
   never `10 prompts`, so it cannot read as an allowance; it is a caveat about informativeness and
   never about capacity or a count.
 - **`--json`.** The `sequence` object gains a sixth required member, `width`:
@@ -616,8 +618,20 @@ in words, instead of leaving the reader to think the tool failed.
   constrained `> 0`.
 - **§3.1 item 3, the metamorphic test**: the sequence caveats (§6.3, and the width caveat) name `N`,
   so the documents differ under `caveats` as well as under `sequence`. The test removes the trailing
-  caveats that begin `The N-prompt ` and asserts that the only integer they carry is `N`; everything
-  else must equal the run without `--sequence`.
+  caveats that begin `The N-prompt ` — none, one or two of them — and asserts that the only integer
+  they carry is `N`; everything else must equal the run without `--sequence`. Before deleting the
+  `sequence` member it asserts that member's exact key set at every depth, and that every number in
+  it but `length` lies in `[0, 1]`, so a count carried inside `sequence` cannot pass unseen.
+- **The width caveat names no remedy.** The first wording, "a shorter sequence, or more history,
+  narrows it", was withdrawn in review because it is false as often as not. The width
+  `upperₚ^N − lowerₚ^N` is not monotone in `N`: over the `α, β ∈ 0.5 + [0, 45.5]` grid at `N = 2..100`,
+  a shorter sequence is *wider* in 12,889 of the 23,606 flagged cases; over `α, β ∈ 0.5 + [0, 39.5]`
+  at `N ∈ {1, 2, 5, 10, 25, 50, 100}`, one more success widens a flagged interval in 488 of 1,166
+  cases. The advice would also have the reader sweep `N` by hand
+  until an interval looks informative — the `p → N` inversion of §3, performed by the user. The
+  caveat now states only what the rule guarantees, identically for every `N`.
+- **No assumption caveat at `N = 1`** (§6.3): a single prompt has no next one whose conditions it
+  could meet, so the caveat is omitted there. The `next 1` row is kept.
 - **§3.1 item 2, the solver scan** checks *declared* identifiers (`function`, `const`, `let`, `var`,
   `class`) against the solver names rather than the whole source text: `beta.js` correctly says its
   quantile "inverts" the CDF, and a prose match there is not a solver.

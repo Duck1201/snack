@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
+import { createSourceStatus } from "../src/status.js";
 import {
   cleanupRunFixtures,
   createCodexHistory,
@@ -217,7 +218,7 @@ test("an initial-generic source names its sequence method and stays degraded", a
   assert.equal(work.sequence.width.too_wide, true);
   assert.match(
     panel,
-    /! The 10-prompt interval is too wide to say much; a shorter sequence, or more history, narrows it\./u,
+    /! The 10-prompt interval is too wide to say much; it cannot tell whether all of them going through\s+is more likely than not\./u,
   );
 });
 
@@ -323,4 +324,72 @@ test("stats and export are byte-identical whether or not --sequence was ever use
     rows(sequenceFixture.paths.databaseFile, "SELECT * FROM prediction_evaluation").length > 0,
     "no outcome was evaluated, so calibration was never exercised",
   );
+});
+
+/**
+ * One source with no history at all, so the posterior is the plan-profile prior: its interval is
+ * too wide to inform at `N = 1` and at `N = 10`, and narrow (near zero) at `N = 100`.
+ *
+ * @param {number} sequenceLength
+ */
+function priorOnlyCaveats(sequenceLength) {
+  const status = createSourceStatus(
+    { alias: "work", provider: "anthropic", profile: "default", plan: "pro" },
+    {
+      prompts: 0,
+      successes: 0,
+      restrictions: 0,
+      excluded: 0,
+      as_of: null,
+      active_period_started_at: null,
+    },
+    new Date("2026-01-01T00:00:00.000Z"),
+    undefined,
+    undefined,
+    undefined,
+    { sequenceLength },
+  );
+  const plain = createSourceStatus(
+    { alias: "work", provider: "anthropic", profile: "default", plan: "pro" },
+    {
+      prompts: 0,
+      successes: 0,
+      restrictions: 0,
+      excluded: 0,
+      as_of: null,
+      active_period_started_at: null,
+    },
+    new Date("2026-01-01T00:00:00.000Z"),
+  );
+  assert.deepEqual(status.caveats.slice(0, plain.caveats.length), plain.caveats);
+  return { status, own: status.caveats.slice(plain.caveats.length) };
+}
+
+test("the too-wide caveat states the rule, the same for every length, and recommends nothing", () => {
+  // Width `upper^N - lower^N` is not monotone in N, and one more success can widen it: neither a
+  // shorter sequence nor more history is a remedy that always holds. Advising either would also
+  // have the reader sweep N by hand until a probability looks right -- the inversion SNACK never
+  // performs.
+  for (const length of [1, 2, 10]) {
+    const { status, own } = priorOnlyCaveats(length);
+    assert.equal(status.sequence?.width.too_wide, true, String(length));
+    const caveat = own.at(-1) ?? "";
+    assert.equal(
+      caveat,
+      `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
+    );
+    assert.doesNotMatch(caveat, /shorter|more history|narrow/iu);
+  }
+  const { status, own } = priorOnlyCaveats(100);
+  assert.equal(status.sequence?.width.too_wide, false);
+  assert.ok(!own.some((caveat) => caveat.includes("too wide")), JSON.stringify(own));
+});
+
+test("a sequence of one carries no assumption caveat: one prompt has no next one to assume about", () => {
+  const assumption = (/** @type {number} */ length) =>
+    `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`;
+  assert.ok(!priorOnlyCaveats(1).own.includes(assumption(1)));
+  assert.equal(priorOnlyCaveats(1).own.length, 1);
+  assert.equal(priorOnlyCaveats(2).own[0], assumption(2));
+  assert.equal(priorOnlyCaveats(100).own[0], assumption(100));
 });

@@ -110,10 +110,14 @@ export function createSourceStatus(
  * What a sequence estimate does not claim, said once per report.
  *
  * The first caveat is the assumption the evidence gates cannot see: every prompt is taken to meet
- * the band and category the next one does. The second is owed only when the interval is too wide
- * to inform (`SEQUENCE_WIDTH_POLICY`), so that a `0-78%` reads as an honest "not enough to say"
- * rather than as a broken tool. The length is written `N-prompt`, never `N prompts`, so no phrase
- * here can be read as a number of prompts a plan allows.
+ * the band and category the next one does. A sequence of one has no next prompt to assume about,
+ * so it is omitted there. The second is owed only when the interval is too wide to inform
+ * (`SEQUENCE_WIDTH_POLICY`), so that a `0-78%` reads as an honest "not enough to say" rather than
+ * as a broken tool. It states the rule and nothing more: the width `upper^N - lower^N` is not
+ * monotone in `N`, and one more success can widen it, so no remedy holds in general -- and advice
+ * to try another length would have the reader search `N` for a probability, the inversion SNACK
+ * never performs. The length is written `N-prompt`, never `N prompts`, so no phrase here can be
+ * read as a number of prompts a plan allows.
  *
  * @param {import("./prediction.js").SequenceAssessment} sequence
  * @returns {string[]}
@@ -121,12 +125,14 @@ export function createSourceStatus(
 function sequenceCaveats(sequence) {
   const length = sequence.length;
   return [
-    `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
+    ...(length === 1
+      ? []
+      : [
+          `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
+        ]),
     ...(sequence.width.too_wide
       ? [
-          length === 1
-            ? "The 1-prompt interval is too wide to say much; more history narrows it."
-            : `The ${length}-prompt interval is too wide to say much; a shorter sequence, or more history, narrows it.`,
+          `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
         ]
       : []),
   ];
