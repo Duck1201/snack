@@ -450,6 +450,33 @@ A time window is half-open, so `--until` at or before `--since` selects nothing 
 
 An unexpected internal failure reports no detail, because SNACK cannot know what is safe to print about a failure it did not anticipate. Setting `SNACK_DEBUG` to any value prints the underlying error to stderr for a bug report; it never enters the JSON document, stdout, or any file, and it is off unless asked for, because a stack trace carries absolute paths.
 
+From 1.6, exit `2` also carries the two refusals of `snack dash` (§12.12): `dash_json_unsupported` and `dash_requires_terminal`. They are new values of the open `errors[].code` field under an existing exit code; no exit code moves.
+
+### 12.12 `snack dash`
+
+```text
+snack dash
+```
+
+From 1.6, a live screen that watches every capacity source at once: the overview's columns, one row per source, and the selected source's detail beneath — `next prompt`, `evidence`, `pressure` with a marker on a scale between the lightest and the heaviest windows of the reader's own history, a plot of the last 24 windows, `drivers`, `reported` for a source a Codex installation feeds, `as of` and the caveats. It answers what `snack status` answers, with the same wording and the same rounding, and it takes no flag but `--help`.
+
+It refuses, before anything is drawn or written, with exit `2`:
+
+- `--json`, on either side of the command (`dash_json_unsupported`): "snack dash draws a screen and has no JSON form; `snack status --json` gives the same reading as a document." With `--json` the refusal is one error envelope, the only document `dash` produces.
+- a standard output or a standard input that is not a terminal — `snack dash | cat`, `snack dash < /dev/null` — or `TERM` unset, empty or `dumb` (`dash_requires_terminal`): "snack dash needs an interactive terminal; `snack status` gives the same reading through a pipe."
+
+Configuration, a missing capacity source and storage that is newer, unreadable or never initialized are refused as `status` refuses them (`3`, `4`, `5`). Storage that does not exist yet, or is a schema behind, is not refused: the first synchronization creates or migrates it, with its backup, and the screen says so meanwhile.
+
+Keys: `↑` `↓` or `k` `j` select a source; `r` synchronizes now; `s` shows or hides a `next N` row; `+` and `-` change `N` by one, from 1 to 100; `?` opens the help, `Esc` closes it; `Ctrl+L` repaints; `q` or `Ctrl+C` quits with `0`; `Ctrl+Z` suspends. `SIGINT` or `SIGTERM` from outside restores the terminal and ends the process by that signal. Colour follows `NO_COLOR` and `FORCE_COLOR` as everywhere else; with colour off a frame carries no escape sequence but cursor addressing. `COLUMNS` is not read: the screen is drawn at the terminal's own size, at least 64 columns and as many rows as the sources need, and a smaller terminal shows one sentence saying so.
+
+**Two clocks.** The screen is redrawn about once a second from the reading it already has; that reads no storage and takes no lock. A synchronization — `snack sync --json` as a child process — runs at start, then 60 seconds after the previous one ended, and on `r`; never two at once, never timed out, never killed, quitting included. After a synchronization that succeeded the dash takes the storage operation lock once, reads every source as `status --no-sync` would, and releases it: between synchronizations it holds no lock. A synchronization skipped because another `snack` command holds storage, or one that failed, is said on the screen, and the reading on it is marked as old.
+
+**What it records.** A forecast the screen draws is a prediction snapshot exactly as a `status` run's is ([ADR-0008](../adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md)): one is written when what is shown of a source's answer — its interval as printed, its risk label, its evidence level, its method and policy versions, its capacity period — differs from the last one this session delivered, and is confirmed delivered only once a frame drew it. A screen left open writes nothing more while that stays the same; new outcomes that do not move the printed line are linked to the snapshot still on screen. The delivery is recorded with `format` `dash`.
+
+**The sequence row.** `s` adds a `next N` row under the `next prompt` row; `N` is the person's own number, and starts at 10. Where the sequence interval is too wide to inform (`sequence-width-v1`) the row prints no figure but `N`: it says so in `status --sequence`'s own words, followed by the prior-tail caveat when it applies. The keys move `N` one step at a time between 1 and 100 and never skip, hide or stop at a length because of how informative it is. The row is drawn from the reading on screen and records nothing: `prediction_sequence` is written only by `status --sequence`, because the dash's `N` is stepped by a key and a row per length passed through would record key presses rather than forecasts the person received.
+
+The dash draws no shadow estimate; its help names `snack status --verbose`, which does.
+
 ## 13. JSON Output
 
 Every JSON document includes:

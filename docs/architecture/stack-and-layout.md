@@ -93,7 +93,13 @@ categorization), `reported-capacity.js` (from 1.5, the binding window and stated
 `reported-capacity` shadow method reads, resolved as of an instant), and `calibration.js` (Brier
 score, reliability, interval coverage, rolling-origin backtesting and, from 1.5, calibration per
 method). `status.js` assembles the domain result for output, and
-`storage.js` owns every query and write behind them.
+`storage.js` owns every query and write behind them. From 1.6, `source-report.js` is the one path
+from storage to a capacity source's report — the per-source loop `status` runs, and the recompute
+`snack dash` runs once per synchronization — and `snack dash` adds four modules, imported only by
+that command: `screen.js` (the alternate buffer and a per-row frame diff), `dash-view.js` (every
+widget, one pure function of the dash state), `dash.js` (the controller: the two clocks, the keys,
+the sync child and the snapshot ledger, talking only to ports) and `dash-terminal.js` (the real
+ports: raw-mode keys, resize, signals and the sync child).
 
 Schemas, plan profiles, and migrations are shown here at the root because they are shared
 assets. Each one physically lives inside the package that consumes and publishes it, and it

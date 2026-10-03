@@ -311,6 +311,30 @@ test("an error document is an envelope too", async () => {
   assert.equal(document.errors.length, 1);
 });
 
+test("dash publishes no payload: its one document is the error envelope refusing --json", async () => {
+  // `snack dash` draws a screen (ADR-0008): no success document exists to freeze, so it has no
+  // payload schema, and the only envelope it can produce is the refusal -- which must still be an
+  // envelope, with the new reason on the existing usage exit code.
+  const validate = await compileSchema("envelope.schema.json");
+  const fixture = await makeConfiguredFixture();
+  await run(["node", "snack", "setup", "opencode", ...setupFlags("work")], fixture.options);
+  fixture.stdout.value = "";
+  const exitCode = await run(["node", "snack", "dash", "--json"], fixture.options);
+
+  assert.equal(exitCode, ExitCode.usage);
+  const document = JSON.parse(fixture.stdout.value);
+  assert.ok(validate(document), JSON.stringify(validate.errors, null, 2));
+  assert.equal(document.command, "dash");
+  assert.equal(document.data, null);
+  assert.deepEqual(
+    document.errors.map((/** @type {{code: string}} */ error) => error.code),
+    ["dash_json_unsupported"],
+  );
+  const published = await readdir(new URL("../schemas/commands/", import.meta.url));
+  assert.ok(!published.includes("dash.schema.json"));
+  assert.ok(!invocations.some((invocation) => invocation.command === "dash"));
+});
+
 test("the export schema and the exported columns cannot drift apart", async () => {
   // This is what makes the schema file trustworthy without generating it: the declared columns are
   // the contract, and a column added to the exporter without being declared here fails.

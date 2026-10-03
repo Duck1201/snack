@@ -15,6 +15,11 @@ import { exportJsonChunks } from "../src/export.js";
 import { resolvePaths } from "../src/paths.js";
 import { PREDICTION_POLICY, buildForecast } from "../src/prediction.js";
 import { categorizeHistory } from "../src/prompt-features.js";
+import { readConfig } from "../src/config.js";
+import { createStoragePort } from "../src/dash.js";
+import { renderDash } from "../src/dash-view.js";
+import { createScreen } from "../src/screen.js";
+import { stateFor } from "./fixtures/dash-states.js";
 import { initializeDatabase, readOutcomeRows, writeSizeCategories } from "../src/storage.js";
 
 /** @type {string[]} */
@@ -891,4 +896,74 @@ test("reading a spool segment is the only thing that loads the schema validator"
     { afterImport: false },
     "importing spool.js must not pull in ajv; compile the schema on the first event read",
   );
+});
+
+/** @param {number[]} samples */
+function percentile95(samples) {
+  const sorted = [...samples].sort((a, b) => a - b);
+  return sorted[Math.ceil(sorted.length * 0.95) - 1] ?? Infinity;
+}
+
+test(`a dash recompute over ${PROMPTS.toLocaleString("en-US")} prompts stays inside the status --no-sync budget`, async (t) => {
+  // PLAN.md: a `snack dash` redraw is held to the budgets of the command it repeats. The recompute
+  // is the only redraw that reads storage -- lock, readiness, every source's report with its
+  // shadows and plot, and the attempt -- so it is held to `status --no-sync`'s p95 of 250 ms, in
+  // process, where the dash runs it.
+  const history = await makeLargeHistory();
+  await writeStatusConfig(history);
+  const config = await readConfig(history.paths.configFile);
+  const sources = /** @type {never[]} */ (config.sources);
+  const storage = createStoragePort({
+    paths: history.paths,
+    config,
+    selected: sources,
+    inScope: sources,
+    invocationId: "00000000-0000-4000-8000-000000000000",
+  });
+  /** @type {number[]} */
+  const samples = [];
+  for (let index = 0; index < 20; index += 1) {
+    const startedAt = process.hrtime.bigint();
+    await storage.session(async (tx) => {
+      assert.equal((await tx.readiness()).storage, "ready");
+      const built = await tx.build(now, () => ({ performed: false, status: "ok" }));
+      for (const source of built) tx.record(source);
+    });
+    samples.push(Number(process.hrtime.bigint() - startedAt) / 1e6);
+  }
+  const p95 = percentile95(samples);
+  const measured = `p95 ${p95.toFixed(0)}ms, min ${Math.min(...samples).toFixed(0)}ms`;
+  t.diagnostic(`dash recompute: ${measured}`);
+  if (process.env.CI || machineIsBusy()) return;
+  assert.ok(p95 < 250, measured);
+});
+
+test("one dash frame for nine sources at 200 x 60 stays inside 5 ms", (t) => {
+  const base = stateFor();
+  const template = /** @type {(typeof base.sources)[number]} */ (base.sources[0]);
+  const state = {
+    ...base,
+    sources: Array.from({ length: 9 }, (_, index) => ({ ...template, alias: `source${index}` })),
+  };
+  let bytes = 0;
+  const screen = createScreen({ write: (chunk) => (bytes += chunk.length) });
+  screen.enter();
+  /** @type {number[]} */
+  const samples = [];
+  for (let second = 0; second < 600; second += 1) {
+    // The clock moves every frame, so the header and the ages really change and the diff writes.
+    const frameState = {
+      ...state,
+      now: new Date(Date.parse(base.now) + second * 1000).toISOString(),
+      selected: second % 9,
+    };
+    const startedAt = process.hrtime.bigint();
+    screen.frame(renderDash(frameState, { columns: 200, rows: 60 }, { color: true }).lines);
+    samples.push(Number(process.hrtime.bigint() - startedAt) / 1e6);
+  }
+  const p95 = percentile95(samples);
+  const measured = `p95 ${p95.toFixed(2)}ms, ${(bytes / samples.length).toFixed(0)} bytes a frame`;
+  t.diagnostic(`dash frame: ${measured}`);
+  if (process.env.CI || machineIsBusy()) return;
+  assert.ok(p95 < 5, measured);
 });

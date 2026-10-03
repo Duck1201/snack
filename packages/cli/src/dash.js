@@ -654,7 +654,12 @@ export async function runDash(ports) {
   }
   // A sync child still running is left to finish its transaction and release the lock on its own:
   // killing it mid-transaction would leave the lock to go stale for two minutes.
-  if (raise !== null) signals.raise(raise);
+  if (raise !== null) {
+    // Dying by the signal mid-recompute would leave the storage lock to go stale for two minutes:
+    // the work in flight -- a recompute, a delivery -- finishes and releases it first.
+    await Promise.allSettled([...inflight]);
+    signals.raise(raise);
+  }
   return 0;
 }
 

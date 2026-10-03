@@ -78,6 +78,15 @@ export function createTerminalPorts({ stdin, stdout, env }) {
         };
       },
       raise: (signal) => {
+        // `proper-lockfile` loads `signal-exit`, which keeps a listener of its own on the
+        // terminating signals and, seeing ours gone, swallows the re-raised one: the process would
+        // end 0 instead of by the signal. The session holds no lock by now, so there is nothing
+        // left for that listener to clean up, and it is removed with ours.
+        if (signal !== "SIGSTOP") {
+          for (const listener of process.listeners(/** @type {NodeJS.Signals} */ (signal))) {
+            process.off(signal, listener);
+          }
+        }
         process.kill(process.pid, signal);
       },
       onExit: (handler) => {

@@ -501,9 +501,23 @@ wide, nothing changes. The `1.5` corpus's `status --sequence 10` is too wide wit
 all three sources, so the replay above asserts exactly this one string appended to each and every
 other byte unchanged.
 
+**One new command, additive to the flag surface: `snack dash`.** A live screen, with no flag but
+`--help` (`contracts.test.js` gains `dash: ["--help"]`). It produces no document: `--json` — the
+program-level option Commander accepts on either side of it — is refused with exit `2` and the
+reason `dash_json_unsupported`, as one error envelope with `command: "dash"` and `data: null`; a
+standard output or input that is not a terminal, or `TERM` unset, empty or `dumb`, is refused with
+exit `2` and `dash_requires_terminal`. Both are new values of the open `errors[].code` under an
+existing exit code, the shape `sequence_length_invalid` took; no exit code moves, and no payload
+schema is added, because no success document exists. A forecast the dash draws is a prediction
+snapshot through the path `status` uses, written only when what is shown changed (ADR-0008, note of
+`1.6.0`); its delivery row's `format` is `dash`, a new value of a column the export has always
+carried as `predictions.delivery_format` and `export.schema.json` has never constrained. No
+migration comes from the dash, and its `next N` row records no `prediction_sequence`.
+
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`; each variant names its own policy. No new
-flag, exit code, configuration key or reason value. `status.schema.json` declares `shadows`
+flag on an existing command, no exit code and no configuration key; the only new reason values are
+`snack dash`'s two refusals, above. `status.schema.json` declares `shadows`
 (`$defs/shadowEntry`) and `stats.schema.json` rewrites `by_method`'s description; every frozen corpus
 — `0.9`, `1.2`, `1.3`, `1.4`, and the `1.5` corpus captured at `v1.5.0` before any of this changed —
 still validates, unchanged.
