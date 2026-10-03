@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test";
 
 import {
   getConfigValue,
+  isConfiguredSource,
   parseAndValidateConfig,
   prepareConfigValues,
   readConfig,
@@ -83,6 +84,70 @@ test("a configured source names one client and the fingerprint family that clien
         error instanceof SnackError &&
         error.reason.startsWith("config_schema_") &&
         error.exitCode === 3,
+    );
+  }
+});
+
+test("a Codex CLI source names its sessions directory and one of the two rollout families", () => {
+  const codexSource = {
+    alias: "codex",
+    installation_id: "33333333-4444-4555-8666-777777777777",
+    adapter: "codex",
+    sessions: "/home/user/.codex/sessions",
+    provider: "openai",
+    profile: "default",
+    plan: "plus",
+    fingerprint: "cx-rollout-usagerecord-v1",
+  };
+  const openCodeSource = {
+    alias: "work",
+    installation_id: "11111111-2222-4333-8444-555555555555",
+    adapter: "opencode",
+    database: "/tmp/opencode.db",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "oc-sqlite-msgpart-v1",
+  };
+  const claudeSource = {
+    alias: "claude",
+    installation_id: "22222222-3333-4444-8555-666666666666",
+    adapter: "claude",
+    projects: "/home/user/.claude/projects",
+    provider: "anthropic",
+    profile: "default",
+    plan: "pro",
+    fingerprint: "cc-jsonl-turntree-v1",
+  };
+  /** @param {unknown[]} sources */
+  const validate = (sources) =>
+    parseAndValidateConfig(JSON.stringify({ schema_version: 1, sources }));
+
+  // Codex keeps both families in one sessions tree, so either is a configuration setup can write.
+  assert.ok(validate([codexSource]));
+  assert.ok(validate([{ ...codexSource, fingerprint: "cx-rollout-tokencount-v1" }]));
+  assert.ok(validate([openCodeSource, claudeSource, codexSource]));
+  assert.equal(isConfiguredSource(codexSource), true);
+  assert.equal(isConfiguredSource({ ...codexSource, sessions: undefined }), false);
+
+  for (const invalid of [
+    { ...codexSource, sessions: undefined },
+    { ...codexSource, sessions: "" },
+    { ...codexSource, fingerprint: "cc-jsonl-turntree-v1" },
+    { ...codexSource, fingerprint: "cx-rollout-v0" },
+    { ...codexSource, database: "/tmp/opencode.db" },
+    { ...codexSource, projects: "/home/user/.claude/projects" },
+    { ...claudeSource, sessions: "/home/user/.codex/sessions" },
+    { ...openCodeSource, sessions: "/home/user/.codex/sessions" },
+    { ...claudeSource, fingerprint: "cx-rollout-usagerecord-v1" },
+  ]) {
+    assert.throws(
+      () => validate([JSON.parse(JSON.stringify(invalid))]),
+      (error) =>
+        error instanceof SnackError &&
+        error.reason.startsWith("config_schema_") &&
+        error.exitCode === 3,
+      JSON.stringify(invalid),
     );
   }
 });

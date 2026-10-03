@@ -30,7 +30,8 @@
               "adapter": { "const": "opencode" },
               "fingerprint": { "const": "oc-sqlite-msgpart-v1" },
               "database": true,
-              "projects": false
+              "projects": false,
+              "sessions": false
             },
             "required": ["adapter", "database"]
           },
@@ -40,9 +41,23 @@
               "adapter": { "const": "claude" },
               "fingerprint": { "const": "cc-jsonl-turntree-v1" },
               "projects": true,
-              "database": false
+              "database": false,
+              "sessions": false
             },
             "required": ["adapter", "projects"]
+          },
+          {
+            "description": "Codex CLI reads a directory of JSONL rollouts.",
+            "properties": {
+              "adapter": { "const": "codex" },
+              "fingerprint": {
+                "enum": ["cx-rollout-tokencount-v1", "cx-rollout-usagerecord-v1"]
+              },
+              "sessions": true,
+              "database": false,
+              "projects": false
+            },
+            "required": ["adapter", "sessions"]
           }
         ],
         "properties": {
@@ -55,7 +70,7 @@
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
           },
           "adapter": {
-            "enum": ["opencode", "claude"]
+            "enum": ["opencode", "claude", "codex"]
           },
           "database": {
             "type": "string",
@@ -66,6 +81,11 @@
             "type": "string",
             "minLength": 1,
             "description": "Claude Code's projects directory of JSONL session histories."
+          },
+          "sessions": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Codex CLI's sessions directory of JSONL rollouts."
           },
           "provider": {
             "$ref": "#/$defs/localIdentifier"
@@ -82,7 +102,12 @@
             "description": "Bundled plan-profile id, or a path to a local user-defined profile."
           },
           "fingerprint": {
-            "enum": ["oc-sqlite-msgpart-v1", "cc-jsonl-turntree-v1"]
+            "enum": [
+              "oc-sqlite-msgpart-v1",
+              "cc-jsonl-turntree-v1",
+              "cx-rollout-tokencount-v1",
+              "cx-rollout-usagerecord-v1"
+            ]
           }
         }
       }

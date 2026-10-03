@@ -60,3 +60,45 @@ test("every configured source is reachable by its index, whatever the array leng
     { numRuns: 100 },
   );
 });
+
+test("a source of any shipped client survives validation and reads back unchanged", () => {
+  const shapes = {
+    opencode: { database: "/tmp/opencode.db", fingerprint: "oc-sqlite-msgpart-v1" },
+    claude: { projects: "/tmp/claude/projects", fingerprint: "cc-jsonl-turntree-v1" },
+    codex: {
+      sessions: "/tmp/codex/sessions",
+      fingerprint: fc.constantFrom("cx-rollout-tokencount-v1", "cx-rollout-usagerecord-v1"),
+    },
+  };
+  fc.assert(
+    fc.property(
+      fc.constantFrom("opencode", "claude", "codex").chain((adapter) =>
+        fc.record({
+          adapter: fc.constant(adapter),
+          location: fc.constant(/** @type {Record<string, unknown>} */ (shapes[adapter])),
+          fingerprint:
+            adapter === "codex"
+              ? shapes.codex.fingerprint
+              : fc.constant(String(shapes[adapter].fingerprint)),
+        }),
+      ),
+      ({ adapter, location, fingerprint }) => {
+        const source = {
+          alias: "source",
+          installation_id: "11111111-2222-4333-8444-555555555555",
+          adapter,
+          ...Object.fromEntries(Object.entries(location).filter(([key]) => key !== "fingerprint")),
+          provider: "provider",
+          profile: "default",
+          plan: "generic",
+          fingerprint,
+        };
+        const config = parseAndValidateConfig(
+          JSON.stringify({ schema_version: 1, sources: [source] }),
+        );
+        assert.deepEqual(getConfigValue(config, "sources.0"), source);
+      },
+    ),
+    { numRuns: 100 },
+  );
+});
