@@ -632,5 +632,12 @@ source; it is the same object as `shadow`.
   `1.5` accepted is not a minor's change. `019`, unreleased, was edited in place to drop the same
   cross-column CHECK, so a shadow row can never abort the answer's transaction; no test pinned its
   checksum. `compatibility.md` records the fix in its `1.6.0` section.
+- **What `stats` costs, after review.** Plain `stats` (neither `--json` nor `--verbose`) prints only
+  the calibration's snapshots headline, so it no longer replays the history; its output is held byte
+  for byte to what the full report renders to. `betaInterval` computes both ends of an interval from
+  one log-gamma setup (three log-gammas per shape pair instead of eighteen), held bit for bit to the
+  `1.4.0` reference. Spawned on 100,000-prompt histories, best of three: OpenCode `stats` 3.51 s to
+  0.25 s, `--json` 3.51 s to 3.13 s; Codex `stats` 5.94 s to 0.23 s, `--json` 5.97 s to 5.32 s;
+  `--verbose` as `--json`. The calibration member is identical before and after on both.
 - **Left to the release PR:** ADR-0011, the roadmap entry, `docs/release/performance.md`, the
   changeset and the version. The measured budgets are in the build report.
