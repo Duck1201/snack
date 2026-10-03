@@ -6,6 +6,10 @@ import fc from "fast-check";
 import {
   EVIDENCE_POLICY,
   PREDICTION_POLICY,
+  SEQUENCE_MAX_LENGTH,
+  SEQUENCE_WIDTH_POLICY,
+  assembleForecast,
+  assessSequence,
   buildForecast,
   classifyIngestionCompleteness,
   classifyRisk,
@@ -439,4 +443,149 @@ test("the contributors name the window their counts come from", () => {
     PREDICTION_POLICY.evidence_window_prompts,
   );
   assert.equal(Object.hasOwn(result.contributors, "cell"), false);
+});
+
+/**
+ * A forecast assembled straight from a posterior, so a sequence test can name `Beta(α, β)` exactly
+ * rather than reach it through decayed weights. `prior.strength = 1` at viability 0.5 is the
+ * `Beta(0.5, 0.5)` of `generic.json`, and the cell adds whole successes and restrictions to it.
+ *
+ * @param {{successes?: number, restrictions?: number, strength?: number, level?: string}} [shape]
+ */
+function posterior(shape = {}) {
+  const successes = shape.successes ?? 0;
+  const restrictions = shape.restrictions ?? 0;
+  return assembleForecast({
+    cell: {
+      prompts_considered: successes + restrictions,
+      limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
+      successes,
+      restrictions,
+      excluded: 0,
+      weighted_successes: successes,
+      weighted_restrictions: restrictions,
+      effective_samples: successes + restrictions,
+      alpha: 0,
+      beta: 0,
+    },
+    level: shape.level ?? (successes + restrictions === 0 ? "prior" : "period_band_category"),
+    prior: { strength: shape.strength ?? 1, viability: 0.5 },
+    policy: PREDICTION_POLICY,
+    dataCompleteness: "complete",
+  });
+}
+
+test("a sequence of one is the single-prompt answer, bit for bit", () => {
+  for (const base of [
+    posterior(),
+    posterior({ successes: 30 }),
+    posterior({ successes: 38, restrictions: 2 }),
+    posterior({ successes: 3, restrictions: 9 }),
+  ]) {
+    const sequence = assessSequence(base, 1);
+    assert.equal(sequence.length, 1);
+    for (const member of /** @type {const} */ (["lower", "point", "upper", "coverage_target"])) {
+      assert.ok(
+        Object.is(sequence.viability[member], base.viability[member]),
+        `${member}: ${sequence.viability[member]} against ${base.viability[member]}`,
+      );
+    }
+    assert.deepEqual(sequence.risk, base.risk);
+    assert.deepEqual(sequence.evidence, base.evidence);
+    assert.deepEqual(sequence.method, { id: `sequence-${base.method.id}`, version: "1" });
+  }
+});
+
+test("a sequence names its own method, keeping the base method visible inside it", () => {
+  assert.deepEqual(assessSequence(posterior(), 10).method, {
+    id: "sequence-initial-generic",
+    version: "1",
+  });
+  assert.deepEqual(assessSequence(posterior({ successes: 30 }), 10).method, {
+    id: "sequence-bayesian-pressure-band",
+    version: "1",
+  });
+});
+
+test("the sequence point is the posterior predictive product, not the point raised to a power", () => {
+  // Beta(0.5, 0.5): E[p^10] = prod_{k<10} (0.5 + k) / (1 + k).
+  assert.equal(assessSequence(posterior(), 10).viability.point, 46189 / 262144);
+
+  const strong = assessSequence(posterior({ successes: 30 }), 5);
+  assert.equal(strong.viability.lower.toFixed(4), "0.7996");
+  assert.equal(strong.viability.point.toFixed(4), "0.9264");
+  assert.equal(strong.viability.upper.toFixed(4), "0.9987");
+  assert.equal(strong.risk.label, "low");
+
+  // Jensen: the naive power is always below the predictive probability, and never used.
+  const long = assessSequence(posterior({ successes: 30 }), 25);
+  const naive = (30.5 / 31) ** 25;
+  assert.ok(long.viability.point > naive, `${long.viability.point} against ${naive}`);
+  assert.equal(long.viability.point.toFixed(3), "0.740");
+});
+
+test("the sequence interval is widened to contain its point when the powered upper falls short", () => {
+  // Beta(1, 1), N = 50: the 90th percentile raised to 50 is 0.00515, the point 0.01961.
+  const base = posterior({ strength: 2 });
+  const unclamped = base.viability.upper ** 50;
+  const sequence = assessSequence(base, 50);
+  assert.ok(unclamped < sequence.viability.point, `${unclamped} against the point`);
+  assert.equal(sequence.viability.upper, sequence.viability.point);
+  assert.ok(sequence.viability.lower <= sequence.viability.point);
+  assert.equal(sequence.viability.point.toFixed(5), "0.01961");
+});
+
+test("the sequence risk label reads the sequence lower bound under the single-prompt policy", () => {
+  const sequence = assessSequence(posterior({ successes: 30 }), 10);
+  assert.deepEqual(sequence.risk, classifyRisk(sequence.viability.lower));
+  assert.equal(sequence.risk.label, "elevated");
+  assert.equal(sequence.risk.policy_version, "stage2-risk-v2");
+});
+
+test("the sequence evidence level is the single-prompt one, whatever the length", () => {
+  const base = posterior({ successes: 38, restrictions: 2 });
+  for (const length of [1, 2, 10, 50, SEQUENCE_MAX_LENGTH]) {
+    assert.deepEqual(assessSequence(base, length).evidence, base.evidence);
+  }
+});
+
+/**
+ * A forecast whose single-prompt interval is written out by hand, so the width rule can be probed
+ * at its edge without searching for a posterior that lands there.
+ *
+ * @param {number} lower
+ * @param {number} upper
+ * @returns {import("../src/prediction.js").Forecast}
+ */
+function interval(lower, upper) {
+  const base = posterior({ strength: 2 });
+  return { ...base, viability: { ...base.viability, lower, point: 0.5, upper } };
+}
+
+test("an interval wider than half the scale is flagged as too wide to inform, and no narrower one", () => {
+  assert.equal(SEQUENCE_WIDTH_POLICY.max_width, 0.5);
+  assert.equal(SEQUENCE_WIDTH_POLICY.version, "sequence-width-v1");
+  // Exactly half: the interval still sits on one side of even odds at its edge. Not flagged.
+  assert.deepEqual(assessSequence(interval(0.25, 0.75), 1).width, {
+    too_wide: false,
+    max_width: 0.5,
+    policy_version: "sequence-width-v1",
+  });
+  // A hair wider: it can no longer say whether all of them going through is more likely than not.
+  assert.equal(assessSequence(interval(0.25, 0.7500001), 1).width.too_wide, true);
+  assert.equal(assessSequence(interval(0.2499999, 0.75), 1).width.too_wide, true);
+  // Narrow and low is informative: it says plainly that the sequence is unlikely to go through.
+  assert.equal(assessSequence(posterior({ strength: 2 }), 50).width.too_wide, false);
+  // The worked examples of the specification, both sides.
+  assert.equal(assessSequence(posterior(), 10).width.too_wide, true);
+  assert.equal(assessSequence(posterior({ successes: 30 }), 10).width.too_wide, false);
+  assert.equal(assessSequence(posterior({ successes: 30 }), 25).width.too_wide, true);
+  assert.equal(
+    assessSequence(posterior({ successes: 38, restrictions: 2 }), 5).width.too_wide,
+    false,
+  );
+  assert.equal(
+    assessSequence(posterior({ successes: 38, restrictions: 2 }), 10).width.too_wide,
+    true,
+  );
 });
