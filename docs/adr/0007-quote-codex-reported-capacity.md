@@ -54,3 +54,23 @@ path adds its own privacy-canary assertion, as every capture path must.
 This decision is reopened if Codex stops reporting `rate_limits`, if the reported figure is observed
 to disagree with restrictions SNACK sees from the same source, or if the field becomes
 account-scoped in a way that no longer maps onto a capacity source.
+
+## Amendment — 1.3.0 (observed rollouts, Codex 0.145–0.159)
+
+The sample above is narrower than what Codex writes. From `0.159` the `rate_limits` object
+carries a `secondary` window beside `primary`, and the slots changed meaning: before `0.159`
+`primary` was the 7-day (or, on the free plan, 30-day) window; from `0.159` it is a 5-hour window
+and the 7-day window is `secondary`. SNACK therefore quotes every stated window and identifies
+each by its `window_minutes`, never by its slot. `limit_id` is not constant — `codex` and
+`premium` both occur — so a quoted figure is always kept with the `limit_id` it was stated for,
+and figures for different limits are never combined.
+
+`rate_limit_reached_type` did not name the one refusal observed: Codex recorded it as
+`codex_error_info: "usage_limit_exceeded"` on the turn's completion while every surrounding
+`rate_limit_reached_type` was null. Both are read as observed restrictions; neither alone is
+trusted to be complete. `spend_control_reached` and the `*_credits_depleted` values describe a
+spending cap, not a usage condition, and are operational failures like Claude's `billing`.
+`credits` is not read at all.
+
+The reopen clause gains one case: if `limit_id` values multiply or become per-model such that a
+stated figure no longer maps onto one capacity source.

@@ -433,7 +433,7 @@ that prefix; an install with the flag under both npm 11.16.0 and npm 12 loads th
 ### 1.3.0 - Codex CLI adapter
 
 - read `~/.codex/sessions/**/rollout-*.jsonl` by **field allowlist**, never by exclusion: the same files carry `user_message`, `agent_message`, `cwd`, `workspace_roots`, and `git`. `~/.codex/history.jsonl` is never opened;
-- ingest token usage per turn, and `rate_limit_reached_type` as an observed restriction stated by the source itself;
+- ingest token usage per turn, and `rate_limit_reached_type` as an observed restriction stated by the source itself — together with `task_complete.payload.error.codex_error_info` (`usage_limit_exceeded`, `rate_limit_exceeded`), because the one real refusal observed was recorded only there, with every surrounding `rate_limit_reached_type` null ([ADR-0007 amendment](../adr/0007-quote-codex-reported-capacity.md));
 - ingest and display **reported capacity usage** — `used_percent`, `window_minutes`, `resets_at`, `plan_type` — labelled as reported and shown beside the estimate, never inside it and never in usage pressure ([ADR-0007](../adr/0007-quote-codex-reported-capacity.md));
 - fingerprinted schema families, fail closed on drift, `snack setup codex`, and a support matrix page alongside the OpenCode and Claude ones;
 - the prediction method is deliberately unchanged in this release.

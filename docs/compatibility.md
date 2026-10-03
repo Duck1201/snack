@@ -284,6 +284,37 @@ scripts in a global install unless they are allowed by name, and still reports s
 document and `snack update`'s own plan pass `--allow-scripts=better-sqlite3`, which npm 11.16 accepts
 as well. `pnpm` and `bun` keep their own approval mechanisms and their plans are unchanged.
 
+## What 1.3.0 adds, and why it is a minor
+
+**A third client, and every surface it touches grows rather than moves.** `snack setup codex` is a
+new command with the same flags as `setup claude`; its payload has its own schema,
+`setup-codex.schema.json`, routed from the envelope by command name exactly as the other two are.
+A new command is additive to the flag surface, and `contracts.test.js` gains it in its literal map.
+
+**`status --json` gains one optional field.** A source fed by a Codex CLI installation carries
+`reported_capacity`: what Codex itself stated about its capacity windows, quoted beside the
+estimate. It is absent for every other source, so a document from an installation without Codex is
+byte-identical to `1.2`'s, and the `1.2` corpus captured before any of this changed still validates
+against the `1.3` schema — a test asserts that. Nothing in `viability`, `risk`, `evidence` or
+`pressure` reads it, and a test asserts those are identical with and without stated figures
+([ADR-0007](./adr/0007-quote-codex-reported-capacity.md)).
+
+**`data purge` counts one more kind of row.** `counts.reported_capacity_observations` is optional in
+`data-purge.schema.json`, which never closed `counts`. The `sync` payload is unchanged: storage counts
+stated figures internally and `sync` does not report them in `1.3`.
+
+**No envelope, export, configuration or spool version moves.** The envelope stays at
+`schema_version` 2, the export at 2, configuration at 1, spool events at 1. Configuration admits a
+third `oneOf` branch for `adapter: "codex"`; a `1.2` binary refuses a configuration holding one,
+which is the same forward-only stance `0.7` took for Claude Code. **Reported figures are not
+exported**: a new table in the export document would fail every consumer's version-2 validator,
+which is a breaking change and therefore a major. `source_bindings.adapter` can now hold `codex`;
+that column's values were never constrained by the schema.
+
+**Two migrations, both append-only.** `014` widens the two client-kind constraints to admit
+`codex`, and `015` adds the table that holds stated figures. The pre-migration backup is taken as for
+every migration.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a
@@ -348,6 +379,7 @@ release, so the pin now resolves here — see [npm channels](#npm-channels) for 
 | Platforms       | Linux, macOS, WSL2/Debian 13                                                    |
 | OpenCode        | the validated schema families in [docs/opencode-support.md](./opencode-support.md) |
 | Claude Code     | the validated schema families in [docs/claude-support.md](./claude-support.md)  |
+| Codex CLI       | the validated schema families in [docs/codex-support.md](./codex-support.md), from `1.3` |
 | Migration floor | `0.6.0`; every `0.6+` release preserves supported data and configuration        |
 
 Stable releases support the latest validated client schema family plus one previous validated family
