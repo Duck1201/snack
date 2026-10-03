@@ -4,6 +4,7 @@ import { test } from "node:test";
 import fc from "fast-check";
 
 import { QUANTILE_TOLERANCE, betaQuantile, regularizedIncompleteBeta } from "../src/beta.js";
+import * as reference from "./fixtures/beta-reference.js";
 
 /**
  * Expected values come from Beta families whose quantile has a closed form, derived
@@ -250,4 +251,56 @@ test("a shape parameter that is not a positive number is refused", () => {
   // Probabilities at or beyond the boundaries are answered, not rejected.
   assert.equal(betaQuantile(0, 2, 3), 0);
   assert.equal(betaQuantile(1, 2, 3), 1);
+});
+
+test("hoisting the normalizer out of the Newton loop changes no double, bit for bit", () => {
+  // Shapes from the strongest prior to a saturated posterior, both sides of one, and the
+  // probabilities every forecast asks for, plus the tails. `Object.is` so -0 and NaN count too.
+  const shapes = [0.01, 0.2, 0.5, 0.8, 1, 1.2, 2, 3.7, 10, 44.5, 250, 1e4];
+  const probabilities = [
+    1e-12,
+    1e-6,
+    0.001,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    0.9,
+    0.95,
+    0.999,
+    1 - 1e-9,
+  ];
+  const points = [1e-300, 1e-12, 0.001, 0.1, 0.3, 0.5, 0.7, 0.9, 0.999, 1 - 1e-12];
+  let compared = 0;
+  for (const alpha of shapes) {
+    for (const beta of shapes) {
+      for (const probability of probabilities) {
+        const actual = betaQuantile(probability, alpha, beta);
+        const expected = reference.betaQuantile(probability, alpha, beta);
+        assert.ok(Object.is(actual, expected), `Q(${probability}; ${alpha}, ${beta})`);
+        compared += 1;
+      }
+      for (const x of points) {
+        const actual = regularizedIncompleteBeta(x, alpha, beta);
+        const expected = reference.regularizedIncompleteBeta(x, alpha, beta);
+        assert.ok(Object.is(actual, expected), `I(${x}; ${alpha}, ${beta})`);
+        compared += 1;
+      }
+    }
+  }
+  assert.equal(compared, shapes.length * shapes.length * (probabilities.length + points.length));
+  fc.assert(
+    fc.property(
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 1e-3, max: 1e3, noNaN: true }),
+      fc.double({ min: 1e-3, max: 1e3, noNaN: true }),
+      (probability, alpha, beta) =>
+        Object.is(
+          betaQuantile(probability, alpha, beta),
+          reference.betaQuantile(probability, alpha, beta),
+        ),
+    ),
+    { numRuns: 2000 },
+  );
 });

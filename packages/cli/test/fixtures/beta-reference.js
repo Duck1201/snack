@@ -1,12 +1,9 @@
 /**
- * Numerical primitives for Beta credible intervals.
- *
- * The prediction model needs Beta quantiles with declared error bounds rather than an ad
- * hoc approximation. The regularized incomplete Beta function is evaluated with the
- * Lentz modified continued fraction, and the quantile inverts it with Newton's method
- * kept inside a bisection bracket.
+ * The Beta primitives exactly as `1.4.0` shipped them, before the shape-dependent normalizer was
+ * hoisted out of the quantile's Newton loop. Kept only so `beta.test.js` can prove the hoisted
+ * version returns the same double, bit for bit: every stored forecast and every replayed
+ * calibration figure is built from these numbers, so "close" would not be good enough.
  */
-
 const TINY = 1e-300;
 const CONTINUED_FRACTION_ITERATIONS = 300;
 const CONTINUED_FRACTION_TOLERANCE = 3e-16;
@@ -24,7 +21,7 @@ const QUANTILE_ITERATIONS = 1200;
  * ten orders of magnitude wide — which also made the result non-monotone in the
  * probability, since where it stopped depended on the path taken.
  */
-export const QUANTILE_TOLERANCE = 1e-14;
+const QUANTILE_TOLERANCE = 1e-14;
 
 /** Lanczos g = 7 coefficients; relative error stays below 1e-15 for positive arguments. */
 const LANCZOS = [
@@ -114,36 +111,6 @@ function requirePositive(value, name) {
 export function regularizedIncompleteBeta(x, alpha, beta) {
   requirePositive(alpha, "alpha");
   requirePositive(beta, "beta");
-  return incompleteBeta(x, alpha, beta, undefined, undefined);
-}
-
-/**
- * `log(Gamma(alpha + beta) / (Gamma(alpha) * Gamma(beta)))`, subtracted in the order the incomplete
- * Beta function has always subtracted it, so a caller that computes it once gets the same double as
- * one that computes it on every call. It depends on the shapes alone.
- *
- * @param {number} alpha
- * @param {number} beta
- */
-function logNormalizer(alpha, beta) {
-  return logGamma(alpha + beta) - logGamma(alpha) - logGamma(beta);
-}
-
-/**
- * The regularized incomplete Beta function with its normalizers supplied: `forward` for
- * (alpha, beta) and `backward` for the swapped shapes the symmetry identity evaluates. Undefined
- * computes one where it is needed. The quantile's Newton loop calls this with fixed shapes up to
- * hundreds of times per quantile, and recomputing three log-gammas on every call was most of what
- * replaying a six-figure history cost.
- *
- * @param {number} x
- * @param {number} alpha
- * @param {number} beta
- * @param {number | undefined} forward
- * @param {number | undefined} backward
- * @returns {number}
- */
-function incompleteBeta(x, alpha, beta, forward, backward) {
   if (!(x > 0)) return 0;
   if (x >= 1) return 1;
 
@@ -151,11 +118,15 @@ function incompleteBeta(x, alpha, beta, forward, backward) {
   // identity I_x(a, b) = 1 - I_(1-x)(b, a) covers the other side. The comparison stays
   // strict: at exactly (alpha + 1) / (alpha + beta + 2) both sides would swap forever.
   if (x > (alpha + 1) / (alpha + beta + 2)) {
-    return 1 - incompleteBeta(1 - x, beta, alpha, backward, forward);
+    return 1 - regularizedIncompleteBeta(1 - x, beta, alpha);
   }
 
   const front = Math.exp(
-    (forward ?? logNormalizer(alpha, beta)) + alpha * Math.log(x) + beta * Math.log1p(-x),
+    logGamma(alpha + beta) -
+      logGamma(alpha) -
+      logGamma(beta) +
+      alpha * Math.log(x) +
+      beta * Math.log1p(-x),
   );
   return (front * continuedFraction(x, alpha, beta)) / alpha;
 }
@@ -184,14 +155,12 @@ export function betaQuantile(probability, alpha, beta) {
   if (probability >= 1) return 1;
 
   const logBeta = logGamma(alpha) + logGamma(beta) - logGamma(alpha + beta);
-  const forward = logNormalizer(alpha, beta);
-  const backward = logNormalizer(beta, alpha);
   let low = 0;
   let high = 1;
   let guess = alpha / (alpha + beta);
 
   for (let iteration = 0; iteration < QUANTILE_ITERATIONS; iteration += 1) {
-    const error = incompleteBeta(guess, alpha, beta, forward, backward) - probability;
+    const error = regularizedIncompleteBeta(guess, alpha, beta) - probability;
     if (error > 0) high = guess;
     else low = guess;
     // The true quantile can sit below the smallest representable double, or above the
