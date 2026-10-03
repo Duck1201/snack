@@ -131,9 +131,14 @@ const LABEL = 13;
  * @typedef {object} StatsReportView
  * @property {{alias: string, provider: string, plan: string, plan_profile: {id: string, version: string, provenance: string, as_of: string | null}}} source
  * @property {{band: string, baseline_kind: string, policy_version: string, trend?: {status: string, direction?: string | null, reason?: string | null}}} pressure
- * @property {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string, by_method?: MethodCalibrationView[]}} calibration
+ * @property {CalibrationView | {snapshots: number}} calibration The full calibration, or, for a
+ *   report that will not be rendered verbose, its snapshots headline alone.
  * @property {HorizonView[]} horizons
  * @property {ClientComparisonView} [by_client]
+ */
+
+/**
+ * @typedef {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string, by_method?: MethodCalibrationView[]}} CalibrationView
  */
 
 /**
@@ -532,6 +537,9 @@ function describeCalibration(calibration, verbose) {
       ? "  no forecasts checked against an outcome yet"
       : `  ${snapshots} ${snapshots === 1 ? "forecast" : "forecasts"} checked against what happened next`;
   if (!verbose) return [headline];
+  if (!("backtest" in calibration)) {
+    throw new Error("A verbose statistics report needs the full calibration, not its headline.");
+  }
   return [
     headline,
     `  live      ${describeStream(calibration.live)}`,

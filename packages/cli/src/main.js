@@ -675,6 +675,11 @@ export async function run(argv, options = {}) {
           : configuredHorizons;
       /** @type {{code: string, message: string}[]} */
       const statsWarnings = [];
+      const json = wantsJson(this, configuredJson);
+      // Without `--json` or `--verbose` the calibration prints as its snapshots headline alone, so
+      // replaying the history -- most of what `stats` costs on a long one -- would be thrown away.
+      const verbose = commandOptions.verbose === true;
+      const calibration = json || verbose ? "full" : "headline";
       const reports = selected.map((source) => {
         const { profile: planProfile, warnings } = resolvePlanProfile(source);
         statsWarnings.push(...warnings);
@@ -686,6 +691,7 @@ export async function run(argv, options = {}) {
           now,
           clients:
             commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
+          calibration,
           // The weighting variants run on every source, so every source has per-method
           // calibration (1.6.0, superseding 1.5.0's Codex-only `by_method`); the
           // `reported-capacity` entry joins it only where a Codex installation feeds the source.
@@ -695,12 +701,10 @@ export async function run(argv, options = {}) {
         });
       });
       const data = reports.length === 1 ? reports[0] : { sources: reports };
-      if (wantsJson(this, configuredJson)) {
+      if (json) {
         stdout.write(formatJson(createEnvelope("stats", data, { warnings: statsWarnings, now })));
       } else {
-        for (const report of reports) {
-          stdout.write(renderStats(report, { verbose: commandOptions.verbose === true }));
-        }
+        for (const report of reports) stdout.write(renderStats(report, { verbose }));
         reportWarnings(stderr, statsWarnings);
       }
     });
@@ -2579,7 +2583,10 @@ async function analyzeProspectivePrompt(input) {
 /**
  * Describe observed usage for one capacity source across the requested horizons.
  *
- * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null, reportedShadow?: boolean}} input
+ * `calibration: "headline"` reads only how many forecasts were checked against an outcome, which is
+ * all plain `stats` prints of it; the default, `"full"`, also replays the history.
+ *
+ * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null, reportedShadow?: boolean, calibration?: "full" | "headline"}} input
  */
 function buildSourceStats(input) {
   /** @type {{groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number} | null} */
@@ -2633,12 +2640,15 @@ function buildSourceStats(input) {
         includeTrend: true,
       }),
     },
-    calibration: buildCalibrationReport(
-      input.databaseFile,
-      input.source.alias,
-      input.planProfile,
-      input.reportedShadow === true,
-    ),
+    calibration:
+      input.calibration === "headline"
+        ? { snapshots: readPredictionSnapshots(input.databaseFile, input.source.alias).length }
+        : buildCalibrationReport(
+            input.databaseFile,
+            input.source.alias,
+            input.planProfile,
+            input.reportedShadow === true,
+          ),
     ...(input.clients
       ? {
           by_client: buildClientComparison({

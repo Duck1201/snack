@@ -10,6 +10,7 @@ import { backtestWeightings, scoreVariant } from "../src/calibration.js";
 import { run } from "../src/main.js";
 import { resolvePlanProfile } from "../src/plan-profile.js";
 import { PREDICTION_POLICY, WEIGHTING_VARIANTS, buildForecast } from "../src/prediction.js";
+import { renderStats } from "../src/render.js";
 import { readOutcomeRows } from "../src/storage.js";
 import {
   attachShadows,
@@ -279,4 +280,74 @@ test("stats wires each replay to its own entry: the answer's to the answer, each
   // Non-vacuity: every weighting's numbers differ, so a swap cannot pass by coincidence.
   assert.notDeepEqual(seen[0], seen[1]);
   assert.notDeepEqual(seen[0], answerBacktest);
+});
+
+test("plain stats prints, byte for byte, what the full report renders to without --verbose", async () => {
+  // Plain `stats` prints only the snapshots headline of the calibration, so it does not replay the
+  // history; what it prints must be exactly what the full report would have rendered.
+  const origin = new Date("2026-01-01T00:00:00.000Z");
+  const seeded = await makeSeededSource({ origin, roots: seededRoots });
+  seeded.plant(
+    Array.from({ length: 60 }, (_unused, index) => ({
+      at: new Date(origin.getTime() + index * 11 * 60_000),
+      restricted: index % 7 === 3,
+    })),
+  );
+  // The seeded period names no plan profile; naming the one the source resolves to keeps the
+  // planted prompts in the active period when `status` first runs, rather than retiring them.
+  const setup = new Database(seeded.paths.databaseFile);
+  try {
+    setup.prepare("UPDATE capacity_period SET plan_profile_id = 'generic' WHERE id = 1").run();
+  } finally {
+    setup.close();
+  }
+  const now = new Date(origin.getTime() + 24 * 3_600_000);
+  /** @param {string[]} argv */
+  const snack = async (argv) => {
+    const stdout = sink();
+    const stderr = sink();
+    const code = await run(["node", "snack", ...argv], {
+      stdout,
+      stderr,
+      env: seeded.env,
+      home: seeded.root,
+      now,
+    });
+    assert.equal(code, 0, stderr.value);
+    return { stdout: stdout.value, stderr: stderr.value };
+  };
+  await snack(["status"]);
+  await snack(["status", "--sequence", "2"]);
+  // An attempt never delivered, so the snapshots headline and the attempt count differ.
+  const writer = new Database(seeded.paths.databaseFile);
+  try {
+    const columns = /** @type {{name: string}[]} */ (
+      writer.prepare("PRAGMA table_info(prediction_attempt)").all()
+    )
+      .map((column) => column.name)
+      .filter((name) => name !== "id");
+    writer
+      .prepare(
+        `INSERT INTO prediction_attempt (${columns.join(", ")})
+         SELECT ${columns
+           .map((name) => (name === "generated_at" ? "'2026-01-01T23:00:00.000Z'" : name))
+           .join(", ")}
+         FROM prediction_attempt ORDER BY id LIMIT 1`,
+      )
+      .run();
+  } finally {
+    writer.close();
+  }
+  for (const extra of [[], ["--by-client"], ["--horizon", "PT5H"]]) {
+    const full = JSON.parse((await snack(["stats", ...extra, "--json"])).stdout).data;
+    assert.ok(full.calibration.snapshots > 0);
+    assert.ok(full.calibration.undelivered_attempts > 0);
+    assert.ok(full.calibration.backtest.forecasts > 0);
+    const plain = await snack(["stats", ...extra]);
+    assert.equal(plain.stdout, renderStats(full, { verbose: false }), extra.join(" "));
+    assert.equal(plain.stderr, "");
+    // `--verbose` still reads the full report.
+    const verbose = await snack(["stats", ...extra, "--verbose"]);
+    assert.equal(verbose.stdout, renderStats(full, { verbose: true }), extra.join(" "));
+  }
 });
