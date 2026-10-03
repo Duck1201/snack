@@ -73,8 +73,20 @@ The amount of usage a provider actually permits over a period. SNACK treats it a
 _Avoid_: Estimated capacity, balance
 
 **Reported capacity usage**:
-A usage figure a client states on the provider's behalf — a fraction of a stated window, the length of that window, and when it resets. It is quoted, never inferred, and never merged into an estimate or into usage pressure. One source reporting it does not make any other source's capacity knowable.
+A usage figure a client states on the provider's behalf — a fraction of a stated window, the length of that window, and when it resets. It is quoted, never inferred, and never merged into usage pressure or into the estimate SNACK answers with; from 1.5 it informs only the separately named reported-capacity method, which runs as a shadow estimate for the source whose client stated it. One source reporting it does not make any other source's capacity knowable.
 _Avoid_: Usage pressure, remaining quota, estimated capacity, observed usage
+
+**Binding window**:
+The one window of a client's latest usable statement that the reported-capacity method reads: the window with the highest stated figure. A window whose reset has passed, or a statement too old, made before the capacity period, or superseded by another client's prompt, binds nothing.
+_Avoid_: Quota window, active quota, capacity window
+
+**Stated band**:
+A `clear`, `near` or `full` reading of the binding window under a versioned policy, used to select which of the user's own outcomes the reported-capacity method reads. It is a grouping of history, not a share of capacity.
+_Avoid_: Usage level, quota state, remaining capacity
+
+**Shadow estimate**:
+A forecast a separately named method computes, records and calibrates beside the estimate SNACK answers with, and never shows as the answer. It exists so the method's calibration can be compared with the answering method's on the same prompts before it is ever allowed to answer; only `--verbose` and `--json` show it, always saying it is not the answer.
+_Avoid_: Second opinion, alternative answer, backup prediction
 
 **Client**:
 The tool through which the user submits prompts, such as OpenCode, Claude Code, or Codex CLI.

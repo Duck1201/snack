@@ -74,3 +74,38 @@ spending cap, not a usage condition, and are operational failures like Claude's 
 
 The reopen clause gains one case: if `limit_id` values multiply or become per-model such that a
 stated figure no longer maps onto one capacity source.
+
+## Amendment — 1.5.0 (the `reported-capacity` method, in shadow)
+
+From `1.5.0` the figure a client states informs **one** estimate, and that estimate is a
+**shadow**: the separately named method `reported-capacity`, version `1`, computed for the capacity
+source the statement was stored for, recorded beside the answer, calibrated against the same
+outcomes, and **never shown as the answer**. The answer — the `next prompt` interval, the risk
+label, the evidence level, the method, the sequence, the caveats — stays the baseline's for every
+source, Codex-fed ones included. The shadow is visible only under `status --verbose`, as a row that
+says what the method would say and that it is not the answer, in `--json` as the optional `shadow`
+member, and in `stats` as a per-method calibration entry.
+
+It reads the statement only while it is usable — stated in the active capacity period, at most six
+hours old, on a window whose reset has not passed, and, unless it states the window full, not
+superseded by a prompt another client sent to the same source since. The figure selects which of
+the user's own outcomes the shadow reads — they are grouped by the band the binding window was
+stated in when each prompt began — and, when the client states the window full, the shadow does not
+fall back on outcomes from other bands but starts from a versioned weak assumption that leans toward
+refusal. Its output is still a viability interval with a risk label, an evidence level capped at
+`low`, and a named method; it is never a share of the window and never a count of prompts.
+
+Everything else in this decision stands. The figure never enters usage pressure, the baseline
+method (`bayesian-pressure-band`, `initial-generic`), or any other source's assessment, and it is
+still quoted on its own row beside the answer. Shadow rather than answer because the maintainer's
+history, when the method was specified, held one observed restriction in 65 days, no stated figure
+at or above 100, and a figure of 20% at the start of the one refused prompt
+(`docs/history/specs/reported-capacity-method/spec.md` §1): a method that history cannot calibrate
+does not get to answer on the strength of its reasoning alone. Running it in shadow is what gives it
+a calibration record to be judged by, on the same prompts as the baseline, without a Brier score
+over a mixed stream having two candidate causes for any divergence.
+
+The method may become the answer only in a later minor, by a new amendment, and only once its own
+record meets the promotion rule the specification names (`reported-capacity-promotion-v1`). If its
+calibration over a meaningful sample is worse than the baseline's on the same prompts, it is
+withdrawn or respecified rather than tuned in place.
