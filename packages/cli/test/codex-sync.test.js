@@ -147,3 +147,68 @@ for (const order of [
     assert.ok(stated.data.reported_capacity.length > 0);
   });
 }
+
+/**
+ * The percentages every stored figure of `alias` states, sorted.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ */
+function statedPercents(databaseFile, alias) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT used_percent AS percent FROM reported_capacity_observation
+          WHERE source_alias = ? ORDER BY used_percent`,
+      )
+      .all(alias)
+      .map((row) => /** @type {{percent: number}} */ (row).percent);
+  } finally {
+    database.close();
+  }
+}
+
+for (const order of [
+  ["az", "oa"],
+  ["oa", "az"],
+]) {
+  test(`each thread's stated figure reaches the source its own provider names (${order.join(" then ")})`, async () => {
+    const fixture = await makeRunFixture("snack-codex-mixed-providers-");
+    // Two threads in one Codex history: one on `openai`, one on `azure`. The azure copy states
+    // different percentages, so a figure routed by anything but its own thread lands visibly wrong.
+    const home = await createCodexHistory(fixture.root, "version-0-159-3.jsonl");
+    const day = join(home, "sessions", "2026", "01", "02");
+    const base = await readFile(
+      new URL("./fixtures/codex/version-0-159-3.jsonl", import.meta.url),
+      "utf8",
+    );
+    const azure = base
+      .replaceAll('"model_provider":"openai"', '"model_provider":"azure"')
+      .replaceAll("00000000-0000-7000-8000-0000000001", "00000000-0000-7000-8000-0000000009")
+      .replaceAll("00000000-0000-7000-8000-000000000002", "00000000-0000-7000-8000-000000000992")
+      .replaceAll("resp_test_", "resp_az_")
+      .replaceAll('"used_percent":34', '"used_percent":71')
+      .replaceAll('"used_percent":19', '"used_percent":83');
+    assert.notEqual(azure, base);
+    await writeFile(join(day, "rollout-2026-01-02T02-00-00-azure.jsonl"), azure, { mode: 0o600 });
+    fixture.options.env.CODEX_HOME = home;
+    const providers = /** @type {Record<string, string>} */ ({ az: "azure", oa: "openai" });
+    for (const alias of order) {
+      await json(fixture, ["setup", "codex", ...setupFlags(alias, String(providers[alias]))]);
+    }
+    await json(fixture, ["sync", "--full"]);
+
+    assert.deepEqual(statedPercents(fixture.paths.databaseFile, "az"), [71, 71, 83, 83]);
+    assert.deepEqual(statedPercents(fixture.paths.databaseFile, "oa"), [19, 19, 34, 34]);
+    for (const [alias, percents] of [
+      ["az", [71, 83]],
+      ["oa", [19, 34]],
+    ]) {
+      const status = await json(fixture, ["status", "--no-sync", "--source", String(alias)]);
+      const shown = JSON.stringify(status.data.reported_capacity);
+      for (const percent of percents)
+        assert.match(shown, new RegExp(`"used_percent":${percent}\\b`));
+    }
+  });
+}
