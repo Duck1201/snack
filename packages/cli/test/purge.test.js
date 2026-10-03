@@ -4,7 +4,12 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
-import { initializeDatabase, purgeScope, storeObservations } from "../src/storage.js";
+import {
+  initializeDatabase,
+  purgeScope,
+  readReportedCapacity,
+  storeObservations,
+} from "../src/storage.js";
 import {
   cleanupRunFixtures,
   createOpenCodeDatabase,
@@ -462,6 +467,33 @@ test("purge deletes the stated figures in its window, counts them, and previews 
   const all = await purgeScope(fixture.paths, {}, { now: new Date() });
   assert.equal(all.counts.reported_capacity_observations, 6);
   assert.equal(count(databaseFile, "reported_capacity_observation"), 0);
+});
+
+test("after a purge, status quotes the latest figure that is still stored", async () => {
+  const fixture = await makeStatedFigures();
+  const { databaseFile } = fixture.paths;
+  const latest = (/** @type {string} */ alias) =>
+    readReportedCapacity(databaseFile, alias).map((entry) => entry.observed_at);
+  assert.deepEqual(latest("codex"), ["2026-01-02T23:59:59.999Z"]);
+
+  // Removing the newest statement must bring the one before it back, not leave a stale pointer.
+  await purgeScope(
+    fixture.paths,
+    { source: "codex", since: "2026-01-02T12:00:00.000Z" },
+    { now: new Date() },
+  );
+  assert.deepEqual(latest("codex"), ["2026-01-02T10:00:00.000Z"]);
+  assert.deepEqual(latest("neighbour"), ["2026-01-02T10:00:00.000Z"]);
+  // A statement stored after the purge is the latest again, and an older one arriving late is not.
+  storeStated(databaseFile, "codex", [
+    statedFigure(5, "2026-01-02T11:00:00.000Z"),
+    statedFigure(6, "2026-01-01T09:00:00.000Z"),
+  ]);
+  assert.deepEqual(latest("codex"), ["2026-01-02T11:00:00.000Z"]);
+
+  await purgeScope(fixture.paths, { source: "codex" }, { now: new Date() });
+  assert.deepEqual(latest("codex"), []);
+  assert.deepEqual(latest("neighbour"), ["2026-01-02T10:00:00.000Z"]);
 });
 
 test("a --prevent-reimport tombstone refuses the stated figures it covers, and only those", async () => {

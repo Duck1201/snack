@@ -734,3 +734,30 @@ present is one of `CODEX_FAMILIES`; the recorded family no longer has to be pres
 - **The support-matrix gate is exact** (amends §6 "Release gate"). `supportMatrixIncomplete` passes
   only a whole line `Status: complete.` or `Status: completed on YYYY-MM-DD.`; a line merely
   containing the word — "not yet complete" — keeps blocking.
+
+### R7 — the latest statement is kept, not ranked on every read (amends §4.3, §8)
+
+`status --no-sync` measured 474–658 ms p95 on a Codex source holding 200,000
+`reported_capacity_observation` rows, against a 250 ms budget: `readReportedCapacity` ranked the
+whole history with `ROW_NUMBER() OVER (PARTITION BY installation_id, limit_id …)` on every call
+(in-process, 200,000 rows: median 282 ms, p95 329 ms). An index on the partition columns did not
+help (the tester measured 337–351 ms), and a correlated `LIMIT 1` was worse.
+
+Migration 015 — unreleased, so edited in place; no test or fixture pins its checksum — gains
+`reported_capacity_latest (source_alias, installation_id, limit_key, observation_key, observed_at,
+row_id)`, primary key `(source_alias, installation_id, limit_key)`, `STRICT, WITHOUT ROWID`.
+`limit_key` is `limit_id` or `''` (never a label) so a statement that named no limit is still a
+key. It is derived data:
+
+- `storeObservations` upserts it in the transaction that inserts the rows, advancing only when the
+  new statement is later — by `observed_at`, then by newest row id — so a rollout read late never
+  displaces a newer figure.
+- `data purge` recomputes it for the purged source(s) from the remaining rows with the same ranking,
+  only when it deleted reported rows. A tombstone needs nothing: it only prevents inserts.
+- `readReportedCapacity` reads the pointers and joins each to its windows by the unique key
+  (`CROSS JOIN` fixes that order; without statistics the planner otherwise drives from the history).
+
+Measured in-process on the same 200,000 rows: median 0.33 ms, p95 0.41 ms (was 282 / 329 ms);
+seeding the 200,000 rows through `storeObservations` took 5.8 s against 5.4 s before. A property
+test asserts the read always equals the full-history ranking across arbitrary insert orders and
+purges.

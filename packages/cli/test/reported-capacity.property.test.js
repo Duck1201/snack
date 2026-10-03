@@ -5,7 +5,14 @@ import { afterEach, test } from "node:test";
 import fc from "fast-check";
 
 import { run } from "../src/main.js";
-import { storeObservations } from "../src/storage.js";
+import Database from "better-sqlite3";
+
+import {
+  initializeDatabase,
+  purgeScope,
+  readReportedCapacity,
+  storeObservations,
+} from "../src/storage.js";
 import {
   cleanupRunFixtures,
   createOpenCodeDatabase,
@@ -149,4 +156,89 @@ test("a stated figure never moves the estimate: interval, risk, evidence and pre
     ),
     { numRuns: 25 },
   );
+});
+
+/**
+ * The latest statement per (installation, limit), by the ranking the history itself defines: the
+ * reference `readReportedCapacity` must agree with, however its read is made fast.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ */
+function rankedLatest(databaseFile, alias) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT installation_id, limit_id, observed_at
+           FROM (SELECT installation_id, limit_id, observed_at,
+                        ROW_NUMBER() OVER (PARTITION BY installation_id, limit_id
+                                           ORDER BY observed_at DESC, id DESC) AS rank
+                   FROM reported_capacity_observation WHERE source_alias = ?)
+          WHERE rank = 1`,
+      )
+      .all(alias)
+      .map((row) => {
+        const record = /** @type {Record<string, unknown>} */ (row);
+        return [record.installation_id, record.limit_id, record.observed_at];
+      });
+  } finally {
+    database.close();
+  }
+}
+
+test("the latest stated figure read for status is the one the whole history ranks first", async () => {
+  const fixture = await makeRunFixture("snack-reported-latest-");
+  await initializeDatabase(fixture.paths, { applicationVersion: "1.3.0" });
+  const { databaseFile } = fixture.paths;
+  const pristine = `${databaseFile}.pristine`;
+  await copyFile(databaseFile, pristine);
+  let nonEmpty = 0;
+
+  await fc.assert(
+    fc.asyncProperty(
+      // Several batches in arbitrary order, so older statements arrive after newer ones, ties at
+      // one instant occur, and a statement that named no limit forms its own group.
+      fc.array(
+        fc.uniqueArray(statedSnapshot, {
+          minLength: 1,
+          maxLength: 5,
+          selector: (snapshot) => snapshot.observation_key,
+        }),
+        { minLength: 1, maxLength: 4 },
+      ),
+      fc.option(instant, { nil: null }),
+      async (batches, purgeFrom) => {
+        await copyFile(pristine, databaseFile);
+        for (const reported of batches) {
+          storeObservations(
+            databaseFile,
+            codexOnWork,
+            { observations: [], cursor: null, reported_capacity: reported },
+            new Date("2026-01-03T00:00:00.000Z"),
+          );
+        }
+        if (purgeFrom !== null) {
+          await purgeScope(
+            fixture.paths,
+            { source: codexOnWork.alias, since: purgeFrom },
+            { now: new Date("2026-01-03T00:00:00.000Z") },
+          );
+        }
+        const read = readReportedCapacity(databaseFile, codexOnWork.alias).map((entry) => [
+          entry.installation_id,
+          entry.limit_id,
+          entry.observed_at,
+        ]);
+        if (read.length > 0) nonEmpty += 1;
+        const sortKey = (/** @type {unknown[]} */ row) => JSON.stringify(row);
+        assert.deepEqual(
+          read.map(sortKey).sort(),
+          rankedLatest(databaseFile, codexOnWork.alias).map(sortKey).sort(),
+        );
+      },
+    ),
+    { numRuns: 60 },
+  );
+  assert.ok(nonEmpty > 0, "no generated history kept a figure; the read went untested");
 });

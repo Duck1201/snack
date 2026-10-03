@@ -606,6 +606,8 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // The one table the upgrade adds arrives empty: a 0.6 install stated no figures to quote.
   assert.equal(after.reported_capacity_observation, 0);
   delete after.reported_capacity_observation;
+  assert.equal(after.reported_capacity_latest, 0);
+  delete after.reported_capacity_latest;
   assert.equal(after.prediction_attempt, (before.prediction_attempt ?? 0) + 1);
   assert.equal(after.prediction_delivery, (before.prediction_delivery ?? 0) + 1);
   const unchanged = (/** @type {Record<string, number>} */ counts) => ({
@@ -1183,6 +1185,8 @@ test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client
   // The new table arrives empty; every other table holds exactly the bytes it held.
   assert.deepEqual(after.reported_capacity_observation, []);
   delete after.reported_capacity_observation;
+  assert.deepEqual(after.reported_capacity_latest, []);
+  delete after.reported_capacity_latest;
   assert.deepEqual(after, before);
   // No stash survives the migration.
   assert.equal(
@@ -1281,6 +1285,8 @@ test("each published schema level upgrades straight to 1.3 without losing a row"
     const after = tableCounts(paths.databaseFile);
     assert.equal(after.reported_capacity_observation, 0, `floor ${floor}`);
     delete after.reported_capacity_observation;
+    assert.equal(after.reported_capacity_latest, 0, `floor ${floor}`);
+    delete after.reported_capacity_latest;
     assert.deepEqual(
       { ...after, schema_migration: 0 },
       { ...before, schema_migration: 0 },

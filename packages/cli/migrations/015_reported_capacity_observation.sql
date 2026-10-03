@@ -33,3 +33,21 @@ CREATE TABLE reported_capacity_observation (
 
 CREATE INDEX reported_capacity_observation_source_observed_idx
   ON reported_capacity_observation (source_alias, observed_at);
+
+-- The latest statement per (source, installation, limit), kept beside the history so `status`
+-- reads one row per group instead of ranking every statement ever stored: a year of Codex use is
+-- hundreds of thousands of rows, and `status --no-sync` has a 250 ms budget. It is derived data,
+-- never a second record: `storeObservations` upserts it in the transaction that inserts the rows,
+-- and `data purge` recomputes it from what remains. `limit_key` is `limit_id`, or '' for a
+-- statement that named no limit -- '' is never a limit label, and a NULL could not be a key.
+-- `row_id` is the newest stored row of that statement, which breaks a tie between two statements
+-- made at one instant the way the history's own insertion order does.
+CREATE TABLE reported_capacity_latest (
+  source_alias TEXT NOT NULL,
+  installation_id TEXT NOT NULL,
+  limit_key TEXT NOT NULL,
+  observation_key TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  row_id INTEGER NOT NULL,
+  PRIMARY KEY (source_alias, installation_id, limit_key)
+) STRICT, WITHOUT ROWID;

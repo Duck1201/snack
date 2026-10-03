@@ -1147,6 +1147,21 @@ function storeReportedCapacity(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(installation_id, observation_key, window_minutes) DO NOTHING`,
   );
+  // Kept in step with the rows, in the same transaction, so the latest statement per group is one
+  // lookup for `status` rather than a ranking of the whole history. An older statement arriving
+  // late -- a rollout read for the first time after newer ones -- does not displace a newer one.
+  const advanceLatest = database.prepare(
+    `INSERT INTO reported_capacity_latest
+       (source_alias, installation_id, limit_key, observation_key, observed_at, row_id)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (source_alias, installation_id, limit_key) DO UPDATE
+        SET observation_key = excluded.observation_key,
+            observed_at = excluded.observed_at,
+            row_id = excluded.row_id
+      WHERE excluded.observed_at > reported_capacity_latest.observed_at
+         OR (excluded.observed_at = reported_capacity_latest.observed_at
+             AND excluded.row_id > reported_capacity_latest.row_id)`,
+  );
   for (const snapshot of snapshots) {
     if (!isValidReportedSnapshot(snapshot)) {
       counts.rejected += 1;
@@ -1164,8 +1179,9 @@ function storeReportedCapacity(
       continue;
     }
     let stored = 0;
+    let newestRow = 0;
     for (const window of snapshot.windows) {
-      stored += insert.run(
+      const result = insert.run(
         source.alias,
         source.installation_id,
         snapshot.observation_key,
@@ -1177,10 +1193,23 @@ function storeReportedCapacity(
         window.resets_at,
         snapshot.parser_version,
         timestamp,
-      ).changes;
+      );
+      if (result.changes > 0) {
+        stored += result.changes;
+        newestRow = Math.max(newestRow, Number(result.lastInsertRowid));
+      }
     }
-    if (stored > 0) counts.inserted += 1;
-    else counts.unchanged += 1;
+    if (stored > 0) {
+      advanceLatest.run(
+        source.alias,
+        source.installation_id,
+        snapshot.limit_id ?? "",
+        snapshot.observation_key,
+        snapshot.observed_at,
+        newestRow,
+      );
+      counts.inserted += 1;
+    } else counts.unchanged += 1;
   }
   return counts;
 }
@@ -1269,31 +1298,24 @@ export function readReportedCapacity(databaseFile, sourceAlias) {
     const rows = /** @type {ReportedCapacityRow[]} */ (
       database
         .prepare(
-          // PARTITION BY treats NULL as one value, so a snapshot that named no limit is its own
-          // group rather than being dropped or folded into a named one. The latest is chosen by
-          // the instant the client stated it, and by insertion order between two at one instant.
-          `WITH latest AS (
-             SELECT installation_id, limit_id, observation_key,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY installation_id, limit_id
-                      ORDER BY observed_at DESC, id DESC
-                    ) AS rank
-               FROM reported_capacity_observation
-              WHERE source_alias = @source
-           )
-           SELECT reported.installation_id, reported.limit_id, reported.plan_type,
+          // One row per group in `reported_capacity_latest`, then that statement's windows by
+          // the unique key: the cost is the number of (installation, limit) groups, not the length
+          // of the history. A statement that named no limit is its own group (`limit_key` '').
+          // CROSS JOIN fixes that order: without table statistics the planner would otherwise drive
+          // the join from the history by its source index and probe the pointers, which is the
+          // O(history) read this table exists to avoid.
+          `SELECT reported.installation_id, reported.limit_id, reported.plan_type,
                   reported.observed_at, reported.window_minutes, reported.used_percent,
                   reported.resets_at, reported.parser_version
-             FROM reported_capacity_observation AS reported
-             JOIN latest
-               ON latest.rank = 1
-              AND latest.installation_id = reported.installation_id
-              AND latest.observation_key = reported.observation_key
-              AND latest.limit_id IS reported.limit_id
+             FROM reported_capacity_latest AS latest
+             CROSS JOIN reported_capacity_observation AS reported
+               ON reported.installation_id = latest.installation_id
+              AND reported.observation_key = latest.observation_key
+              AND reported.source_alias = latest.source_alias
              JOIN client_installation
                ON client_installation.id = reported.installation_id
               AND client_installation.client_kind = 'codex'
-            WHERE reported.source_alias = @source
+            WHERE latest.source_alias = @source
             ORDER BY reported.installation_id, reported.limit_id, reported.window_minutes`,
         )
         .all({ source: sourceAlias })
@@ -2612,6 +2634,7 @@ function purgeScopeLocked(paths, scope, options) {
       const deletedReported = database
         .prepare(`DELETE FROM reported_capacity_observation WHERE ${reportedFilter}`)
         .run(parameters).changes;
+      if (deletedReported > 0) recomputeReportedLatest(database, parameters.source);
 
       if (
         deletedPrompts !== counted.prompts ||
@@ -2635,6 +2658,40 @@ function purgeScopeLocked(paths, scope, options) {
     database.exec("DROP TABLE IF EXISTS temp.snack_purge");
     database.close();
   }
+}
+
+/**
+ * Rebuild the latest-statement pointers of the sources a purge touched from the rows that remain.
+ *
+ * A purge can delete the very statement a pointer names, so the pointer cannot be patched; it is
+ * recomputed with the ranking the history defines -- latest instant first, newest row between two
+ * at one instant. A purge is rare and already linear in what it deletes, so the one ranking it costs
+ * here is the price that keeps every `status` read constant.
+ *
+ * @param {import("better-sqlite3").Database} database
+ * @param {string | null} source null for every source
+ */
+function recomputeReportedLatest(database, source) {
+  database
+    .prepare("DELETE FROM reported_capacity_latest WHERE @source IS NULL OR source_alias = @source")
+    .run({ source });
+  database
+    .prepare(
+      `INSERT INTO reported_capacity_latest
+         (source_alias, installation_id, limit_key, observation_key, observed_at, row_id)
+       SELECT source_alias, installation_id, COALESCE(limit_id, ''), observation_key, observed_at, id
+         FROM (
+           SELECT source_alias, installation_id, limit_id, observation_key, observed_at, id,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY source_alias, installation_id, limit_id
+                    ORDER BY observed_at DESC, id DESC
+                  ) AS rank
+             FROM reported_capacity_observation
+            WHERE @source IS NULL OR source_alias = @source
+         )
+        WHERE rank = 1`,
+    )
+    .run({ source });
 }
 
 /** @param {import("better-sqlite3").Database} database @param {string} sql @param {Record<string, unknown>} parameters */
