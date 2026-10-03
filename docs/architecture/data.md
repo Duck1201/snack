@@ -134,7 +134,8 @@ Ambiguous matches are rejected at configuration time. Schema-valid observations 
 - allowlisted non-semantic input feature vector, derived size category, analyzer/schema version, category-policy version, and category `baseline_as_of` when enabled;
 - field-completeness flags;
 - first/last observed timestamps;
-- source paths seen (`backfill`, `spool`) as provenance flags.
+- source paths seen (`backfill`, `spool`) as provenance flags;
+- the stated band the prompt began in and the policy version that computed it (1.5+, migration `018`), a rebuildable projection described below.
 
 Unique key: capacity source + stable source prompt ID. Hashes are keyed locally or namespaced so they cannot be correlated across installations without local access.
 
@@ -158,6 +159,8 @@ backfill and those must keep merging.
 Backfill categorization processes prompt executions in `(started_at, stable source order)` order. It derives each category before adding that prompt to the baseline, guaranteeing that later history cannot leak into earlier categories.
 
 Category is a rebuildable derived projection over immutable allowlisted input features. Inserting or changing the ordering of an older prompt marks the affected client/model chronological suffix dirty; synchronization recategorizes that suffix transactionally before a forecast can read it. Property tests require identical categories for every permutation of the same final observation set.
+
+The stated band is a second rebuildable projection, for the `reported-capacity` shadow method only. It is resolved at the prompt's start from statements strictly earlier (`walkStatedHistory`), computed in chronological order after each synchronization and each purge, and only for the active period of a source a Codex installation feeds; a prompt keeps the band it was last given once its period ends, and a prompt of any other source keeps both columns null. Neither column is exported. How far a source's projection is out of date is kept in `stated_band_projection` (§8.19).
 
 ### 8.7 `prompt_usage_slice`
 
@@ -281,6 +284,24 @@ One row per stated window per statement, unique by installation, observation key
 - posterior alpha and beta.
 
 Written by migration `016`, in the transaction that inserts its parent attempt. Immutable like the parent, and deleted only by `data purge` together with it. Delivery, evidence, period and completeness are the parent's and are not repeated. Not linked by `prediction_evaluation`, not calibrated and not exported in 1.4: a sequence scored against one prompt would corrupt the live calibration stream (ADR-0008).
+
+### 8.18 `prediction_reported_capacity` (1.5+)
+
+- prediction-attempt ID (the key: at most one shadow forecast per attempt);
+- the shadow's method ID and version (`reported-capacity@1`), model-policy and evidence-policy versions;
+- lower/point/upper and coverage target, risk label, evidence level and backoff level;
+- posterior alpha and beta;
+- the binding window it read: installation, `limit_id`, window length, the stated fraction, reset and stated timestamps, the stated band and the band policy version.
+
+Written by migration `017`, in the transaction that inserts its parent attempt, when that invocation computed the shadow. The attempt is the baseline's, which answered; this row is the shadow that did not. Immutable like the parent and deleted only by `data purge` together with it, counted with the predictions. It feeds `calibration.by_method` and is not exported. The stated fraction is stored so a later calibration can reproduce the forecast, and is never printed with an estimate.
+
+### 8.19 `stated_band_projection` (1.5+)
+
+- capacity-source alias (the key);
+- the policy version the source was last projected under;
+- `stale_from`: the earliest instant from which its stated bands may be out of date, the empty string for the whole active period, or null when current.
+
+Written by migration `018`. The ingestion transaction that stores, revises or attributes a prompt or stores a statement lowers `stale_from` to that instant, normalized to UTC; a purge sets it to the empty string in its own transaction. The recomputation after each synchronization and purge starts there and clears it in the transaction that writes the bands, only if it still holds the value it read. No row, or another policy version, recomputes the source's whole active period. Content-free by shape, and not exported.
 
 ## 9. Reconciliation Rules
 

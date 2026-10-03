@@ -435,7 +435,7 @@ because replaying the stated timeline inside `status` cost the `status --no-sync
 (`docs/history/specs/reported-capacity-method/spec.md` §9.4). Neither the table nor the columns are
 **exported**: a new table or column would fail every version-2 validator. The first `sync` after the
 upgrade computes the whole projection once; on a 100,000-prompt Codex history with 200,000 reported
-rows it took 2.6 s with the backup, and the file grew 156.6 → 165.2 MB. A 100,000-prompt Claude Code
+rows it took 2.67-2.74 s with the backup, and the file grew 156.6 → 165.2 MB. A 100,000-prompt Claude Code
 history grows 12 KB. `storage.test.js` upgrades
 every published schema level, `1.4.0`'s included, straight to `018`, and `npm run upgrade:smoke`
 upgrades a database the published `1.4.0` wrote.
