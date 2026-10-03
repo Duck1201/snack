@@ -185,15 +185,22 @@ export async function runDoctor(paths, options = {}) {
             CODEX_FAMILIES.includes(/** @type {(typeof CODEX_FAMILIES)[number]} */ (family)),
           )
         : families.includes(source.fingerprint);
+      // A Codex history with no rollout yet is not drift: `sync` reads it and finds nothing.
+      const empty = isCodexSource(source) && fingerprint.supported && families.length === 0;
       checks.push(
-        fingerprint.supported && familiesSupported
-          ? pass(id, `${client} schema fingerprint is supported.`)
-          : fail(
+        empty
+          ? warn(
               id,
-              `${client} schema fingerprint is unsupported; ` +
-                "SNACK refuses to read this history rather than guess at it. " +
-                "Check the client version against SNACK's support matrix, and update SNACK.",
-            ),
+              `No ${client} rollouts were found yet; there is nothing to read until ${client} writes one.`,
+            )
+          : fingerprint.supported && familiesSupported
+            ? pass(id, `${client} schema fingerprint is supported.`)
+            : fail(
+                id,
+                `${client} schema fingerprint is unsupported; ` +
+                  "SNACK refuses to read this history rather than guess at it. " +
+                  "Check the client version against SNACK's support matrix, and update SNACK.",
+              ),
       );
       if (isCodexSource(source)) checks.push(...codexCoverageChecks(source.alias, adapter));
     } catch {

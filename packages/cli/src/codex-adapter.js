@@ -278,13 +278,16 @@ function scan(home) {
 function fingerprintOf(scanned) {
   const families = [...new Set(scanned.parsed.flatMap((file) => file.families))].sort();
   const newest = scanned.parsed.toSorted((left, right) => right.mtimeMs - left.mtimeMs)[0];
-  const supported = scanned.parsed.length > 0;
+  // Drift throws before this point, so whatever is present is supported -- including nothing.
+  // A history with no rollout yet is one `sync` reads without complaint, and calling it
+  // unsupported would send someone to update SNACK for a directory Codex has not written to.
+  // `family` stays null there, which is what setup refuses: it has no family to record.
   return {
     adapter: "codex-jsonl",
     fingerprint_version: 1,
-    family: supported && newest ? newest.family : null,
+    family: newest ? newest.family : null,
     families,
-    supported,
+    supported: true,
   };
 }
 

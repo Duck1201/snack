@@ -397,6 +397,23 @@ test("doctor keeps passing a Codex source once the family setup saw is gone", as
   assert.equal(fingerprint?.status, "pass", JSON.stringify(fingerprint));
 });
 
+test("doctor does not call an empty Codex history unsupported, since sync reads it fine", async () => {
+  const fixture = await makeRunFixture("snack-doctor-codex-empty-");
+  const home = await createCodexHistory(fixture.root, "version-0-159-3.jsonl");
+  fixture.options.env.CODEX_HOME = home;
+  assert.equal(await setupCodex(fixture), 0);
+  // Every rollout was deleted after setup; `sync` finds nothing to read and exits 0.
+  const day = join(home, "sessions", "2026", "01", "02");
+  for (const name of await readdir(day)) await rm(join(day, name));
+  assert.equal(await run(["node", "snack", "sync"], fixture.options), 0, fixture.stderr.value);
+
+  const checks = await doctorChecks(fixture);
+  const fingerprint = checks.find((check) => check.id === "source_fingerprint:codex:codex");
+  assert.equal(fingerprint?.status, "warn", JSON.stringify(fingerprint));
+  assert.doesNotMatch(String(fingerprint?.message), /unsupported|update SNACK/u);
+  assert.match(String(fingerprint?.message), /no Codex CLI rollouts/iu);
+});
+
 test("doctor fails a drifted Codex history with output that says what to do", async () => {
   const fixture = await makeRunFixture("snack-doctor-codex-drift-");
   const home = await createCodexHistory(fixture.root, "version-0-159-3.jsonl");

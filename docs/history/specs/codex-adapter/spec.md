@@ -761,3 +761,16 @@ Measured in-process on the same 200,000 rows: median 0.33 ms, p95 0.41 ms (was 2
 seeding the 200,000 rows through `storeObservations` took 5.8 s against 5.4 s before. A property
 test asserts the read always equals the full-history ranking across arbitrary insert orders and
 purges.
+
+### R8 — follow-ups from the second review
+
+- **An empty history is not unsupported** (amends R5, §5.3). With every rollout deleted after
+  setup, `sync` read nothing and exited 0 while `doctor` failed the fingerprint as unsupported and
+  told the reader to update SNACK, because the fingerprint said `supported` only when at least one
+  rollout parsed. Drift throws before the fingerprint is assembled, so the fingerprint is now
+  `supported: true, families: []` for a history with no rollout, and `doctor` answers
+  `source_fingerprint:<alias>:codex` with a **warn** that no rollouts were found yet. Setup still
+  refuses such a history, since `family` is null and it has nothing to record. This deliberately
+  does not mirror `claude-adapter.js`: an empty Claude projects directory is unsupported to both
+  `sync` and `doctor` (the turn-tree fingerprint needs one recognized record), which is consistent
+  between the two commands but not what Codex's `sync` does.
