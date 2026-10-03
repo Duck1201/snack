@@ -25,6 +25,8 @@ import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { packResults } from "./npm-pack.mjs";
+
 const execute = promisify(execFile);
 const workspace = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 // Resolved from the CLI workspace rather than from here: `better-sqlite3` is the CLI's dependency,
@@ -348,7 +350,7 @@ async function packCli(destination) {
   } finally {
     await manifest.close();
   }
-  const [result] = JSON.parse(await readFile(manifestFile, "utf8"));
+  const [result] = packResults(await readFile(manifestFile, "utf8"));
   if (!result || typeof result.filename !== "string") {
     throw new Error("npm pack returned an unexpected manifest.");
   }

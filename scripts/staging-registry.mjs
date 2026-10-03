@@ -25,6 +25,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { packResults } from "./npm-pack.mjs";
+
 const execute = promisify(execFile);
 const workspace = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const npmCli = process.env.npm_execpath;
@@ -298,7 +300,7 @@ async function packFromRegistry(spec, url, destination) {
     [npmCli, "pack", spec, "--registry", url, "--json", "--pack-destination", into, "--silent"],
     { cwd: destination, env: { ...process.env, npm_config_cache: join(destination, "npm-cache") } },
   );
-  const [result] = JSON.parse(stdout);
+  const [result] = packResults(stdout);
   return join(into, result.filename);
 }
 
@@ -310,7 +312,7 @@ async function packInto(root, name, destination) {
     [npmCli, "pack", "--workspace", name, "--json", "--pack-destination", destination, "--silent"],
     { cwd: root, maxBuffer: 10 * 1024 * 1024 },
   );
-  const [result] = JSON.parse(stdout);
+  const [result] = packResults(stdout);
   return join(destination, result.filename);
 }
 

@@ -15,6 +15,8 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { packResults } from "./npm-pack.mjs";
+
 const execute = promisify(execFile);
 
 /**
@@ -191,7 +193,7 @@ async function packInto(workspace, name, destination) {
     ],
     { cwd: workspace, maxBuffer: 10 * 1024 * 1024 },
   );
-  const [result] = JSON.parse(stdout);
+  const [result] = packResults(stdout);
   if (!result || typeof result.filename !== "string") {
     throw new Error(`npm pack returned an unexpected manifest for ${name}.`);
   }
