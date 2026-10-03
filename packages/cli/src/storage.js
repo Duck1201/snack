@@ -500,13 +500,19 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
       // The earliest instant this batch can have moved a stated band from: the start of a prompt
       // stored, revised or attributed, or the instant of a statement stored. It is written below,
       // in this transaction, so the projection's frontier commits with the change that made it.
+      //
+      // The frontier is compared as text, so every instant is normalized to the canonical UTC
+      // spelling first: the Claude Code backfill stores timestamps as the client wrote them, and
+      // the spool accepts an offset and any fraction. One that does not parse fails closed, to the
+      // whole active period.
       /** @type {string | null} */
       let staleFrom = null;
       /** @param {unknown} instant */
       const stale = (instant) => {
-        if (typeof instant === "string" && (staleFrom === null || instant < staleFrom)) {
-          staleFrom = instant;
-        }
+        if (typeof instant !== "string") return;
+        const ms = Date.parse(instant);
+        const normalized = Number.isNaN(ms) ? "" : new Date(ms).toISOString();
+        if (staleFrom === null || normalized < staleFrom) staleFrom = normalized;
       };
       for (const observation of batch.observations) {
         if (

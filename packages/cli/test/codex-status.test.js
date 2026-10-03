@@ -969,3 +969,31 @@ test("a frontier lowered between the restate's read and its write survives the w
   assertProjected(databaseFile);
   assert.equal(frontierOf(databaseFile), null);
 });
+
+test("a start written with an offset lowers the frontier to its instant, and is projected", async () => {
+  const fixture = await makeRunFixture("snack-codex-offset-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+
+  // The Claude Code backfill stores timestamps as the client wrote them and the spool accepts an
+  // offset: as text, 03:00:30+01:00 sorts after 02:00:40Z, though it is ten seconds earlier.
+  await commitPrompts(fixture, installationId, [
+    { id: "late", startedAt: "2026-01-02T02:00:40.000Z" },
+    { id: "offset", startedAt: "2026-01-02T03:00:30.000+01:00" },
+  ]);
+  assert.equal(frontierOf(databaseFile), "2026-01-02T02:00:30.000Z");
+  await json(fixture, ["sync"]);
+  assertProjected(databaseFile);
+  assert.deepEqual(bandsOf(databaseFile, ["late", "offset"]), ["clear", "clear"]);
+
+  // The prompt at the frontier itself, written with a zero offset: as text it sorts before the
+  // frontier's own spelling of the same instant, and must still be recomputed.
+  await commitPrompts(fixture, installationId, [
+    { id: "zero-offset", startedAt: "2026-01-02T02:00:20+00:00" },
+  ]);
+  assert.equal(frontierOf(databaseFile), "2026-01-02T02:00:20.000Z");
+  await json(fixture, ["sync"]);
+  assertProjected(databaseFile);
+  assert.deepEqual(bandsOf(databaseFile, ["zero-offset"]), ["clear"]);
+  assert.equal(frontierOf(databaseFile), null);
+});

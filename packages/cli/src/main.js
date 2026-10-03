@@ -2743,6 +2743,8 @@ function restateSource(databaseFile, alias) {
       : new Date(
           Date.parse(frontier) - REPORTED_CAPACITY_POLICY.max_age_seconds * 1000,
         ).toISOString();
+  // NaN for the whole period, which no start is before.
+  const frontierMs = Date.parse(frontier);
   const floor = readSourceSummary(databaseFile, alias).active_period_floor;
   const rows = readStatedBandRows(databaseFile, alias, { from: lookback });
   const timeline =
@@ -2758,8 +2760,9 @@ function restateSource(databaseFile, alias) {
     timeline,
     { periodStart: floor },
     (row, state) => {
-      // Before the frontier the lookback is incomplete, and nothing there can have moved.
-      if (row.started_at < frontier) return;
+      // Before the frontier the lookback is incomplete, and nothing there can have moved. Compared
+      // as instants: a start stored with an offset can sort before the frontier as text.
+      if (Date.parse(row.started_at) < frontierMs) return;
       if (row.stated_band !== state.band || row.stated_band_policy_version !== version) {
         moved.push({
           prompt_execution_id: row.prompt_execution_id,
