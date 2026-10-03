@@ -150,7 +150,7 @@ message `--sequence takes a whole number from 1 to 100.`, never repeating the re
 validated before anything else runs, so a rejected value creates no database and records no
 forecast.
 
-The panel gains one row directly beneath `next prompt`, so the two readings compare line to line:
+The panel gains one row directly beneath `next prompt`, so the two readings compare line to line.
 
 ```text
 work
@@ -175,8 +175,8 @@ caveat is omitted. When the sequence interval is wider than half the probability
 (`sequence-width-v1`), a further caveat says so plainly — "The 10-prompt interval is too wide to say
 much; it cannot tell whether all of them going through is more likely than not." — so that a
 `0-78%` reads as an honest "not enough to say" rather than as a broken tool. It names no remedy:
-neither a shorter sequence nor more history always narrows the interval. Both are shared beneath the
-panels when every source carries them, by the rule above. In `--json` each report gains the
+neither a shorter sequence nor more history always narrows the interval. Each is shared beneath the
+panels when every source carries it, by the rule above. In `--json` each report gains the
 optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without
 `--sequence` it is absent and every byte is what 1.3 emitted. The mathematics is
 [analysis.md §9.8](analysis.md).
