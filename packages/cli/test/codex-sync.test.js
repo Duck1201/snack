@@ -1,0 +1,108 @@
+import assert from "node:assert/strict";
+import { readFile, readdir, utimes, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, test } from "node:test";
+
+import Database from "better-sqlite3";
+
+import { run } from "../src/main.js";
+import { cleanupRunFixtures, createCodexHistory, makeRunFixture } from "./fixtures/run-fixture.js";
+
+afterEach(cleanupRunFixtures);
+
+/**
+ * @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture
+ * @param {string[]} argv
+ */
+async function json(fixture, argv) {
+  fixture.stdout.value = "";
+  fixture.stderr.value = "";
+  const exitCode = await run(["node", "snack", ...argv, "--json"], fixture.options);
+  assert.equal(exitCode, 0, fixture.stderr.value);
+  return JSON.parse(fixture.stdout.value);
+}
+
+/** @param {string} alias @param {string} provider */
+function setupFlags(alias, provider) {
+  return [
+    "--non-interactive",
+    "--source",
+    alias,
+    "--provider",
+    provider,
+    "--profile",
+    "default",
+    "--plan",
+    "plus",
+  ];
+}
+
+/**
+ * Per prompt, the slices storage holds and their token total.
+ *
+ * @param {string} databaseFile
+ * @returns {Map<string, {slices: number, tokens: number}>}
+ */
+function slicesByPrompt(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const rows = /** @type {{prompt: string, slices: number, tokens: number}[]} */ (
+      database
+        .prepare(
+          `SELECT p.source_prompt_id AS prompt, COUNT(s.source_slice_id) AS slices,
+                  COALESCE(SUM(COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)
+                    + COALESCE(s.reasoning_tokens, 0) + COALESCE(s.cache_read_tokens, 0)
+                    + COALESCE(s.cache_write_tokens, 0)), 0) AS tokens
+             FROM prompt_execution AS p
+             LEFT JOIN prompt_usage_slice AS s ON s.prompt_execution_id = p.id
+            GROUP BY p.id`,
+        )
+        .all()
+    );
+    return new Map(rows.map((row) => [row.prompt, { slices: row.slices, tokens: row.tokens }]));
+  } finally {
+    database.close();
+  }
+}
+
+test("a 0.147 rollout resumed by 0.159 keeps its old turns' slices across syncs", async () => {
+  const fixture = await makeRunFixture("snack-codex-resumed-");
+  const home = await createCodexHistory(fixture.root, "version-0-147-0.jsonl");
+  fixture.options.env.CODEX_HOME = home;
+  await json(fixture, ["setup", "codex", ...setupFlags("codex", "openai")]);
+  await json(fixture, ["sync"]);
+
+  const before = slicesByPrompt(fixture.paths.databaseFile);
+  const total = (/** @type {Map<string, {slices: number, tokens: number}>} */ rows) =>
+    [...rows.values()].reduce(
+      (sum, row) => ({ slices: sum.slices + row.slices, tokens: sum.tokens + row.tokens }),
+      { slices: 0, tokens: 0 },
+    );
+  assert.deepEqual(total(before), { slices: 3, tokens: 435 });
+
+  // Codex 0.159 resumes the thread by appending to the very same rollout.
+  const day = join(home, "sessions", "2026", "01", "02");
+  const [name] = await readdir(day);
+  const file = join(day, String(name));
+  await writeFile(
+    file,
+    await readFile(
+      new URL("./fixtures/codex/resumed-0-147-0-by-0-159-3.jsonl", import.meta.url),
+      "utf8",
+    ),
+  );
+  // Later than the first read, whatever the clock said when the fixture was written.
+  const later = new Date(Date.now() + 60_000);
+  await utimes(file, later, later);
+  await json(fixture, ["sync"]);
+
+  const after = slicesByPrompt(fixture.paths.databaseFile);
+  assert.deepEqual(total(after), { slices: 4, tokens: 446 });
+  // Totals only grow, and every old turn keeps exactly the slices it had.
+  for (const [prompt, row] of before) assert.deepEqual(after.get(prompt), row, prompt);
+  assert.deepEqual(after.get("00000000-0000-7000-8000-000000000103"), { slices: 1, tokens: 11 });
+
+  // A full re-read agrees with the incremental one.
+  await json(fixture, ["sync", "--full"]);
+  assert.deepEqual(slicesByPrompt(fixture.paths.databaseFile), after);
+});

@@ -643,3 +643,29 @@ to `[]` and runs adapter tests without storage; end-to-end tests are enabled on 
 
 Merge order: slice 1, then slice 2 rebased on it; then `npm run release:evidence` and
 `release:prepare` per the roadmap's instruction for this release.
+
+---
+
+## Revisions after review
+
+An independent review of the 1.3.0 build found the defects below. Each revision supersedes the
+section it names; the sections above are left as written.
+
+### R1 — the family is per turn, not per file (supersedes §1 "Per-file family rule", §3.3)
+
+Codex never rewrites a rollout, but it appends to one: a thread started by `0.147` and resumed by
+`0.159` holds turns of both families in one file. The per-file rule reclassified the whole file on
+the first `0.159` turn, so the `0.147` turns lost their token-count slices, and storage's update
+path deleted them without replacement (reproduced: 3 slices / 435 tokens became 1 / 11).
+
+- A **turn** is `cx-rollout-usagerecord-v1` when its `task_started` carries `root_turn_id` or a
+  `token_usage_record` names its `turn_id`; otherwise it is `cx-rollout-tokencount-v1`.
+- Slices are chosen per turn: usage records for a usage-record turn, changed-total token counts for
+  any other. A usage-record turn's token counts are read only for `rate_limits`.
+- A file reports every family its turns belong to; `fingerprint().families` is their union. A file
+  holding both families is a supported shape, not drift. `fingerprint().family` stays the family of
+  the most recently modified file, which is `cx-rollout-usagerecord-v1` once that file holds any
+  usage-record turn.
+- The legacy-fork rule (§3.1) applies to a forked subagent file with no usage-record turn.
+- Fixture `resumed-0-147-0-by-0-159-3.jsonl`; an end-to-end test syncs `version-0-147-0.jsonl`,
+  appends the `0.159` turn, syncs again, and asserts every old prompt keeps its slices.

@@ -263,7 +263,7 @@ function scan(home) {
 
 /** @param {ReturnType<typeof scan>} scanned */
 function fingerprintOf(scanned) {
-  const families = [...new Set(scanned.parsed.map((file) => file.family))].sort();
+  const families = [...new Set(scanned.parsed.flatMap((file) => file.families))].sort();
   const newest = scanned.parsed.toSorted((left, right) => right.mtimeMs - left.mtimeMs)[0];
   const supported = scanned.parsed.length > 0;
   return {
@@ -396,7 +396,9 @@ function familyRoots(entries) {
  * @property {string | null} parent
  * @property {boolean} subagent
  * @property {string} provider
- * @property {string} family
+ * @property {string} family the newest writer's family: usage-record once any turn carries one
+ * @property {string[]} families every family a turn of this file belongs to
+ * @property {Set<string>} usageTurns turns whose usage Codex recorded per response
  * @property {boolean} skippedFork
  * @property {Projected[]} records records at or past the fork-replay boundary, in file order
  */
@@ -442,8 +444,10 @@ function parseFile(home, file, rejected) {
   const records = [];
   /** @type {SessionMeta | null} */
   let meta = null;
-  let usageRecords = false;
-  let rootedTurns = false;
+  /** @type {Set<string>} */
+  const usageTurns = new Set();
+  /** @type {string[]} */
+  const startedTurns = [];
   for (const [index, line] of lines.entries()) {
     if (line === "") continue;
     const last = index === lines.length - 1;
@@ -479,12 +483,24 @@ function parseFile(home, file, rejected) {
       continue;
     }
     if (projected === null) continue;
-    if (projected.kind === "token_usage_record") usageRecords = true;
-    if (projected.kind === "task_started" && projected.root_turn_id !== null) rootedTurns = true;
+    if (projected.kind === "token_usage_record") usageTurns.add(projected.turn_id);
+    if (projected.kind === "task_started") {
+      startedTurns.push(projected.turn_id);
+      if (projected.root_turn_id !== null) usageTurns.add(projected.turn_id);
+    }
     records.push(projected);
   }
   if (meta === null) return null;
-  const family = usageRecords || rootedTurns ? USAGERECORD : TOKENCOUNT;
+  // Codex never rewrites a rollout, but it does append to one: a thread started by 0.147 and
+  // resumed by 0.159 holds turns of both families in one file. So the family is a property of each
+  // turn, and the file reports every family its turns belong to. The file's own family is the one
+  // its newest writer used, which is the usage-record family as soon as any turn carries one.
+  const families = new Set(
+    startedTurns.map((turnId) => (usageTurns.has(turnId) ? USAGERECORD : TOKENCOUNT)),
+  );
+  if (usageTurns.size > 0) families.add(USAGERECORD);
+  if (families.size === 0) families.add(TOKENCOUNT);
+  const family = families.has(USAGERECORD) ? USAGERECORD : TOKENCOUNT;
   const subagent = meta.thread_source === "subagent";
   // The replay boundary of a forked subagent is not recoverable in the token-count family: Codex
   // set it to the file's length, so honouring it drops the subagent's own turn and ignoring it
@@ -499,6 +515,8 @@ function parseFile(home, file, rejected) {
     subagent,
     provider: /** @type {string} */ (meta.model_provider),
     family,
+    families: [...families].sort(),
+    usageTurns,
     skippedFork,
     // A forked subagent begins with a verbatim copy of its parent's history. Counting it would
     // charge every forked agent with its parent's usage again.
@@ -852,8 +870,7 @@ function assemblePrompts(unordered) {
           if (record.model !== null) latestModel = record.model;
           break;
         case "task_started": {
-          const root =
-            file.family === USAGERECORD ? (record.root_turn_id ?? record.turn_id) : record.turn_id;
+          const root = record.root_turn_id ?? record.turn_id;
           current = {
             turn_id: record.turn_id,
             root,
@@ -887,7 +904,10 @@ function assemblePrompts(unordered) {
           if (total !== null) previousTotal = total;
           if (current === null) break;
           const entry = contribute(record, current.root);
-          if (file.family === TOKENCOUNT && record.last !== null && total !== null && !repeated) {
+          // A turn whose responses Codex recorded one by one takes its slices from those records;
+          // its token counts then only repeat them. Any other turn has nothing but its token counts.
+          const fromCounts = !file.usageTurns.has(current.turn_id);
+          if (fromCounts && record.last !== null && total !== null && !repeated) {
             const sliceId = sha256(`${file.thread}:${record.ordinal}`);
             if (!seenSlices.has(sliceId)) {
               seenSlices.add(sliceId);

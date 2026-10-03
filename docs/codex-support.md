@@ -43,13 +43,16 @@ that their prompts are not observed.
 
 ## Families and the fingerprint
 
-The family is decided **per file**, because one sessions tree holds both at once — Codex never
-rewrites an old rollout. A file is `cx-rollout-usagerecord-v1` when it contains a
-`token_usage_record` or a `task_started` carrying `root_turn_id`; otherwise it is
-`cx-rollout-tokencount-v1`. The directory is supported when every file is one of the two. Setup
-records the family of the most recently modified file; `doctor` passes while that family is among
-those present, so upgrading Codex from one supported family to the next does not fail `doctor`
-while `sync` keeps reading both.
+The family is decided **per turn**. One sessions tree holds both families at once, because Codex
+never rewrites an old rollout — and one rollout can hold both too, because Codex does append to one:
+a thread started by `0.147` and resumed by `0.159` keeps its old turns and gains new ones in the
+same file. A turn is `cx-rollout-usagerecord-v1` when its `task_started` carries `root_turn_id`
+or a `token_usage_record` names it; otherwise it is `cx-rollout-tokencount-v1`. A file reports
+every family its turns belong to, and a file holding both is a recognized, supported shape, not
+drift. The directory is supported when every file parses. Setup records the family of the most
+recently modified file (the usage-record family as soon as that file holds any such turn);
+`doctor` passes while every family present is supported, so upgrading Codex from one supported
+family to the next does not fail `doctor` while `sync` keeps reading both.
 
 Every record SNACK reads is held to its shape on every read, not on a sample. A violation refuses the
 whole history with `source_schema_unsupported` (exit `4`) and writes nothing: a token field that is
@@ -121,7 +124,9 @@ error; double-counting the parent is not.
 `cx-rollout-usagerecord-v1` gives one usage slice per `token_usage_record`, keyed by its
 `response_id`. `cx-rollout-tokencount-v1` gives one slice per token count whose running total
 changed — a repeated total is a rate-limit refresh with no new response — taking that count's
-`last_token_usage`.
+`last_token_usage`. The source is chosen per turn, so in a resumed rollout the turns `0.147` wrote
+keep the slices their token counts gave them, and the token counts of a `0.159` turn, which only
+repeat its usage records, never add a second slice.
 
 OpenAI reports cached input inside input and reasoning inside output; SNACK stores them apart:
 input is `input − cached − cache_write`, output is `output − reasoning`. A negative result is drift

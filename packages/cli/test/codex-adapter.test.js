@@ -161,6 +161,31 @@ test("token-count family: a repeated total opens no slice, a decreased total sti
   assert.equal(second.usage_slices[0]?.model, "gpt-test");
 });
 
+test("a 0.147 rollout resumed by 0.159 reads each turn by its own family", async () => {
+  const adapter = adapterFor(await codexHome("resumed-0-147-0-by-0-159-3.jsonl"));
+  const { observations } = adapter.readAll();
+  const legacy = adapterFor(await codexHome("version-0-147-0.jsonl")).readAll().observations;
+
+  assert.equal(observations.length, 3);
+  // The turns Codex 0.147 wrote are read exactly as they were before the resume.
+  assert.deepEqual(observations.slice(0, 2), legacy);
+  const resumed = observations[2];
+  assert.equal(resumed?.source_prompt_id, "00000000-0000-7000-8000-000000000103");
+  // Its token count repeats the usage record: one slice, not two.
+  assert.deepEqual(
+    resumed?.usage_slices.map((slice) => slice.source_slice_id),
+    ["resp_test_resumed"],
+  );
+  // One rollout holding both families is a recognized shape, not drift.
+  assert.deepEqual(adapter.fingerprint(), {
+    adapter: "codex-jsonl",
+    fingerprint_version: 1,
+    family: "cx-rollout-usagerecord-v1",
+    families: ["cx-rollout-tokencount-v1", "cx-rollout-usagerecord-v1"],
+    supported: true,
+  });
+});
+
 test("usage-record family: a continuation after an interrupt contributes to its root", async () => {
   const { observations } = adapterFor(await codexHome("version-0-159-3.jsonl")).readAll();
 
