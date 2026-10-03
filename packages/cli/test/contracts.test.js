@@ -340,9 +340,13 @@ test("an export validates against the published export schema", async () => {
  *
  * `1.4` was captured at `v1.4.0` before any 1.5 change: thirteen documents, the first corpus with a
  * `sequence` member (`status-sequence.json`, `--sequence 10`).
+ *
+ * `1.5` was captured at `v1.5.0` before any 1.6 change: the same thirteen documents, the first
+ * corpus with a computed `shadow` on the Codex source's `status` and a `calibration.by_method` on its
+ * `stats`.
  */
 const PRE_FREEZE_VERSIONS = ["0.6", "0.7", "0.8"];
-const FROZEN_VERSIONS = ["0.9", "1.2", "1.3", "1.4"];
+const FROZEN_VERSIONS = ["0.9", "1.2", "1.3", "1.4", "1.5"];
 const CAPTURED_VERSIONS = [...PRE_FREEZE_VERSIONS, ...FROZEN_VERSIONS];
 
 /**
