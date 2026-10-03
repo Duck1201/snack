@@ -441,6 +441,72 @@ history grows 12 KB. `storage.test.js` upgrades
 every published schema level, `1.4.0`'s included, straight to `018`, and `npm run upgrade:smoke`
 upgrades a database the published `1.4.0` wrote.
 
+## What 1.6.0 adds, and why it is a minor
+
+**Two more methods, in shadow, on every source: the answer does not move.** `status` also computes
+`bayesian-pressure-band-hl50@1` and `bayesian-pressure-band-hl100@1` — the answer's own model with a
+50- and a 100-prompt recency half-life instead of 30 (model policies `recency-hl50-v1` and
+`recency-hl100-v1`; the 7-day time half-life, the cells, the prior and every evidence gate are the
+answer's) — for every capacity source, records them beside the attempt and calibrates them, and
+never shows either as the answer. They read the very input the answer read, prepared once. A variant
+whose ladder would end at the plan prior is not computed (`no_local_outcomes`). The `next prompt`
+interval, the risk label, the evidence level, the method, `sequence`, the caveats, the envelope's
+status and warnings and every human surface but `--verbose` are the answer's, for every source. A
+test replays the `1.5` corpus capture on today's tree and asserts it byte for byte but for the
+members below; a property test drives `status` on OpenCode, Claude Code and Codex sources over
+arbitrary histories and asserts the answer equals the one given with no variant beside it — and fails
+when a variant is allowed to answer. Promoting a variant is a later minor's decision, under
+`recency-variant-promotion-v1` (`docs/history/specs/half-life-shadows/spec.md` §6), whose fifth
+condition is the collapse test the answer's half-life was chosen by; both variants fail it today
+(`npm run collapse:check`).
+
+**`status --json` gains `shadows`, on every report.** An array, the report's last member, of every
+shadow estimate the invocation computed or declined to compute: the `reported-capacity` entry first
+where a Codex CLI installation feeds the source — the very object `shadow` holds — then the weighting
+variants by ascending half-life. Each entry carries `method`, `computed`, `reason` (null when
+computed), `policy_version`, and, exactly when `computed` is true, `viability`, `risk`, `evidence`,
+`model_policy_version` and `contributors`; `binding` only on the `reported-capacity` entry. **`shadow`
+stays exactly as 1.5 emits it** — present exactly when `reported_capacity` is, byte-identical, and kept
+for the rest of 1.x — so a consumer written against 1.5 reads what it always read. No sequence is
+given for a shadow.
+
+**`stats --json` gives `calibration.by_method` on every source.** In `1.5.0` it appeared only on a
+source a Codex installation feeds (that release's decision D5, made so every other source's `stats`
+document stayed byte-identical to `1.4`). That decision is **superseded, deliberately**: a shadow
+method now runs on every source, so every source has per-method calibration. The entries are the
+answer first, then `reported-capacity@1` where a Codex installation feeds the source — those two are
+byte-identical to what `1.5` emitted — then each variant with `role: "shadow"`, its own `live` (from
+the rows recorded beside delivered attempts since `1.6.0`), its own `backtest` (scored only at
+prompts where its ladder reads an outcome of the user's) and `paired`, the answer's Brier score over
+exactly the same outcomes. The top-level `live` and `backtest` keep their meaning and their numbers.
+**`by_method`'s presence was never the Codex signal**, and is not one now: `reported_capacity` on
+`status`, and a `reported-capacity` entry in `by_method`, are. Adding the member to documents that
+lacked it is additive — no document loses a field, and a consumer must tolerate added fields.
+
+**Human output.** `status --verbose` adds the variants under the `shadow` label — what each would
+say, or why it was not computed, then one line naming the half-lives and policy versions — saying
+once per panel that none of it is the answer; the default panel, the overview and `--sequence`
+without `--verbose` never show them. `stats --verbose` lists every source's `by method` block, the
+variants included. `stats` replays the answer and both variants in one chronological walk, held bit
+for bit to `1.5.0`'s single replay, and costs about a second more per variant per 100,000 prompts.
+Human formatting is not a frozen surface.
+
+**No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
+`PREDICTION_POLICY.version` stays `stage5-prediction-v2`; each variant names its own policy. No new
+flag, exit code, configuration key or reason value. `status.schema.json` declares `shadows`
+(`$defs/shadowEntry`) and `stats.schema.json` rewrites `by_method`'s description; every frozen corpus
+— `0.9`, `1.2`, `1.3`, `1.4`, and the `1.5` corpus captured at `v1.5.0` before any of this changed —
+still validates, unchanged.
+
+**One migration, append-only.** `019` creates `prediction_shadow`: one row per attempt and method the
+invocation computed, written in the attempt's transaction, holding the interval, the labels, the
+policies and the posterior; primary key `(prediction_attempt_id, method_id, method_version)`, no
+other index; immutable on `UPDATE`, deletable only by `data purge` (the `009` pattern), counted with
+`counts.predictions`, so `data-purge.schema.json` does not move. `prediction_reported_capacity` is
+neither moved nor touched. The table is **not exported**: a new table would fail every version-2
+validator. `storage.test.js` upgrades every published schema level, `1.5.0`'s included, straight to
+`019`, and `npm run upgrade:smoke` upgrades a database the published `1.5.0` wrote.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

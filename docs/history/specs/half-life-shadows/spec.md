@@ -591,3 +591,30 @@ source; it is the same object as `shadow`.
   actually works, the variants and the answer read nearly the same evidence, and their record will
   say little for a long time.
 
+
+### 12.2 Where the build departs from sections 2-11
+
+- **`backtestWeightings` keeps every policy's full scored list.** Each policy's result is exactly
+  what `backtest` with that policy returns — held bit for bit to a frozen copy of `v1.5.0`'s
+  function in `calibration.test.js` — plus a `from_prior` flag per scored prompt. `scoreVariant`
+  then drops the prompts where the variant's ladder ended at the prior and pairs the rest with the
+  answer's forecasts at the same positions (every weighting scores at the same prompts). Filtering
+  inside the walk would have made "equals a separate `backtest`" false for the variants.
+- **`liveByMethod(pairs, method, shadowRows?)`** rather than `(pairs, shadowRows, methods)`: one
+  method per call, as in 1.5.0; given rows, the method's numbers are read from them by attempt id,
+  otherwise from the pair's `reported-capacity` columns. The answer's entry is unchanged either way.
+- **A test seam on `run`.** `options.weightingVariants` (default `WEIGHTING_VARIANTS`) lets the
+  isolation property run the answer with no variant beside it and hold today's answer to it, over
+  arbitrary histories on OpenCode, Claude Code and Codex sources. There is no switch in the
+  product (1.5.0 D6 stands).
+- **Wording.** When both variants are not computed for one reason the line reads
+  "bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — …"; the line
+  naming the half-lives is shown whether or not they were computed. On a Codex source whose
+  `reported-capacity` line says only why it was not computed, the "not the answer above" suffix
+  moves to the first variant line that says what it would say.
+- **`shadowEntry`** requires the forecast members when `computed` is true (`if`/`then`); like 1.5's
+  `shadow`, it does not forbid them otherwise.
+- **The answer's collapse comment** in `prediction.simulation.test.js` read "0/25 at two hours"; the
+  test measures 1/25 there, and now says so and asserts both counts.
+- **Left to the release PR:** ADR-0011, the roadmap entry, `docs/release/performance.md`, the
+  changeset and the version. The measured budgets are in the build report.

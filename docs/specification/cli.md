@@ -181,6 +181,28 @@ overview and every surface without `--verbose` never show the shadow. In `--json
 `shadow` member of that source's report (see [compatibility.md](../compatibility.md)), absent for a
 source no Codex installation feeds.
 
+**From 1.6, the weighting variants, on every source and in the same place.** `status` also computes
+`bayesian-pressure-band-hl50@1` and `bayesian-pressure-band-hl100@1` — the answer's model with a 50-
+and a 100-prompt recency half-life instead of 30 ([analysis.md §9.10](analysis.md)) — for every
+source, records them and calibrates them, and never answers with either. Under `--verbose` they
+follow the `reported-capacity@1` lines on a Codex source, or stand alone under the `shadow` label
+elsewhere.
+
+```text
+  shadow       bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above
+               bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high
+               the answer's model with a 50- and a 100-prompt recency half-life instead of 30 · recency-hl50-v1 · recency-hl100-v1
+```
+
+"Not the answer above" is said once per panel, on the first line that says what a shadow would say.
+A variant not computed says why on its own line, or both on one line when they share the reason:
+"bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — no outcome of yours
+to read yet". The last line names the half-lives, always hyphenated, and the policy versions that
+identify them. `--sequence` adds nothing for a shadow. In `--json` every shadow is an entry of the
+report's `shadows` array, its last member, present on every report: the `reported-capacity` entry
+first where it runs — the same object as `shadow`, which stays — then the variants by ascending
+half-life.
+
 **With `--sequence <n>`, a second estimate beneath the first.** From 1.4, `--sequence <n>` also
 assesses **sequence viability**: the probability that prompts sent one after another — all of the
 next `n` — complete without an observed restriction. `n` is the user's own number, a whole number from 1 to
@@ -257,8 +279,9 @@ Brier scores, sample sizes and interval coverage; and the policy versions. A sta
 reported as a bare number without its unit and sample size, and those travel with it under
 `--verbose` rather than being dropped.
 
-From 1.5, for a source a Codex installation feeds, `--verbose` closes the calibration block with
-`by method`: one line per method — its identifier, its role (`answer` or `shadow`), and its live and
+From 1.5, for a source a Codex installation feeds — and from 1.6 for every source, because the
+weighting variants run everywhere — `--verbose` closes the calibration block with `by method`: one
+line per method — its identifier, its role (`answer` or `shadow`), and its live and
 backtest Brier scores, each with its sample size — and, beneath the shadow's line, its comparison
 with the answering baseline over exactly the same outcomes, live and replayed, with the number of
 those outcomes and of the restrictions among them.
@@ -270,8 +293,14 @@ those outcomes and of the restrictions among them.
                               same outcomes as the baseline · live not available yet · backtest brier 0.019 against 0.017, sample 71, 1 restricted
 ```
 
+From 1.6 each weighting variant follows, with its own line and its comparison with the answer over
+exactly the same outcomes; its backtest scores only the prompts where its ladder reads an outcome of
+the user's, and its live stream only the forecasts recorded since 1.6.
+
 A stream with nothing scored yet says "not available yet", never zero. The default `stats` output
-is unchanged. In `--json` the same figures are the optional `calibration.by_method` array.
+is unchanged. In `--json` the same figures are the `calibration.by_method` array: optional, present
+only on a Codex-fed source in 1.5 and on every source from 1.6, the entries 1.5 emitted first and
+unchanged.
 
 `--by-client` compares the clients feeding each capacity source. It answers the one question a
 shared source invites: whether one client is refused more often than the others against the same

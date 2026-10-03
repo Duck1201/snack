@@ -28,6 +28,8 @@ node --test --test-name-pattern "full sync converges" packages/cli/test/main.tes
 npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs clean, runs the bin
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
 npm run release:prepare  # changeset version + plugin pin + man page + release evidence, one PR
+npm run collapse:check # scripts/collapse-simulation.mjs — the collapse test per weighting variant
+                       # (promotion condition 5); prints counts, promotes nothing
 npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
                        # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0 1.4.0 1.5.0;
                        # argv narrows to one) with the candidate. Needs the network; not part of
