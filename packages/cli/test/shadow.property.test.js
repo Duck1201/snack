@@ -60,6 +60,30 @@ const statedSnapshot = fc.record({
 });
 
 /**
+ * A window stated full or nearly full a minute before the clock.
+ *
+ * @param {number} usedPercent
+ * @param {number} n
+ */
+function fixedSnapshot(usedPercent, n) {
+  return {
+    observation_key: String(n).padStart(64, "a"),
+    observed_at: new Date(NOW - 60_000).toISOString(),
+    limit_id: /** @type {"codex" | "premium" | null} */ ("codex"),
+    plan_type: /** @type {"free" | "plus" | null} */ ("plus"),
+    windows: [
+      {
+        window_minutes: /** @type {300 | 10080 | 43200} */ (300),
+        used_percent: usedPercent,
+        resets_at: /** @type {string | null} */ (new Date(NOW + 3_600_000).toISOString()),
+      },
+    ],
+    parser_version: /** @type {const} */ ("codex-rate-limits-v1"),
+    provider: /** @type {const} */ ("openai"),
+  };
+}
+
+/**
  * Everything the answer is made of. `reported_capacity` and `shadow` are the two members a stated
  * figure is allowed to add; nothing else may differ.
  *
@@ -163,7 +187,12 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
         assert.equal(stated.overview, baseline.overview);
       },
     ),
-    { numRuns: 40 },
+    {
+      numRuns: 40,
+      // Always run, beside the random ones: a window stated full and one nearly full, a minute
+      // before the clock, so the guards below never depend on what the generator happened to draw.
+      examples: [[[fixedSnapshot(100, 1)]], [[fixedSnapshot(90, 2)]]],
+    },
   );
   // Non-vacuity: the property held while the shadow was really computed, in the full band too.
   assert.ok(seen.computed >= 5, `the shadow was computed on ${seen.computed} runs only`);
