@@ -200,13 +200,20 @@ budgets, and the risks.
 | `1.3.0` | Codex CLI adapter | shipped |
 | `1.4.0` | `status --sequence N` | shipped |
 | `1.5.0` | `reported_capacity_v1` prediction method, shipped as the shadow method `reported-capacity@1` | shipped |
-| `1.5.1` | alternative recency half-lives as shadow methods | planned |
-| `1.6.0` | `snack dash` — superseding `status --watch`; the sequence answer's ceiling, documented | planned |
+| `1.5.1` | alternative recency half-lives as shadow methods | folded into `1.6.0` |
+| `1.6.0` | `snack dash` — superseding `status --watch`; the sequence answer's ceiling, documented; the alternative recency half-lives, in shadow | shipped |
 
 `snack dash` was specified as part of `1.2.0` and moved to the end of the line rather than pushing
 the three releases behind it down a version each. Renumbering commitments the roadmap has already
 published, in order to absorb a scope change, makes every one of them contingent on whatever arrives
 next; `1.1.3` established that and this is the first application of it.
+
+`1.5.1` was never published, and its row stays rather than disappearing, so the commitment can be
+read where it was made. Its work shipped inside `1.6.0`: a patch cannot carry additive JSON, and the
+variants were wanted complete, `shadows` and every-source `by_method` included, rather than recorded
+in a patch and surfaced a minor later. Moving work into the next release already promised is not the
+renumbering the paragraph above refuses — no published version changed what it delivers or moved
+down the line — and the unused number is simply not cut.
 
 ## Compatibility Policy
 
@@ -268,7 +275,7 @@ Steady state means the commands run repeatedly against an already-stored history
 
 These are release gates, not cross-device guarantees. Regressions require measurement and resolution before release.
 
-A `snack dash` redraw is held to the same budgets as the command it repeats, and is the reason its synchronization runs on a clock of its own rather than on every frame.
+A `snack dash` recompute — the reading it takes once per synchronization, every source with its shadows — is held to the budget of the command it repeats, `status --no-sync`; that is why its synchronization runs on a clock of its own and the per-second redraw reads no storage at all.
 
 ## Outside the 1.x Line
 
