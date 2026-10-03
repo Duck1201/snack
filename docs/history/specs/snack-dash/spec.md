@@ -59,7 +59,9 @@ slices and the frozen interface · 10 documentation and contract changes · 11 d
 Findings 1-4 decide §3: **the dash never touches SQLite outside the storage operation lock, and it
 takes that lock only once per synchronization**, right after its own sync child has exited, for one
 recompute. Between syncs it holds no lock and opens no connection; the 1 s redraw is a pure function
-of the cached reading and the clock.
+of the cached reading and the clock. (Corrected after review of `3978a85`: two writes also take it
+between syncs — the retry of a recompute the lock was busy for, on the next tick, and the delivery
+of a snapshot recorded while the terminal was too small, by the first frame that draws it.)
 
 ---
 

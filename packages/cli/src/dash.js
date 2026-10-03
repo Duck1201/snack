@@ -114,6 +114,9 @@ export function snapshotKey(report, capacityPeriodId) {
  * @property {(attemptIds: number[], now: Date) => void} confirm
  *
  * @typedef {object} StoragePort
+ * @property {() => {code: string, message: string}[]} [warnings] What the readings warned about
+ *   this session -- a plan profile that fell back to the generic one, say -- once each. The screen
+ *   has no room for them; they are written to standard error once it is restored.
  * @property {string[]} aliases The capacity sources, in configuration order.
  * @property {string} horizon The primary horizon, which the plot's windows are.
  * @property {<T>(work: (session: StorageSession) => Promise<T>) => Promise<T>} session Runs `work`
@@ -127,6 +130,8 @@ export function snapshotKey(report, capacityPeriodId) {
  * @property {SignalPort} signals
  * @property {StoragePort} storage
  * @property {boolean} color
+ * @property {(warnings: {code: string, message: string}[]) => void} [warn] Called once the terminal
+ *   is restored, before any signal is re-raised, with the session's warnings.
  * @property {(controller: {idle(): Promise<void>, state(): import("./dash-view.js").DashState}) => void} [probe]
  *   A test seam: called once with what lets a test wait for the controller to settle.
  */
@@ -140,24 +145,30 @@ export function snapshotKey(report, capacityPeriodId) {
  */
 export function createStoragePort(input) {
   const { paths } = input;
+  /** Every warning a reading carried this session, once each, in the order first seen. */
+  /** @type {Map<string, {code: string, message: string}>} */
+  const warnings = new Map();
   /** @type {StorageSession} */
   const session = {
     readiness: () => readStorageReadiness(paths.databaseFile),
-    build: async (now, synchronization) =>
-      (
-        await buildSourceReports({
-          databaseFile: paths.databaseFile,
-          config: input.config,
-          selected: input.selected,
-          inScope: input.inScope,
-          now,
-          synchronize: async (source) => synchronization(source.alias),
-          ...(input.weightingVariants === undefined
-            ? {}
-            : { weightingVariants: input.weightingVariants }),
-          includeSeries: true,
-        })
-      ).sources,
+    build: async (now, synchronization) => {
+      const built = await buildSourceReports({
+        databaseFile: paths.databaseFile,
+        config: input.config,
+        selected: input.selected,
+        inScope: input.inScope,
+        now,
+        synchronize: async (source) => synchronization(source.alias),
+        ...(input.weightingVariants === undefined
+          ? {}
+          : { weightingVariants: input.weightingVariants }),
+        includeSeries: true,
+      });
+      for (const warning of built.warnings) {
+        warnings.set(`${warning.code}\u0000${warning.message}`, warning);
+      }
+      return built.sources;
+    },
     record: (built, sequenceLength) =>
       recordAttempt(
         paths.databaseFile,
@@ -177,6 +188,7 @@ export function createStoragePort(input) {
       }),
   };
   return {
+    warnings: () => [...warnings.values()],
     aliases: input.selected.map((source) => source.alias),
     horizon: primaryHorizon(input.config),
     session: (work) => withStorageOperationLock(paths, () => work(session)),
@@ -683,6 +695,14 @@ export async function runDash(ports) {
     if (syncTimer !== null) scheduler.clearTimeout(syncTimer);
     restore();
     for (const off of unsubscribe) off();
+    const warnings = storage.warnings?.() ?? [];
+    if (warnings.length > 0 && !gone) {
+      try {
+        ports.warn?.(warnings);
+      } catch {
+        // Standard error went away with the terminal; there is nowhere left to say it.
+      }
+    }
   }
   // A sync child still running is left to finish its transaction and release the lock on its own:
   // killing it mid-transaction would leave the lock to go stale for two minutes.

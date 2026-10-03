@@ -946,6 +946,9 @@ export async function run(argv, options = {}) {
             : { weightingVariants: options.weightingVariants }),
         }),
         color,
+        // The screen has no room for them: said on standard error once it is restored, as
+        // `status` says them after its panel.
+        warn: (warnings) => reportWarnings(stderr, warnings),
       });
     });
 

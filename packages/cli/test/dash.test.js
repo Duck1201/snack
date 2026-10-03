@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
 import { setImmediate } from "node:timers";
 
@@ -678,4 +678,25 @@ test("a resize repaints the whole frame at the new size", async () => {
   assert.match(dash.terminal.text(), /snack dash needs at least 64 columns/u);
   dash.terminal.press("q");
   assert.equal(await dash.done, 0);
+});
+
+test("the warnings a reading carries are written to standard error once the terminal is restored", async () => {
+  // A plan profile that cannot be read falls back to the generic one and says so, as `status` does;
+  // the dash, which owns the screen while it runs, says it on standard error as it leaves.
+  const source = await seeded();
+  const missing = join(source.root, "absent-profile.json");
+  await writeFile(
+    source.paths.configFile,
+    `${JSON.stringify({ schema_version: 1, sources: [{ ...source.source, plan_profile: missing }] })}\n`,
+    { mode: 0o600 },
+  );
+  const dash = await open(source);
+  assert.equal(dash.stderr.value, "", "nothing reaches standard error while the screen is drawn");
+  await dash.clock.advance(SYNC_DELAY_MS);
+  dash.terminal.press("q");
+  assert.equal(await dash.done, 0);
+  const lines = dash.stderr.value.split("\n").filter(Boolean);
+  assert.equal(lines.length, 1, dash.stderr.value);
+  assert.match(String(lines[0]), /^Warning: Plan profile ".*absent-profile\.json" is unavailable/u);
+  assert.equal(dash.terminal.inAltBuffer, false);
 });
