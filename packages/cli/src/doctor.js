@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { isConfiguredSource, readConfig, requireConfiguredSource } from "./config.js";
 import { SnackError } from "./errors.js";
+import { probeSqliteDriver } from "./sqlite-driver.js";
 import { createSourceAdapter } from "./source-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
 import { resolvePlanProfile } from "./plan-profile.js";
@@ -29,7 +30,7 @@ const PLAN_PROFILE_STALE_DAYS = 365;
 
 /**
  * @param {import("./paths.js").SnackPaths} paths
- * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string, migrationsDir?: string}} [options]
+ * @param {{nodeVersion?: string | undefined, platform?: NodeJS.Platform | undefined, now?: Date, opencodeConfigFile?: string, source?: string, migrationsDir?: string, openSqliteDriver?: (() => void) | undefined}} [options]
  * @returns {Promise<{status: "ok" | "degraded" | "error", checks: DoctorCheck[]}>}
  */
 export async function runDoctor(paths, options = {}) {
@@ -70,6 +71,11 @@ export async function runDoctor(paths, options = {}) {
   if (configBackup) checks.push(configBackup);
   checks.push(await checkSetupJournal(setupJournalFile(paths)));
 
+  // Named before the storage check, which can only say that it failed: every SQLite open below,
+  // storage and OpenCode source alike, fails the same way when the addon does not load.
+  const driverFailure = probeSqliteDriver(options.openSqliteDriver);
+  if (driverFailure) checks.push(fail("sqlite_driver", driverFailure.message));
+
   try {
     const storageLock = await checkLock(`${paths.databaseFile}.lock`, "storage_lock");
     if (storageLock) checks.push(storageLock);
@@ -101,7 +107,14 @@ export async function runDoctor(paths, options = {}) {
       );
     }
   } catch {
-    checks.push(fail("storage", "Storage is invalid or inaccessible."));
+    checks.push(
+      fail(
+        "storage",
+        driverFailure
+          ? "Storage was not inspected: the SQLite driver did not load."
+          : "Storage is invalid or inaccessible.",
+      ),
+    );
   }
   checks.push(await checkMode(paths.dataDir, 0o700, "data_directory"));
   checks.push(await checkMode(paths.backupDir, 0o700, "backup_directory"));

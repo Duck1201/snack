@@ -12,16 +12,18 @@ A check whose id ends in `:<alias>` is reported once per configured capacity sou
 
 ## Reading a failure first
 
-Three situations look alike from the outside and are not, so `doctor` tells them apart:
+Four situations look alike from the outside and are not, so `doctor` tells them apart:
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
 | `storage_migrations` fails | The database is at an older schema than this build | Run `snack sync`. A backup is taken first. Read-only commands refuse until then rather than half-reading |
 | `storage` fails with `storage_newer_than_application` | A **newer** SNACK already upgraded this database | Install the newer release, or restore the pre-migration backup from the backup directory. No downgrade is offered |
+| `sqlite_driver` fails, and `storage` and every OpenCode `source_fingerprint` with it | SNACK's SQLite driver did not load, so nothing was opened. Your data was not read and is not at fault | Reinstall SNACK with the Node.js that runs it: `npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli`. If `which snack` points somewhere other than `npm prefix -g`, a second copy is first on `PATH`; remove it. Commands report this as `storage_driver_unavailable` |
 | `source_fingerprint` fails | The client's own history is in a shape this build does not read | Check the support matrix for your client. SNACK refuses rather than guessing at rows it cannot interpret |
 
 The first two were once reported identically, which sent people hunting for corruption that was not
-there.
+there. The driver failure was reported as "Storage could not be read" until `1.2.1`, which did the
+same.
 
 ## Installation
 
@@ -29,6 +31,7 @@ there.
 | --- | --- | --- |
 | `runtime` | The Node.js version | **fail** — SNACK requires Node.js 24. Install it; there is no fallback |
 | `platform` | The operating system | **fail** — not a supported platform. Linux, macOS and WSL2 are supported |
+| `sqlite_driver` | Whether the native SQLite driver loads. Reported only when it fails | **fail** — built for another Node.js (the message names both ABIs), or never built: npm 12 skips the build in a global install unless `--allow-scripts=better-sqlite3` is passed. See the table above |
 
 ## Configuration
 

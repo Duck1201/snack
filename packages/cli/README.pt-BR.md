@@ -19,7 +19,7 @@ rede, porque não existe lugar nenhum para onde mandar. O `snack update` é a ú
 instala pacotes.
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # compila o driver SQLite; o npm 12 pula sem isso
 snack setup opencode    # ou: snack setup claude
 snack status
 ```

@@ -23,7 +23,7 @@ under any failure — gets between you and your prompt.
 The SNACK CLI registers it in OpenCode's own configuration for you:
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # builds the SQLite driver; npm 12 skips it otherwise
 snack setup opencode --install-plugin
 ```
 

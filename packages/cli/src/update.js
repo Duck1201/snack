@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { SnackError, ExitCode } from "./errors.js";
+import { sqliteInstallScripts } from "./sqlite-driver.js";
 
 const cliPackageName = "@snack-ai/cli";
 
@@ -63,8 +64,22 @@ export function resolveUpdatePlan(context) {
   if (context.modulePath.includes("/.bun/install/global/node_modules/")) {
     return plan("bun", "global", ["add", "--global", `${cliPackageName}@latest`]);
   }
-  if (context.modulePath.includes("/lib/node_modules/")) {
-    return plan("npm", "global", ["install", "--global", `${cliPackageName}@latest`]);
+  const globalModules = context.modulePath.indexOf("/lib/node_modules/");
+  if (globalModules !== -1) {
+    // `--global` alone installs under whichever prefix the `npm` on PATH reports, which is not
+    // necessarily the one this copy lives in: switch Node.js with nvm, or leave a copy under
+    // `~/.local`, and the install lands beside the running CLI while `--finish` re-execs the old
+    // one. The prefix is read off this module's own path so the copy being run is the one replaced.
+    // `sqliteInstallScripts` lets npm 12 build the SQLite driver, which it otherwise skips.
+    const prefix = context.modulePath.slice(0, globalModules) || "/";
+    return plan("npm", "global", [
+      "install",
+      "--global",
+      "--prefix",
+      prefix,
+      sqliteInstallScripts,
+      `${cliPackageName}@latest`,
+    ]);
   }
 
   // A local `node_modules` names no manager -- all four write the same directory -- so the lockfile
@@ -83,7 +98,7 @@ export function resolveUpdatePlan(context) {
     `SNACK cannot tell how it was installed, so it will not guess where to install the update.\n` +
       `Resolved location: ${context.modulePath}\n` +
       `Update it with your own package manager, for example:\n` +
-      `  npm install --global ${cliPackageName}@latest\n` +
+      `  npm install --global ${sqliteInstallScripts} ${cliPackageName}@latest\n` +
       `Then run: snack update --finish`,
     { code: ExitCode.unavailable, reason: "unrecognized_install_layout" },
   );

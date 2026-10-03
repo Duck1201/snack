@@ -410,6 +410,26 @@ spool event schema at module load cost every command about 65 ms, and `status` h
 It was read as a flaky budget test for several runs before it was measured against the previous
 tree. The budget test was right; the reading of it was wrong.
 
+### 1.2.1 - a machine where `snack` had stopped working
+
+Found by running the installed binary rather than the suite, two months after 1.2.0. Every command
+answered "Storage could not be read" while the database was intact; the cause was a second global
+copy under `~/.local`, first on `PATH`, whose native SQLite driver had been built for Node.js 22.
+Pulling that thread found three defects, and the record of each is in
+[compatibility.md](../compatibility.md#what-121-fixes-and-why-it-is-a-patch):
+
+- a driver that does not load is named (`storage_driver_unavailable`, `doctor`'s `sqlite_driver`)
+  instead of reported as damaged storage — the wording sent the reader after their data;
+- `snack update` passes `--prefix` read from the running module, so it replaces the copy being run.
+  It used to install under the active npm prefix and then re-exec the untouched copy;
+- npm 12 — now npm's `latest` — skips dependency install scripts in a global install unless they are
+  allowed, so a plain `npm install -g @snack-ai/cli` installs a CLI with no driver. The README
+  command and the `update` plan pass `--allow-scripts=better-sqlite3`, which npm 11.16 also accepts.
+
+**Exit:** a copy of the broken installation running the fixed source names the ABI mismatch in
+`status` and `doctor`; a dry-run `update` from a copy under a non-active prefix plans an install into
+that prefix; an install with the flag under both npm 11.16.0 and npm 12 loads the driver.
+
 ### 1.3.0 - Codex CLI adapter
 
 - read `~/.codex/sessions/**/rollout-*.jsonl` by **field allowlist**, never by exclusion: the same files carry `user_message`, `agent_message`, `cwd`, `workspace_roots`, and `git`. `~/.codex/history.jsonl` is never opened;

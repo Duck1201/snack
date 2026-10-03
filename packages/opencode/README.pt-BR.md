@@ -23,7 +23,7 @@ sob falha alguma — entra entre você e o seu prompt.
 A CLI do SNACK registra o plugin na configuração do próprio OpenCode para você:
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # compila o driver SQLite; o npm 12 pula sem isso
 snack setup opencode --install-plugin
 ```
 

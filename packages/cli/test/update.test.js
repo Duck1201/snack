@@ -53,8 +53,37 @@ test("an npm global install resolves to a global npm install of the CLI", () => 
   assert.equal(plan.scope, "global");
   // Only the CLI is installed. The plugin arrives through the pin `--finish` writes from the newly
   // installed build -- see the addendum to ADR-0010.
-  assert.deepEqual(plan.args, ["install", "--global", "@snack-ai/cli@latest"]);
-  assert.equal(plan.command, "npm install --global @snack-ai/cli@latest");
+  assert.deepEqual(plan.args, [
+    "install",
+    "--global",
+    "--prefix",
+    "/usr/local",
+    "--allow-scripts=better-sqlite3",
+    "@snack-ai/cli@latest",
+  ]);
+  assert.equal(
+    plan.command,
+    "npm install --global --prefix /usr/local --allow-scripts=better-sqlite3 @snack-ai/cli@latest",
+  );
+});
+
+test("an npm global install outside the active prefix is replaced where it lives", () => {
+  // Found on a real machine: a copy under `~/.local` first on PATH, nvm's npm active. A bare
+  // `--global` installed into nvm's prefix, re-exec'd the untouched `~/.local` copy with
+  // `--finish`, and reported success while the CLI being run never changed.
+  const plan = resolveUpdatePlan({
+    modulePath: "/home/someone/.local/lib/node_modules/@snack-ai/cli/src/update.js",
+    cwd: "/home/someone/project",
+    env: {},
+  });
+
+  assert.equal(plan.scope, "global");
+  assert.deepEqual(plan.args.slice(0, 4), [
+    "install",
+    "--global",
+    "--prefix",
+    "/home/someone/.local",
+  ]);
 });
 
 test("a pnpm global install resolves to pnpm, not to npm", () => {
@@ -189,7 +218,10 @@ test("--dry-run prints the exact command and runs nothing", async () => {
   const code = await run(["node", "snack", "update", "--dry-run"], fixture.options);
 
   assert.equal(code, ExitCode.success);
-  assert.match(fixture.stdout.value, /npm install --global @snack-ai\/cli@latest/u);
+  assert.match(
+    fixture.stdout.value,
+    /npm install --global --prefix \/usr\/local --allow-scripts=better-sqlite3 @snack-ai\/cli@latest/u,
+  );
   assert.deepEqual(fixture.executions, []);
 });
 
@@ -203,7 +235,17 @@ test("--yes installs, and only then re-execs the new build to finish", async () 
 
   assert.equal(code, ExitCode.success);
   assert.deepEqual(fixture.executions, [
-    { command: "npm", args: ["install", "--global", "@snack-ai/cli@latest"] },
+    {
+      command: "npm",
+      args: [
+        "install",
+        "--global",
+        "--prefix",
+        "/usr/local",
+        "--allow-scripts=better-sqlite3",
+        "@snack-ai/cli@latest",
+      ],
+    },
     { command: "/usr/local/bin/snack", args: ["update", "--finish"] },
   ]);
 });
@@ -223,7 +265,10 @@ test("without --yes the resolved command is confirmed, and a refusal runs nothin
   assert.equal(asked.length, 1);
   // The command is in the question, not just in a line above it: confirming something the prompt
   // does not name is not confirmation.
-  assert.match(asked[0] ?? "", /npm install --global @snack-ai\/cli@latest/u);
+  assert.match(
+    asked[0] ?? "",
+    /npm install --global --prefix \/usr\/local --allow-scripts=better-sqlite3 @snack-ai\/cli@latest/u,
+  );
   assert.deepEqual(fixture.executions, []);
 });
 
