@@ -1924,6 +1924,19 @@ function markStatedBandsStale(database, sourceAlias, from) {
  * @returns {string | null}
  */
 export function readStatedBandFrontier(databaseFile, sourceAlias, policyVersion) {
+  return readStatedBandProjection(databaseFile, sourceAlias, policyVersion).frontier;
+}
+
+/**
+ * The frontier `readStatedBandFrontier` returns, beside the stored `stale_from` it was derived
+ * from -- null when there is no row -- which `writeStatedBands` clears only if it still holds.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {string} policyVersion the policy the caller computes under
+ * @returns {{frontier: string | null, stale_from: string | null}}
+ */
+export function readStatedBandProjection(databaseFile, sourceAlias, policyVersion) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
     const row =
@@ -1934,8 +1947,11 @@ export function readStatedBandFrontier(databaseFile, sourceAlias, policyVersion)
           )
           .get(sourceAlias)
       );
-    if (row === undefined || row.policy_version !== policyVersion) return "";
-    return row.stale_from;
+    if (row === undefined) return { frontier: "", stale_from: null };
+    return {
+      frontier: row.policy_version !== policyVersion ? "" : row.stale_from,
+      stale_from: row.stale_from,
+    };
   } finally {
     database.close();
   }
@@ -1944,16 +1960,21 @@ export function readStatedBandFrontier(databaseFile, sourceAlias, policyVersion)
 /**
  * Persist recomputed stated bands and mark the source's projection current under `policyVersion`,
  * in one transaction, so a projection is never recorded as current without the bands that make it
- * so. Only rows whose band or policy moved are handed in. Called under the storage operation lock,
- * so no ingestion can have lowered the frontier since it was read.
+ * so. Only rows whose band or policy moved are handed in.
+ *
+ * The frontier is cleared only if it is still the `stale_from` the restate read. The restate runs
+ * under the storage operation lock, but a lock judged stale can be taken over, and an ingestion
+ * that commits in between lowers a frontier this write must not clear: compare and clear, so its
+ * mark survives for the next restate to find.
  *
  * @param {string} databaseFile
  * @param {string} sourceAlias
  * @param {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} rows
  * @param {string} policyVersion
+ * @param {string | null} read the `stale_from` read when the restate began (`readStatedBandProjection`)
  * @returns {number} rows written
  */
-export function writeStatedBands(databaseFile, sourceAlias, rows, policyVersion) {
+export function writeStatedBands(databaseFile, sourceAlias, rows, policyVersion, read) {
   const database = new Database(databaseFile, { fileMustExist: true });
   try {
     const update = database.prepare(
@@ -1963,13 +1984,14 @@ export function writeStatedBands(databaseFile, sourceAlias, rows, policyVersion)
     );
     const current = database.prepare(
       `INSERT INTO stated_band_projection (source_alias, policy_version, stale_from)
-       VALUES (?, ?, NULL)
+       VALUES (@source, @policy, NULL)
        ON CONFLICT (source_alias) DO UPDATE
-          SET policy_version = excluded.policy_version, stale_from = NULL`,
+          SET policy_version = excluded.policy_version,
+              stale_from = CASE WHEN stale_from IS @read THEN NULL ELSE stale_from END`,
     );
     return database.transaction((/** @type {typeof rows} */ batch) => {
       const written = batch.reduce((total, row) => total + update.run(row).changes, 0);
-      current.run(sourceAlias, policyVersion);
+      current.run({ source: sourceAlias, policy: policyVersion, read });
       return written;
     })(rows);
   } finally {

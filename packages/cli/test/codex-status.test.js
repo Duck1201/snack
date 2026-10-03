@@ -10,9 +10,11 @@ import { labelStatedBands, REPORTED_CAPACITY_POLICY } from "../src/reported-capa
 import {
   readIngestionCursor,
   readStatedBandFrontier,
+  readStatedBandProjection,
   readStatedBandRows,
   readStatedTimeline,
   storeObservations,
+  writeStatedBands,
 } from "../src/storage.js";
 import {
   addCodexTurns,
@@ -930,4 +932,40 @@ test("a purge that removes only another client's prompt lifts the supersession i
   assert.equal(purged.data.counts.reported_capacity_observations, 0);
   assert.deepEqual(bandsOf(databaseFile, ["own-1", "own-2"]), ["clear", "clear"]);
   assertProjected(databaseFile);
+});
+
+test("a frontier lowered between the restate's read and its write survives the write", async () => {
+  const fixture = await makeRunFixture("snack-codex-stolen-lock-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  const now = /** @type {Date} */ (fixture.options.now);
+  const version = REPORTED_CAPACITY_POLICY.version;
+  plantStatements(
+    databaseFile,
+    "codex",
+    installationId,
+    [statement("g", "2026-01-02T02:00:20.000Z", 100)],
+    now,
+  );
+  const read = readStatedBandProjection(databaseFile, "codex", version);
+  assert.deepEqual(read, {
+    frontier: "2026-01-02T02:00:20.000Z",
+    stale_from: "2026-01-02T02:00:20.000Z",
+  });
+
+  // A synchronization that took over a lock it judged stale commits an earlier statement while
+  // this restate computes: clearing the frontier it read must not clear the one it never saw.
+  plantStatements(
+    databaseFile,
+    "codex",
+    installationId,
+    [statement("h", "2026-01-02T02:00:01.000Z", 100)],
+    now,
+  );
+  writeStatedBands(databaseFile, "codex", [], version, read.stale_from);
+  assert.equal(frontierOf(databaseFile), "2026-01-02T02:00:01.000Z");
+
+  await json(fixture, ["sync"]);
+  assertProjected(databaseFile);
+  assert.equal(frontierOf(databaseFile), null);
 });

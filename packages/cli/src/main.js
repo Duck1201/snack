@@ -110,7 +110,7 @@ import {
   readSourceSummary,
   readStatedTimeline,
   readStatedBandRows,
-  readStatedBandFrontier,
+  readStatedBandProjection,
   writeStatedBands,
   hasForeignPromptSince,
   rollbackDatabaseInitialization,
@@ -2735,7 +2735,7 @@ function recategorizeSource(databaseFile, alias) {
  */
 function restateSource(databaseFile, alias) {
   const version = REPORTED_CAPACITY_POLICY.version;
-  const frontier = readStatedBandFrontier(databaseFile, alias, version);
+  const { frontier, stale_from: read } = readStatedBandProjection(databaseFile, alias, version);
   if (frontier === null) return;
   const lookback =
     frontier === ""
@@ -2769,7 +2769,7 @@ function restateSource(databaseFile, alias) {
       }
     },
   );
-  writeStatedBands(databaseFile, alias, moved, version);
+  writeStatedBands(databaseFile, alias, moved, version, read);
 }
 
 /**
