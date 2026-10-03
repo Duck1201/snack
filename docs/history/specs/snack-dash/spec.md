@@ -959,6 +959,14 @@ the reader's own data. Alternative: document only (§7.2) and leave the panel as
   **per attempt**. The record holds the sequence shown with each forecast the dash records — one
   `prediction_sequence` row, for the `N` on screen, in the transaction of an attempt the dash writes
   because the snapshot key changed (§4.3, §7.4) — and not every `N` that passed across the screen.
+  **Every source records it; one source draws it.** While the row is on, the attempt the dash
+  records for **every** source whose key changed carries the sequence for the `N` on screen, but the
+  row is drawn only in the selected source's detail; the other sources show their single-prompt
+  answer on their list row, and that row is what confirms their delivery. So a source that was not
+  selected when its attempt was recorded holds a sequence the person did not see for that source.
+  The record holds the sequence for the `N` that was on screen when each attempt was recorded, not a
+  claim that it was read for that source. It is outside calibration — sequences are never scored
+  (ADR-0008, `docs/specification/analysis.md` §9.8) — and affects only the record.
   Consequences, stated so nobody reads more into the record than it holds: an `N` the person steps
   through between two attempts is never recorded; a row shown, hidden or moved after an attempt is
   not recorded until the next one; and **a row turned on after the session's attempt was recorded,
