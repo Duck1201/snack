@@ -644,7 +644,9 @@ in words, instead of leaving the reader to think the tool failed.
 - **§2.1 "`--sequence -5`"**: with a space, Commander reads `-5` as an option and answers
   `invalid_usage` (still exit `2`, still no echo). `--sequence=-5` reaches the validator and answers
   `sequence_length_invalid`; the argv fuzz drives that form.
-- **No active capacity period** (§2.3, §7.5): the code records nothing without a period, as before,
-  but no command test reaches that state — no fixture produces a configured source with no period.
+- **No active capacity period** (§2.3, §7.5): the code records nothing without a period, as before.
+  No command closes a period without opening the next, so the command test reaches that state by
+  closing the period in the database after `sync`; it asserts exit `0`, the sequence answered, and
+  no `prediction_attempt` or `prediction_sequence` row.
 - **READMEs, CHANGELOGs, the changeset and the release cut** (§6.4, §8 slice 4) are left to the
   release's docs pass.

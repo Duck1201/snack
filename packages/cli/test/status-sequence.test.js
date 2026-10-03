@@ -272,6 +272,39 @@ test("a sequence is recorded beside its attempt, and the attempt is the one a pl
   }
 });
 
+test("without an active capacity period the sequence is answered and nothing is recorded", async () => {
+  const fixture = await makeRunFixture("snack-status-sequence-no-period-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  await run(setup("opencode", "work", "anthropic", "pro"), fixture.options);
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+  // No command closes a period without opening the next, so the state is reached by hand.
+  const database = new Database(fixture.paths.databaseFile);
+  try {
+    const closed = database
+      .prepare(
+        "UPDATE capacity_period SET ended_at = '2026-01-02T03:00:00.000Z' WHERE ended_at IS NULL",
+      )
+      .run();
+    assert.ok(closed.changes > 0);
+  } finally {
+    database.close();
+  }
+
+  const { stdout } = await snack(fixture, "status", "--no-sync", "--sequence", "5", "--json");
+  const report = JSON.parse(stdout).data;
+  assert.deepEqual(report.source.active_period, { started_at: null });
+  assert.equal(report.sequence.length, 5);
+  assert.ok(report.sequence.viability.lower <= report.sequence.viability.upper);
+  assert.deepEqual(
+    rows(fixture.paths.databaseFile, "SELECT COUNT(*) AS total FROM prediction_attempt"),
+    [{ total: 0 }],
+  );
+  assert.deepEqual(
+    rows(fixture.paths.databaseFile, "SELECT COUNT(*) AS total FROM prediction_sequence"),
+    [{ total: 0 }],
+  );
+});
+
 test("stats and export are byte-identical whether or not --sequence was ever used", async () => {
   const plainFixture = await twoSources();
   const sequenceFixture = await twoSources();
