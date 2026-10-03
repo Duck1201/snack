@@ -307,9 +307,12 @@ test("an export validates against the published export schema", async () => {
  * `1.3` was captured at `v1.3.0` before any 1.4 change. It is the first corpus that exercises
  * `reported_capacity` and `setup codex` -- twelve documents, three sources -- and the 1.4 edit to
  * `status.schema.json` lands in the same `$defs/report` that holds `reported_capacity`.
+ *
+ * `1.4` was captured at `v1.4.0` before any 1.5 change: thirteen documents, the first corpus with a
+ * `sequence` member (`status-sequence.json`, `--sequence 10`).
  */
 const PRE_FREEZE_VERSIONS = ["0.6", "0.7", "0.8"];
-const FROZEN_VERSIONS = ["0.9", "1.2", "1.3"];
+const FROZEN_VERSIONS = ["0.9", "1.2", "1.3", "1.4"];
 const CAPTURED_VERSIONS = [...PRE_FREEZE_VERSIONS, ...FROZEN_VERSIONS];
 
 /**
