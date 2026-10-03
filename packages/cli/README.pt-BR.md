@@ -25,12 +25,14 @@ snack status
 ```
 
 ```text
+$ snack status --source work
 work
-  viability  95-100%   risk low          evidence moderate
-  pressure   high      category typical  ▁▄▅▇█
-  drivers    prompts 100th, input_tokens 100th
-  method     bayesian-pressure-band@1
-  as of      40s ago · sync ok · period since 2026-01-02
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
@@ -41,28 +43,61 @@ importam. A primeira é a resposta; a segunda é o contexto que torna a resposta
 
 O que cada pedaço quer dizer, sem exigir estatística:
 
-| Você vê             | Quer dizer                                                                                      |
-| ------------------- | ----------------------------------------------------------------------------------------------- |
-| `95-100% viability` | Uma faixa, não uma promessa. Em algum ponto dela está a chance do próximo prompt completar.     |
-| `risk low`          | Lido pela **base** da faixa, nunca pelo meio. Uma faixa larga nunca consegue parecer confiante. |
-| `evidence moderate` | O quanto o seu próprio histórico sustenta isso. Instalação nova diz `very_low`, e é sincera.    |
-| `pressure high`     | Você, agora, comparado a você num dia normal. Nada a ver com os limites do provedor.            |
-| `prompts 100th`     | O percentil que está puxando — esta é a sua hora mais movimentada já registrada.                |
-| `category typical`  | O tamanho do seu próximo prompt perto dos seus prompts de sempre.                               |
+| Você vê                                        | Quer dizer                                                                                                                         |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `96-100% chance it goes through`               | Uma faixa, não uma promessa. Em algum ponto dela está a chance do próximo prompt completar.                                        |
+| `risk low`                                     | Lido pela **base** da faixa, nunca pelo meio. Uma faixa larga nunca consegue parecer confiante.                                    |
+| `evidence moderate`                            | O quanto o seu próprio histórico sustenta isso. Instalação nova diz `very_low`, e é sincera.                                       |
+| `pressure high`                                | Você, agora, comparado a você num dia normal. Nada a ver com os limites do provedor.                                               |
+| `higher than every window in your own history` | Onde esta janela fica entre as suas — esta é a sua hora mais movimentada já registrada.                                            |
+| `typical prompt`                               | O tamanho do seu próximo prompt perto dos seus prompts de sempre.                                                                  |
+| `drivers`                                      | O que está puxando a pressão para cima: aqui, quantos prompts você mandou e quanta entrada eles levaram.                           |
+| `as of`                                        | A idade do uso mais recente, se o último sync deu certo, e quando o período de capacidade atual (este plano, nesta conta) começou. |
+| `!`                                            | O que o SNACK não pode afirmar. Estão em todo painel; num histórico ralo a primeira diz que a suposição inicial ainda domina.      |
+
+O método, e o portão de evidência que segura o nível, estão a uma flag de distância. O `--verbose`
+os acrescenta ao mesmo painel, e dá a posição de cada fator:
+
+```text
+$ snack status --source work --verbose
+  ...
+  drivers      prompt count higher than every window in your own history, input tokens higher than every window in your own history
+  gates        sample high · restrictions moderate (limiting) · relevance moderate (limiting) · completeness high
+  method       bayesian-pressure-band@1 · model stage5-prediction-v2
+  ...
+```
+
+Dois portões seguram este em `moderate`: `restrictions`, porque o SNACK ainda não viu uma recusa
+nesta pressão, e `relevance`, porque a estimativa junta prompts de todo tamanho nesta pressão em vez
+de só prompts como o seu. Mais prompts, sozinhos, não o elevam. O `snack status` sozinho, sem
+`--source`, põe cada fonte numa linha para você compará-las.
 
 E o `snack stats` mostra como a sua semana realmente foi:
 
 ```text
-work: plan profile generic@1.0.0 (bundled, as of 2026-01-01).
-  pressure high (local baseline); trend rising over 4 windows against 14 baseline windows.
-  calibration: backtest brier 0.010 (sample 980, coverage 1.00) over 980 forecasts.
-  PT1H: 9 prompts; tokens in 22.620 / out 11.580; cost USD 0.24; duration p50 13,0s p90 44,0s.
-  P1D:  87 prompts; restrictions rate_limit 2; cost USD 1,99; effective sample 70,06 prompts.
-  P7D: 449 prompts; restrictions rate_limit 10; tokens in 909.266 / out 488.902; cost USD 10,06.
+$ snack stats
+work · anthropic max · generic@1.0.0 · pressure high, rising
+
+  WINDOW  PROMPTS  COUNTED    REFUSED     SET ASIDE  COST  TYPICAL  SLOWEST 10%
+  1h        28       28          —            0       —      25s        40s
+  5h        38       38          —            0       —      22s        38s
+  1d        41       41          —            0       —      23s        40s
+  7d        234      234    2 rate limit      0       —      25s        40s
+
+  WINDOW  INPUT  OUTPUT  REASONING  CACHE READ  CACHE WRITE
+  1h      3.23K  37.7K       —        1.83M        41.8K
+  5h      4.08K  53.5K       —        2.60M        67.1K
+  1d      4.49K  56.9K       —        2.76M        70.7K
+  7d      25.2K   316K       —        14.7M        466K
+
+  3 forecasts checked against what happened next
+  observed up to 2026-10-03T08:57:06.752Z
 ```
 
-449 prompts em sete dias, dez vezes ouvindo não, dez dólares e seis centavos, e um prompt mediano de
-doze segundos. Isso é uma semana da sua vida de trabalho, medida — e nunca saiu do seu notebook.
+234 prompts em sete dias, duas vezes ouvindo não, um prompt típico de vinte e cinco segundos, e
+quase quinze milhões de tokens relidos do cache. O custo aparece como `—` porque o Claude Code não o
+registra, e o SNACK não inventa um. Isso é uma semana da sua vida de trabalho, medida — e nunca saiu
+do seu notebook.
 
 ## A única coisa que o SNACK se recusa a fazer
 
@@ -309,13 +344,17 @@ O número que o Codex declara sobre as próprias janelas é citado na linha `rep
 `snack status`:
 
 ```text
+$ snack status --source codex
 codex
-  next prompt  35-99% chance it goes through · risk high
-  evidence     very_low — barely any history yet — mostly a starting assumption
-  pressure     unknown · no baseline to compare against yet · typical prompt
-  drivers      nothing to compare against yet
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Fri UTC · 20m ago
-  as of        20m ago · sync ok · period since 2026-10-03
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 As janelas são nomeadas pela duração, nunca pelo slot `primary`/`secondary` do Codex, que mudou de

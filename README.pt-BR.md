@@ -34,18 +34,22 @@ O SNACK lê esse histórico e transforma em três coisas:
   aconteceu, então dá para conferir se o SNACK vem acertando.
 
 ```text
+$ snack status --source work
 work
-  viability  95-100%   risk low          evidence moderate
-  pressure   high      category typical  ▁▄▅▇█
-  drivers    prompts 100th, input_tokens 100th
-  method     bayesian-pressure-band@1
-  as of      40s ago · sync ok · period since 2026-01-02
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 Pode ir — mas você está vivendo uma das suas horas mais pesadas de todas, então não se assuste se
-isso mudar.
+isso mudar. O método por trás da faixa não aparece neste painel: o `--verbose` o acrescenta, junto
+com os portões de evidência e a posição de cada fator no seu próprio histórico. O `snack status`
+sozinho põe cada fonte numa linha, para compará-las.
 
 ## O que não faz
 
@@ -76,17 +80,17 @@ fonte de capacidade, e o SNACK trata o uso deles como o pote único que de fato 
 
 ## Comandos
 
-| Comando                                     | O que faz                                                                                                                             |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                      |
-| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                               |
-| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência e o método |
-| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                         |
-| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                          |
-| `snack config`                              | Consulta ou atualiza a configuração local                                                                                             |
-| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                   |
-| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                |
-| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                   |
+| Comando                                     | O que faz                                                                                                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                                              |
+| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                                                       |
+| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência, o método e as versões de política |
+| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                                                 |
+| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                                                  |
+| `snack config`                              | Consulta ou atualiza a configuração local                                                                                                                     |
+| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                                           |
+| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                                        |
+| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                                           |
 
 Todo comando aceita `--json` e emite um documento versionado. Todo comando também está no
 `man snack`, gerado a partir da própria superfície de flags do CLI, então ele não descreve uma
@@ -140,13 +144,17 @@ dessa janela e quando ela reinicia. O SNACK o cita — é **uso de capacidade re
 do cliente, não do SNACK — numa linha só dele, ao lado da estimativa:
 
 ```text
+$ snack status --source codex
 codex
-  next prompt  35-99% chance it goes through · risk high
-  evidence     very_low — barely any history yet — mostly a starting assumption
-  pressure     unknown · no baseline to compare against yet · typical prompt
-  drivers      nothing to compare against yet
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Fri UTC · 20m ago
-  as of        20m ago · sync ok · period since 2026-10-03
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 A linha `reported` nunca faz parte do intervalo de `next prompt`, do nível de evidência nem da

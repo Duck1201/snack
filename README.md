@@ -34,18 +34,22 @@ SNACK reads that history and turns it into three things:
   you can check whether SNACK has been right.
 
 ```text
+$ snack status --source work
 work
-  viability  95-100%   risk low          evidence moderate
-  pressure   high      category typical  ▁▄▅▇█
-  drivers    prompts 100th, input_tokens 100th
-  method     bayesian-pressure-band@1
-  as of      40s ago · sync ok · period since 2026-01-02
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 Go ahead — but you are having one of your heaviest hours ever, so do not be surprised if that
-changes.
+changes. The method behind the range is not on this panel: `--verbose` adds it, along with the
+evidence gates and where each driver ranks in your own history. Plain `snack status` puts every
+source on one row instead, to compare them.
 
 ## What it will not do
 
@@ -76,17 +80,17 @@ treat their usage as the single pool it really is.
 
 ## Commands
 
-| Command                                     | What it does                                                                                                              |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                        |
-| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                           |
-| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates and the method |
-| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                          |
-| `snack doctor`                              | Diagnose the local installation without changing it                                                                       |
-| `snack config`                              | Inspect or update local configuration                                                                                     |
-| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                    |
-| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                           |
-| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                     |
+| Command                                     | What it does                                                                                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                             |
+| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                |
+| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method and the policy versions |
+| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                                               |
+| `snack doctor`                              | Diagnose the local installation without changing it                                                                                            |
+| `snack config`                              | Inspect or update local configuration                                                                                                          |
+| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                         |
+| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                |
+| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                          |
 
 Every command takes `--json` and emits one versioned document. Every command is also in `man snack`,
 generated from the CLI's own flag surface so it cannot describe a version you are not running.
@@ -137,13 +141,17 @@ and when it resets. SNACK quotes it — it is **reported capacity usage**, the c
 SNACK's — on a row of its own beside the estimate:
 
 ```text
+$ snack status --source codex
 codex
-  next prompt  35-99% chance it goes through · risk high
-  evidence     very_low — barely any history yet — mostly a starting assumption
-  pressure     unknown · no baseline to compare against yet · typical prompt
-  drivers      nothing to compare against yet
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Fri UTC · 20m ago
-  as of        20m ago · sync ok · period since 2026-10-03
+  next prompt  96-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     high · higher than every window in your own history · typical prompt
+  drivers      prompt count, input tokens
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
+  as of        5m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
 ```
 
 The `reported` row is never part of the `next prompt` interval, the evidence level or the usage
