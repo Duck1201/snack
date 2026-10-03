@@ -6,6 +6,7 @@
  */
 
 import { betaQuantile } from "./beta.js";
+import { REPORTED_CAPACITY_POLICY, REPORTED_EVIDENCE_RELEVANCE } from "./reported-capacity.js";
 
 /** Versioned model policy. Every forecast names the policy that produced it. */
 export const PREDICTION_POLICY = Object.freeze({
@@ -204,7 +205,7 @@ export function classifyRisk(lower) {
  * @param {string} startedAt
  * @param {number} promptsAfter Observations in the same cell that started later.
  * @param {Date} now
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {{decay_half_life_seconds: number, recency_half_life_prompts: number}} policy
  * @returns {number}
  */
 function decayWeight(startedAt, promptsAfter, now, policy) {
@@ -286,7 +287,7 @@ function isChronological(rows) {
  * no eligible outcome at all falls back to the weak prior.
  *
  * @param {{level: string, cell: ForecastCell}[]} candidates
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {{minimum_cell_samples: number}} policy
  * @returns {{level: string, cell: ForecastCell}}
  */
 export function chooseCell(candidates, policy) {
@@ -366,9 +367,12 @@ function levelForThresholds(value, thresholds) {
  * @param {ForecastCell} cell
  * @param {string} backoffLevel
  * @param {"complete" | "partial" | "unknown"} completeness
+ * @param {{version: string, relevance_ceilings: Readonly<Record<string, string>>}} [relevance]
+ *   the method's relevance ceilings and the evidence policy version they publish under; the
+ *   baseline's by default. Sample, restriction and completeness gates are shared by every method.
  * @returns {{level: string, policy_version: string, gates: EvidenceGate[]}}
  */
-function assessEvidence(cell, backoffLevel, completeness) {
+function assessEvidence(cell, backoffLevel, completeness, relevance = EVIDENCE_POLICY) {
   const ranks = EVIDENCE_POLICY.levels;
   /** @type {{id: string, level: string}[]} */
   const raw = [
@@ -383,9 +387,8 @@ function assessEvidence(cell, backoffLevel, completeness) {
     {
       id: "relevance",
       level:
-        EVIDENCE_POLICY.relevance_ceilings[
-          /** @type {keyof typeof EVIDENCE_POLICY.relevance_ceilings} */ (backoffLevel)
-        ],
+        /** @type {Record<string, string>} */ (relevance.relevance_ceilings)[backoffLevel] ??
+        "very_low",
     },
     { id: "completeness", level: EVIDENCE_POLICY.completeness_ceilings[completeness] },
   ];
@@ -393,7 +396,7 @@ function assessEvidence(cell, backoffLevel, completeness) {
   const weakest = Math.min(...raw.map((gate) => ranks.indexOf(gate.level)));
   return {
     level: ranks[weakest] ?? "very_low",
-    policy_version: EVIDENCE_POLICY.version,
+    policy_version: relevance.version,
     gates: raw.map((gate) => ({ ...gate, limiting: ranks.indexOf(gate.level) === weakest })),
   };
 }
@@ -422,7 +425,10 @@ export function buildForecast(input) {
  * Kept separate so a replay that maintains its own decayed counts produces exactly the
  * same interval, risk, evidence, and method as a forecast built from raw rows.
  *
- * @param {{cell: ForecastCell, level: string, prior: {strength: number, viability: number}, policy: typeof PREDICTION_POLICY, dataCompleteness: "complete" | "partial" | "unknown"}} input
+ * `method` and `relevance` are given only by a method other than the baseline; left out, the
+ * forecast is the baseline's, named by the rule below.
+ *
+ * @param {{cell: ForecastCell, level: string, prior: {strength: number, viability: number}, policy: {version: string, coverage_target: number}, dataCompleteness: "complete" | "partial" | "unknown", method?: {id: string, version: string}, relevance?: {version: string, relevance_ceilings: Readonly<Record<string, string>>}}} input
  * @returns {Forecast}
  */
 export function assembleForecast(input) {
@@ -437,9 +443,11 @@ export function assembleForecast(input) {
     // A forecast the weak prior alone produced is named as the initial heuristic it is;
     // relabelling it as the learned method would dress a prior up as a calibrated result.
     method:
-      level === "prior"
-        ? { id: "initial-generic", version: "1" }
-        : { id: "bayesian-pressure-band", version: "1" },
+      input.method !== undefined
+        ? { ...input.method }
+        : level === "prior"
+          ? { id: "initial-generic", version: "1" }
+          : { id: "bayesian-pressure-band", version: "1" },
     viability: {
       lower,
       point: alpha / (alpha + beta),
@@ -447,7 +455,7 @@ export function assembleForecast(input) {
       coverage_target: policy.coverage_target,
     },
     risk: classifyRisk(lower),
-    evidence: assessEvidence(cell, level, input.dataCompleteness),
+    evidence: assessEvidence(cell, level, input.dataCompleteness, input.relevance),
     model_policy_version: policy.version,
     contributors: {
       backoff_level: level,
@@ -458,6 +466,107 @@ export function assembleForecast(input) {
       },
     },
   };
+}
+
+/**
+ * The `reported-capacity` method's model policy: the baseline's decay, recency, evidence window and
+ * cell minimum, unchanged, under its own version. Only the cells it keys on and the prior a `full`
+ * statement starts from differ.
+ */
+export const REPORTED_PREDICTION_POLICY = Object.freeze({
+  ...PREDICTION_POLICY,
+  version: REPORTED_CAPACITY_POLICY.version,
+  backoff_levels: REPORTED_CAPACITY_POLICY.backoff_levels,
+});
+
+/**
+ * @typedef {OutcomeRow & {stated_band?: "clear" | "near" | "full" | null}} StatedOutcomeRow
+ */
+
+/**
+ * The `reported-capacity` shadow forecast for the next prompt, or null when it has nothing of its
+ * own to say (spec §2.3).
+ *
+ * The cells are keyed on the stated band each outcome began in instead of on the pressure band.
+ * For `clear` and `near` the ladder is band + category, band, the period aggregate; a ladder that
+ * would end at the plan prior returns null, because a prior relabelled as a figure-informed
+ * method is the relabelling the initial heuristic exists to prevent. For `full` the ladder never
+ * reaches the period aggregate -- prompts sent in `clear` are exactly the evidence a full statement
+ * says no longer applies -- and starts from `REPORTED_CAPACITY_POLICY.full_prior` instead of the
+ * plan profile's, a weak assumption leaning toward refusal with no observation behind it.
+ *
+ * Never reads usage pressure, and nothing it returns reaches the baseline: in 1.5 the result is a
+ * shadow, recorded and calibrated beside the answer and never shown as it.
+ *
+ * @param {{now: Date, band: "clear" | "near" | "full", prior: {strength: number, viability: number}, expectedCategory: string, outcomes: StatedOutcomeRow[], dataCompleteness?: "complete" | "partial" | "unknown"}} input
+ * @returns {Forecast | null}
+ */
+export function buildReportedForecast(input) {
+  const policy = REPORTED_PREDICTION_POLICY;
+  const ordered = isChronological(input.outcomes)
+    ? input.outcomes
+    : [...input.outcomes].sort((left, right) => left.started_at.localeCompare(right.started_at));
+  const levels = summarizeStatedLevels(
+    ordered,
+    { band: input.band, category: input.expectedCategory },
+    input.now,
+    policy,
+  );
+  const full = input.band === "full";
+  const chosen = chooseCell(full ? levels.slice(0, 2) : levels, policy);
+  if (chosen.level === "prior" && !full) return null;
+  return assembleForecast({
+    cell: chosen.cell,
+    level: chosen.level === "prior" ? "stated_full_prior" : chosen.level,
+    prior: full ? REPORTED_CAPACITY_POLICY.full_prior : input.prior,
+    policy,
+    dataCompleteness: input.dataCompleteness ?? "unknown",
+    method: REPORTED_CAPACITY_POLICY.method,
+    relevance: REPORTED_EVIDENCE_RELEVANCE,
+  });
+}
+
+/**
+ * `summarizeLevels`, keyed on the stated band each outcome began in. Kept apart rather than
+ * generalized so the baseline's own pass stays byte for byte the one 1.4 shipped.
+ *
+ * @param {StatedOutcomeRow[]} ordered Chronological, oldest first.
+ * @param {{band: string, category: string}} expected
+ * @param {Date} now
+ * @param {typeof REPORTED_PREDICTION_POLICY} policy
+ * @returns {{level: string, cell: ForecastCell}[]} most specific first
+ */
+function summarizeStatedLevels(ordered, expected, now, policy) {
+  const cells = [emptyCell(), emptyCell(), emptyCell()];
+  const seen = [0, 0, 0];
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const row = ordered[index];
+    if (row === undefined) continue;
+    const inBand = row.stated_band === expected.band;
+    const matches = [inBand && row.size_category === expected.category, inBand, true];
+    for (let level = 0; level < cells.length; level += 1) {
+      if (!matches[level]) continue;
+      const cell = /** @type {ForecastCell} */ (cells[level]);
+      if (row.outcome === "excluded") {
+        cell.excluded += 1;
+        continue;
+      }
+      const weight = decayWeight(row.started_at, seen[level] ?? 0, now, policy);
+      seen[level] = (seen[level] ?? 0) + 1;
+      if (row.outcome === "success") {
+        cell.successes += 1;
+        cell.weighted_successes += weight;
+      } else if (row.outcome === "restricted") {
+        cell.restrictions += 1;
+        cell.weighted_restrictions += weight;
+      }
+    }
+  }
+  return cells.map((cell, level) => {
+    cell.effective_samples = cell.weighted_successes + cell.weighted_restrictions;
+    cell.prompts_considered = cell.successes + cell.restrictions + cell.excluded;
+    return { level: policy.backoff_levels[level] ?? "prior", cell };
+  });
 }
 
 /**

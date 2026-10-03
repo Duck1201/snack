@@ -11,6 +11,7 @@ import {
   assembleForecast,
   assessSequence,
   buildForecast,
+  buildReportedForecast,
   classifyIngestionCompleteness,
   classifyRisk,
 } from "../src/prediction.js";
@@ -675,5 +676,202 @@ test("an interval wider than half the scale is flagged as too wide to inform, an
   assert.equal(
     assessSequence(posterior({ successes: 38, restrictions: 2 }), 10).width.too_wide,
     true,
+  );
+});
+
+/**
+ * @param {number} count
+ * @param {"clear" | "near" | "full" | null} band
+ * @param {"success" | "restricted"} [outcome]
+ */
+function statedRows(count, band, outcome = "success") {
+  return Array.from({ length: count }, (_, index) => ({
+    started_at: at((count - index) * 600),
+    outcome: /** @type {"success" | "restricted"} */ (outcome),
+    size_category: "typical",
+    stated_band: band,
+  }));
+}
+
+const PLAN_PRIOR = { strength: 1, viability: 0.5 };
+
+test("a full statement with no outcome in its cell starts from Beta(0.2, 0.8), labelled as such", () => {
+  const forecast = buildReportedForecast({
+    now,
+    band: "full",
+    prior: PLAN_PRIOR,
+    expectedCategory: "typical",
+    outcomes: [],
+  });
+  assert.ok(forecast);
+  assert.deepEqual(forecast.method, { id: "reported-capacity", version: "1" });
+  assert.equal(forecast.model_policy_version, "reported-capacity-v1");
+  assert.equal(forecast.contributors.backoff_level, "stated_full_prior");
+  assert.deepEqual(forecast.contributors.prior, { alpha: 0.2, beta: 0.8 });
+  assert.equal(forecast.viability.point, 0.2);
+  // The spec's table: 0.00-0.70 at 80% coverage.
+  assert.ok(forecast.viability.lower < 0.005, String(forecast.viability.lower));
+  assert.ok(Math.abs(forecast.viability.upper - 0.7) < 0.01, String(forecast.viability.upper));
+  assert.equal(forecast.risk.label, "high");
+  assert.equal(forecast.evidence.level, "very_low");
+  assert.equal(forecast.evidence.policy_version, "reported-capacity-evidence-v1");
+  const relevance = forecast.evidence.gates.find((gate) => gate.id === "relevance");
+  assert.deepEqual(relevance, { id: "relevance", level: "very_low", limiting: true });
+});
+
+test("a full statement never backs off to the period aggregate, however rich the clear history", () => {
+  const forecast = buildReportedForecast({
+    now,
+    band: "full",
+    prior: PLAN_PRIOR,
+    expectedCategory: "typical",
+    outcomes: statedRows(200, "clear"),
+    dataCompleteness: "complete",
+  });
+  assert.ok(forecast);
+  assert.equal(forecast.contributors.backoff_level, "stated_full_prior");
+  assert.equal(forecast.contributors.evidence_window.effective_samples, 0);
+  assert.equal(forecast.viability.point, 0.2);
+});
+
+test("one success seen while stated full moves the estimate as much as the assumption does", () => {
+  const forecast = buildReportedForecast({
+    now,
+    band: "full",
+    prior: PLAN_PRIOR,
+    expectedCategory: "typical",
+    outcomes: [
+      {
+        started_at: now.toISOString(),
+        outcome: "success",
+        size_category: "typical",
+        stated_band: "full",
+      },
+    ],
+  });
+  assert.ok(forecast);
+  // Below the cell minimum, the full cell's own evidence is still read, on the full prior.
+  assert.equal(forecast.contributors.backoff_level, "period_stated");
+  assert.equal(forecast.contributors.evidence_window.alpha, 1.2);
+  assert.equal(forecast.contributors.evidence_window.beta, 0.8);
+});
+
+test("a clear or near statement with no outcome of its own to read has nothing to say", () => {
+  for (const band of /** @type {const} */ (["clear", "near"])) {
+    assert.equal(
+      buildReportedForecast({
+        now,
+        band,
+        prior: PLAN_PRIOR,
+        expectedCategory: "typical",
+        outcomes: [],
+      }),
+      null,
+    );
+  }
+  // Excluded outcomes are not evidence either.
+  assert.equal(
+    buildReportedForecast({
+      now,
+      band: "clear",
+      prior: PLAN_PRIOR,
+      expectedCategory: "typical",
+      outcomes: [
+        {
+          started_at: now.toISOString(),
+          outcome: "excluded",
+          size_category: "typical",
+          stated_band: "clear",
+        },
+      ],
+    }),
+    null,
+  );
+});
+
+test("a clear statement reads its own band before the period, and the period is the baseline's", () => {
+  const outcomes = [
+    ...statedRows(40, null),
+    ...statedRows(20, "near", "restricted"),
+    ...statedRows(30, "clear"),
+  ].sort((left, right) => left.started_at.localeCompare(right.started_at));
+  const clear = buildReportedForecast({
+    now,
+    band: "clear",
+    prior: PLAN_PRIOR,
+    expectedCategory: "typical",
+    outcomes,
+  });
+  assert.ok(clear);
+  assert.equal(clear.contributors.backoff_level, "period_stated_category");
+  assert.equal(clear.contributors.evidence_window.restrictions, 0);
+
+  const near = buildReportedForecast({
+    now,
+    band: "near",
+    prior: PLAN_PRIOR,
+    expectedCategory: "large",
+    outcomes,
+  });
+  assert.ok(near);
+  assert.equal(near.contributors.backoff_level, "period_stated");
+  assert.equal(near.contributors.evidence_window.restrictions, 20);
+});
+
+test("the reported method's evidence never rises above low", () => {
+  fc.assert(
+    fc.property(
+      fc.array(
+        fc.record({
+          ageSeconds: fc.integer({ min: 0, max: 30 * 86400 }),
+          outcome: fc.constantFrom("success", "restricted", "excluded"),
+          size_category: fc.constantFrom("small", "typical", "large"),
+          stated_band: fc.constantFrom("clear", "near", "full", null),
+        }),
+        { maxLength: 300 },
+      ),
+      fc.constantFrom("clear", "near", "full"),
+      fc.constantFrom("complete", "partial", "unknown"),
+      (rows, band, completeness) => {
+        const forecast = buildReportedForecast({
+          now,
+          band: /** @type {"clear" | "near" | "full"} */ (band),
+          prior: PLAN_PRIOR,
+          expectedCategory: "typical",
+          outcomes: rows
+            .map((row) => ({
+              started_at: at(row.ageSeconds),
+              outcome: /** @type {"success" | "restricted" | "excluded"} */ (row.outcome),
+              size_category: row.size_category,
+              stated_band: /** @type {"clear" | "near" | "full" | null} */ (row.stated_band),
+            }))
+            .sort((left, right) => left.started_at.localeCompare(right.started_at)),
+          dataCompleteness: /** @type {"complete" | "partial" | "unknown"} */ (completeness),
+        });
+        if (forecast === null) return;
+        assert.ok(["very_low", "low"].includes(forecast.evidence.level), forecast.evidence.level);
+        const { lower, point, upper } = forecast.viability;
+        assert.ok(0 <= lower && lower <= point && point <= upper && upper <= 1);
+      },
+    ),
+    { numRuns: 200 },
+  );
+});
+
+test("the baseline forecast is untouched by the reported method's existence", () => {
+  // The same outcomes, carrying stated bands or not, give the baseline the same object.
+  const plain = statedRows(30, null);
+  const labelled = plain.map((row, index) => ({
+    ...row,
+    stated_band: index % 2 === 0 ? "full" : "near",
+  }));
+  const input = { now, prior: PLAN_PRIOR, expectedBand: "unknown", expectedCategory: "typical" };
+  assert.deepEqual(
+    buildForecast({ ...input, outcomes: labelled }),
+    buildForecast({ ...input, outcomes: plain }),
+  );
+  assert.equal(
+    buildForecast({ ...input, outcomes: plain }).evidence.policy_version,
+    EVIDENCE_POLICY.version,
   );
 });
