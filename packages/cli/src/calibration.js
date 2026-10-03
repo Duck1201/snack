@@ -375,7 +375,8 @@ export const BASELINE_METHOD_FAMILY = Object.freeze([
  *
  * The baseline's entry reads every pair whose attempt it answered, with the attempt's numbers. A
  * shadow method's entry reads every pair it was computed for, with its own recorded numbers, and
- * carries `paired`: its Brier score and the answering baseline's over exactly those outcomes. Each
+ * carries `paired`: its Brier score and the answering baseline's over exactly the outcomes both have
+ * a forecast for -- the pairs a baseline version answered -- the same pairs on both sides. Each
  * entry carries its own sample sizes; nothing is pooled across methods or versions.
  *
  * @param {MethodPair[]} pairs
@@ -387,6 +388,10 @@ export function liveByMethod(pairs, shadowMethod) {
   const baseline = [];
   /** @type {ScoredForecast[]} */
   const shadow = [];
+  // The paired comparison keeps a pair only where both methods have a forecast of their own on it,
+  // and the same pairs on both sides, so the two Brier scores are over identical outcomes.
+  /** @type {ScoredForecast[]} */
+  const pairedShadow = [];
   /** @type {ScoredForecast[]} */
   const pairedBaseline = [];
   for (const pair of pairs) {
@@ -398,19 +403,23 @@ export function liveByMethod(pairs, shadowMethod) {
       pair.shadow_point !== null &&
       pair.shadow_upper !== null
     ) {
-      shadow.push({
+      const scored = {
         lower: pair.shadow_lower,
         point: pair.shadow_point,
         upper: pair.shadow_upper,
         outcome: pair.outcome,
-      });
-      if (answered) pairedBaseline.push(pair);
+      };
+      shadow.push(scored);
+      if (answered) {
+        pairedShadow.push(scored);
+        pairedBaseline.push(pair);
+      }
     }
   }
   return {
     baseline: summarizeCalibration(baseline),
     shadow: summarizeCalibration(shadow),
-    paired: comparePaired(shadow, pairedBaseline),
+    paired: comparePaired(pairedShadow, pairedBaseline),
   };
 }
 

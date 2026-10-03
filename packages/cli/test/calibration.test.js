@@ -412,3 +412,42 @@ test("each method's live stream has its own sample size, and the baseline folds 
     baseline_brier: ((0.8 - 0) ** 2 + (0.8 - 1) ** 2) / 2,
   });
 });
+
+test("the paired comparison scores the shadow and the baseline on the same outcomes", () => {
+  /**
+   * @param {string} method
+   * @param {string} version
+   * @param {number} shadow
+   * @param {"success" | "restricted"} outcome
+   */
+  const pair = (method, version, shadow, outcome) => ({
+    lower: 0.6,
+    point: 0.8,
+    upper: 0.9,
+    outcome,
+    method_id: method,
+    method_version: version,
+    shadow_method_id: "reported-capacity",
+    shadow_method_version: "1",
+    shadow_lower: Math.max(0, shadow - 0.2),
+    shadow_point: shadow,
+    shadow_upper: Math.min(1, shadow + 0.1),
+  });
+  const pairs = [
+    pair("bayesian-pressure-band", "1", 0.9, "success"),
+    pair("bayesian-pressure-band", "1", 0.3, "restricted"),
+    // The shadow was computed beside an attempt no baseline version answered -- a later baseline
+    // version, never pooled with this one. The shadow's own stream keeps it; the paired comparison
+    // cannot, because the baseline has no forecast of its own on that outcome to set beside it.
+    pair("bayesian-pressure-band", "2", 0.1, "restricted"),
+  ];
+  const live = liveByMethod(pairs, { id: "reported-capacity", version: "1" });
+  assert.equal(live.shadow.brier.sample_size, 3);
+  const both = pairs.slice(0, 2);
+  assert.deepEqual(live.paired, {
+    sample_size: 2,
+    restrictions: 1,
+    brier: ((0.9 - 1) ** 2 + (0.3 - 0) ** 2) / 2,
+    baseline_brier: summarizeCalibration(both).brier.value,
+  });
+});
