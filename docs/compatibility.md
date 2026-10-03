@@ -514,7 +514,9 @@ schema is added, because no success document exists. A forecast the dash draws i
 snapshot through the path `status` uses, written only when what is shown changed (ADR-0008, note of
 `1.6.0`); its delivery row's `format` is `dash`, a new value of a column the export has always
 carried as `predictions.delivery_format` and `export.schema.json` has never constrained. No
-migration comes from the dash, and its `next N` row records no `prediction_sequence`.
+migration comes from the dash. While its `next N` row is shown, each snapshot it records carries a
+`prediction_sequence` row for the `N` on screen, written in the attempt's transaction as
+`status --sequence` writes one; stepping `N` records nothing.
 
 **One fix: a valid user plan profile no longer makes `status` exit `10`.** A profile declaring a
 prior with almost no weight on one side — `prior_strength: 1, prior_viability: 0.99` is

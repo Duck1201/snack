@@ -927,7 +927,7 @@ test(`a dash recompute over ${PROMPTS.toLocaleString("en-US")} prompts stays ins
     await storage.session(async (tx) => {
       assert.equal((await tx.readiness()).storage, "ready");
       const built = await tx.build(now, () => ({ performed: false, status: "ok" }));
-      for (const source of built) tx.record(source);
+      for (const source of built) tx.record(source, null);
     });
     samples.push(Number(process.hrtime.bigint() - startedAt) / 1e6);
   }

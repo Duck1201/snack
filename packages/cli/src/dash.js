@@ -108,7 +108,9 @@ export function snapshotKey(report, capacityPeriodId) {
  * @typedef {object} StorageSession
  * @property {() => Promise<{storage: "missing" | "pending" | "ready", pendingMigrations: number}>} readiness
  * @property {(now: Date, synchronization: (alias: string) => {performed: boolean, status: string}) => Promise<import("./source-report.js").BuiltSource[]>} build
- * @property {(built: import("./source-report.js").BuiltSource) => number | null} record
+ * @property {(built: import("./source-report.js").BuiltSource, sequenceLength: number | null) => number | null} record
+ *   Records the attempt and, when the `next N` row is on, the sequence for the N on screen in the
+ *   same transaction, as `status --sequence` does.
  * @property {(attemptIds: number[], now: Date) => void} confirm
  *
  * @typedef {object} StoragePort
@@ -156,7 +158,16 @@ export function createStoragePort(input) {
           includeSeries: true,
         })
       ).sources,
-    record: (built) => recordAttempt(paths.databaseFile, built),
+    record: (built, sequenceLength) =>
+      recordAttempt(
+        paths.databaseFile,
+        sequenceLength === null
+          ? built
+          : {
+              ...built,
+              answer: { ...built.answer, sequence: assessSequence(built.answer, sequenceLength) },
+            },
+      ),
     confirm: (attemptIds, now) =>
       confirmPredictionDelivery(paths.databaseFile, attemptIds, {
         now,
@@ -390,7 +401,8 @@ export async function runDash(ports) {
             continue;
           }
           if (pending.get(source.alias)?.key === key) continue;
-          const attemptId = tx.record(source);
+          // The `next N` row on screen rides with the attempt; a keypress records nothing.
+          const attemptId = tx.record(source, state.sequenceLength);
           if (attemptId !== null) pending.set(source.alias, { key, attemptId });
         }
         for (const source of state.sources) {

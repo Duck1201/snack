@@ -546,11 +546,73 @@ test("s shows the next N row, + and - step N by exactly one between 1 and 100", 
 
   dash.terminal.press("q");
   assert.equal(await dash.done, 0);
-  // Display only: the row records nothing.
+  // A keypress writes nothing: the reading did not change, so no attempt was recorded after the row
+  // was shown, and a sequence is only ever recorded with an attempt.
   assert.equal(
     count(source.paths.databaseFile, "SELECT COUNT(*) AS n FROM prediction_sequence"),
     0,
   );
+});
+
+test("each attempt the dash records carries the next N row on screen, and none while it is off", async () => {
+  const source = await seeded();
+  const dash = await open(source, { rows: 30, columns: 120 });
+  const db = source.paths.databaseFile;
+  const attempts = () => count(db, "SELECT COUNT(*) AS n FROM prediction_attempt");
+  const sequences = () => count(db, "SELECT COUNT(*) AS n FROM prediction_sequence");
+  const before = attempts();
+  assert.ok(before > 0);
+  assert.equal(sequences(), 0, "the row was off when the first reading was recorded");
+
+  dash.terminal.press("s");
+  for (let step = 0; step < 3; step += 1) dash.terminal.press("-");
+  assert.equal(dash.controller.state().sequenceLength, 7);
+  assert.equal(sequences(), 0, "a keypress records nothing");
+
+  // A refusal moves the reading, so the next recompute records a new attempt.
+  source.plant([{ at: new Date(start.getTime() - 60_000), restricted: true }]);
+  await dash.clock.advance(SYNC_DELAY_MS);
+  assert.equal(attempts(), before + 1);
+  const database = new Database(db, { readonly: true });
+  /** @type {Record<string, number>} */
+  let row;
+  /** @type {{id: number}} */
+  let latest;
+  try {
+    row = /** @type {Record<string, number>} */ (
+      database.prepare("SELECT * FROM prediction_sequence").get()
+    );
+    latest = /** @type {{id: number}} */ (
+      database.prepare("SELECT MAX(id) AS id FROM prediction_attempt").get()
+    );
+  } finally {
+    database.close();
+  }
+  const shown = /** @type {import("../src/prediction.js").SequenceAssessment | undefined} */ (
+    dash.controller.state().sources[0]?.sequence?.assessment
+  );
+  assert.ok(shown);
+  assert.equal(row.prediction_attempt_id, latest.id);
+  assert.equal(row.length, 7);
+  assert.deepEqual(
+    [row.lower, row.point, row.upper],
+    [shown.viability.lower, shown.viability.point, shown.viability.upper],
+  );
+  assert.equal(row.width_too_wide, shown.width.too_wide ? 1 : 0);
+
+  // Off: the next attempt records no sequence.
+  dash.terminal.press("s");
+  source.plant(
+    Array.from({ length: 4 }, (_unused, index) => ({
+      at: new Date(start.getTime() - 40_000 + index * 5_000),
+      restricted: true,
+    })),
+  );
+  await dash.clock.advance(SYNC_DELAY_MS);
+  assert.equal(attempts(), before + 2);
+  assert.equal(sequences(), 1);
+  dash.terminal.press("q");
+  assert.equal(await dash.done, 0);
 });
 
 test("the next N row says what status --sequence says, or no number at all when too wide", async () => {

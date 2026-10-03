@@ -668,7 +668,13 @@ an interval that is not too wide, nothing changes — the `1.5` corpus replay ho
 
 ### 7.4 What the dash records for sequences
 
-Nothing: `dash` passes no `sequenceLength`, so `prediction_sequence` gains no row from it.
+**Revised after review (user decision D3).** The build first recorded nothing for the `next N` row,
+which left a shown method absent from the record and contradicted D3, whose chosen alternative
+records `prediction_sequence` with each snapshot. As built now: while the row is on, each attempt the dash
+records carries the sequence for the `N` on screen — `assessSequence` of the very answer recorded —
+as a `prediction_sequence` row in the attempt's transaction, through `recordAttempt`, the path
+`status --sequence` takes. No write per key press: stepping `N` changes no snapshot key, so it
+records nothing until the reading itself changes. With the row off, no sequence is recorded.
 
 ---
 
@@ -927,7 +933,10 @@ the reader's own data. Alternative: document only (§7.2) and leave the panel as
   diagnostic when it applies). The key never skips, hides or clamps lengths by informativeness: the
   boundary between "shown" and "withheld" must not be discoverable by stepping, because that would
   reveal a per-user maximum N (the p→N inversion). The person's N stays the person's; the dash only
-  declines to print numbers that carry no information. No `--sequence` flag on `dash`.
+  declines to print numbers that carry no information. No `--sequence` flag on `dash`. Recorded
+  (confirmed after review of `3978a85`): while the row is on, each snapshot carries the sequence for
+  the N on screen as a `prediction_sequence` row in its transaction; a key press records nothing
+  (§7.4).
 - D4 shadows in the dash: nothing on screen ("only what is reliable"); help points at `status --verbose`.
 - D5 delivery format: `format: "dash"` in `prediction_delivery` (spec recommendation).
 - D6 prior-tail diagnostic: ship in 1.6.0 as a caveat in `status --sequence` (and the dash sequence
