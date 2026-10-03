@@ -27,3 +27,6 @@ graphify-out/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Agent worktrees: whole checkouts of other branches, never part of this one.
+.claude/worktrees/
