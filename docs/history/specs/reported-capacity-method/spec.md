@@ -605,16 +605,22 @@ projection (§9.3) is recomputed for every Codex-fed source in scope. Nothing ne
 
 - `readOutcomeRows` adds `prompt_execution.installation_id` and the projected `stated_band` (null
   unless computed under the current policy). The baseline ignores both.
-- **Migration `018_prompt_stated_band.sql`**: `prompt_execution.stated_band` (`clear`/`near`/`full`
-  or null) and `stated_band_policy_version`, added in place, plus a partial index on the prompts
-  never computed and an index on `reported_capacity_observation (source_alias, first_seen_at)`. A
-  rebuildable projection like `size_category`: after each synchronization `restateSource` finds the
-  frontier — the earliest prompt never computed, or the earliest statement this invocation stored —
-  and recomputes, in chronological order, every prompt from there, walking the stated timeline
-  (`readStatedTimeline`) from one age limit earlier; after a purge it recomputes the whole active
-  period. Each band is resolved at its prompt's start from statements strictly earlier
-  (`walkStatedHistory`), and only rows that moved are written. A later policy version recomputes
-  everything by setting the version column back to null in its own migration.
+- **Migration `018_prompt_stated_band.sql`** (revised in review, §13.3):
+  `prompt_execution.stated_band` (`clear`/`near`/`full` or null) and `stated_band_policy_version`,
+  added in place, and `stated_band_projection (source_alias, policy_version, stale_from)`, one row
+  per capacity source; no index. A rebuildable projection like `size_category`. The ingestion
+  transaction lowers `stale_from` to the earliest start of a prompt it stored, revised or
+  attributed and the earliest instant of a statement it stored; a purge sets it to `''` (the whole
+  active period) in its own transaction. After each synchronization and each purge `restateSource`
+  reads the frontier — one primary-key read, null when current — and recomputes, in chronological
+  order, every active-period prompt from there, walking the stated timeline (`readStatedTimeline`)
+  from one age limit earlier; `writeStatedBands` writes the moved rows and clears the frontier in
+  one transaction. Each band is resolved at its prompt's start from statements strictly earlier
+  (`walkStatedHistory`). No row, or a `policy_version` other than
+  `REPORTED_CAPACITY_POLICY.version`, recomputes the whole active period: an upgraded database and a
+  policy version moved in code are caught up by the same rule, with nothing to reset in a
+  migration. Prompts of ended periods and of sources no Codex installation feeds keep both columns
+  null.
 - `hasForeignPromptSince(databaseFile, alias, installationId, since)`: rule 7 at `now`, a range read
   on `prompt_execution_source_started_idx`.
 
@@ -633,11 +639,16 @@ same history, 94-99% idle.
 | spawned p95, `--sequence 100` | 226-236 ms | 246-251 ms | 235-242 ms (one disturbed batch 315) |
 | in-process p50 / p95 | 65 / 67-68 ms | 72 / 78 ms | 69-70 / 73-76 ms |
 | incremental `sync`, nothing new | 893-905 ms | — | 945-979 ms (whole-period recompute: 1.65 s) |
+| in-process no-op `sync`, two periods (review fix) | — | — | 1,370 ms before the fix, 837 ms after |
 
 Replaying the timeline put `status --no-sync` p95 over 250 ms in one batch in four and within 10 ms
 of it in the rest, so plan B was taken: migration `018` in the same release. The first `sync` after
 upgrading a `1.4.0` database of that size — backup, `017`, `018` and the whole projection — took
-3.1 s, and the file grew from 156.7 to 173.0 MB.
+3.1 s, and the file grew from 156.7 to 173.0 MB with the two indexes `018` first carried; with the
+per-source frontier that replaced them (§13.3) it took 2.6 s and grew 156.6 → 165.2 MB, and a
+100,000-prompt Claude Code database grows 12 KB instead of 4.2 MB. `stats` on the Codex history
+fell from 7.3 s to 3.3 s once the Beta normalizer left the quantile's Newton loop (backtest replay
+2.66 s → 1.05 s in process), every double unchanged.
 
 ---
 
@@ -647,12 +658,13 @@ upgrading a `1.4.0` database of that size — backup, `017`, `018` and the whole
 | --- | --- |
 | `reported-capacity.test.js` | §4 rule by rule: each `reason`; band edges 79.99/80/99.99/100/100.5; `resets_at == at` is passed; age exactly 21,600 s binds, one more second does not; tie-breaks; a window absent from the latest statement never binds; rule 7 for another installation only, and `full` survives it; statements before the period never bind; the as-of labelling reads statements strictly earlier |
 | `prediction.test.js` | `buildReportedForecast`: `full` with an empty cell gives `Beta(0.2, 0.8)` (0-0.70), risk `high`, evidence `very_low` with `relevance` limiting, backoff `stated_full_prior`; `full` never backs off to `period`; one success in `full` is `Beta(1.2, 0.8)`; `clear`/`near` with no outcome returns null; evidence never above `low` (property); `buildForecast` unchanged by stated bands |
-| `shadow.property.test.js` | shadow-mode isolation through `run()` (§6.3), mutation-checked |
+| `shadow.property.test.js` | shadow-mode isolation through `run()` (§6.3), on a baseline guarded to be `low` risk, above `very_low` evidence and off the period aggregate, with stated bands synchronized onto prompts in `full` and `near`; mutation-checked (a full window raising the risk, lowering the evidence, or the baseline keying on the stated band each fail it) |
+| `beta.test.js` | the hoisted normalizer returns the `1.4.0` implementation's doubles, bit for bit, over a grid and 2,000 random draws |
 | `compatibility.test.js` | byte-identity with the `1.4` corpus (§6.3) |
-| `calibration.test.js` | `backtestReported` never reads a statement at or after the scored prompt's start (mutation-checked); scores nothing on an empty timeline while `backtest` is unchanged (property); the paired baseline is `backtest`'s at the same prompts; `liveByMethod` sample sizes are independent, `initial-generic` folds into the baseline, versions never pool |
+| `calibration.test.js` | `backtestReported` never reads a statement at or after the scored prompt's start (mutation-checked); scores nothing on an empty timeline while `backtest` is unchanged (property); the paired baseline is `backtest`'s at the same prompts; `liveByMethod` sample sizes are independent, `paired` covers the same outcomes on both sides, `initial-generic` folds into the baseline, versions never pool |
 | `prediction-storage.test.js` / `storage.test.js` | attempt and shadow row commit or roll back together; a figure above 100 is stored; `readCalibrationPairs` returns method and shadow columns; `017`+`018` apply from every published level, `1.4.0`'s included |
 | `purge.test.js` | purge deletes shadow rows with their attempts, counted as predictions; shadow rows are immutable outside a purge |
-| `codex-status.test.js` | fresh statements ⇒ `shadow.computed`, the attempt is the baseline's and the shadow row matches the document; exactly six hours binds, one second more is `stale` and records no shadow row; at a window's reset instant the next live window binds; another client's prompt ⇒ `superseded`; `--sequence` stays baseline; a Claude Code source never gets a figure, a shadow or `by_method`; the projection equals the as-of labelling and moves with a late statement and with a purge |
+| `codex-status.test.js` | fresh statements ⇒ `shadow.computed`, the attempt is the baseline's and the shadow row matches the document; exactly six hours binds, one second more is `stale` and records no shadow row; at a window's reset instant the next live window binds; another client's prompt ⇒ `superseded`; `--sequence` stays baseline; a Claude Code source never gets a figure, a shadow or `by_method`; the projection equals the as-of labelling and moves with a late statement and with a purge ; the frontier is null after a sync that brought nothing, though an ended period holds prompts never computed; a statement committed without its restate is projected by the next sync; a prompt read incrementally is projected; another policy version recomputes the source whole; a Claude Code source keeps no per-prompt projection state and no index |
 | `contracts.test.js` | `1.4` in `FROZEN_VERSIONS`; the computed `shadow` and `by_method` validated on the Codex source only |
 | `render.test.js` | the verbose shadow rows verbatim, each band, the reasons; never on the default panel or the overview; the `by method` block |
 | `vocabulary.test.js` | §8.4 |
@@ -787,11 +799,26 @@ method rather than tuning it in place.
   statements exactly as `storeObservations` does for prompts; otherwise every statement of a
   backfilled history read `before_period`, which the corpus capture showed at once (§4).
 - **Plan B was taken** (§9.4): migration `018`, a rebuildable `stated_band` projection on
-  `prompt_execution` recomputed from a frontier after each sync and wholly after each purge;
+  `prompt_execution` recomputed from a frontier after each sync and after each purge;
   `status` replays nothing. `readLatestForeignPromptStart` became `hasForeignPromptSince`, a boolean
   range read.
 - **Wording.** No `method` row change, no overview footer, no default `stats` line, no sequence
   caveat: none is owed when the shadow does not answer (§8).
 - **Not built:** the stated-band simulation and a `performance.test.js` Codex row (§10). `PLAN.md`
   edits are deferred to the release PR (§3.4).
-
+- **Review fixes to `018`, before release.** The frontier was first the earliest prompt with a null
+  version or the earliest statement whose `first_seen_at` was this invocation's, through a partial
+  index and a `first_seen_at` index. Prompts of an ended period are never computed, so on any source
+  with two periods it never cleared and every sync recomputed the whole active period; a source no
+  Codex installation feeds indexed every prompt forever (+4.2 MB on 100,000 Claude Code prompts);
+  and a process stopped between the ingestion commit and the restate left bands stale with nothing
+  to find them by. Both indexes are gone; `stated_band_projection` holds one durable frontier per
+  source, lowered inside the ingestion and purge transactions and cleared with the bands (§9.3). A
+  `policy_version` that differs from the running one recomputes the source whole — the guard against
+  bumping `REPORTED_CAPACITY_POLICY.version` in code alone. Migrations `017`/`018` were unreleased,
+  so `018` was edited in place.
+- **Paired comparison.** `liveByMethod`'s `paired` keeps the same pairs on both sides — those a
+  baseline version answered — rather than every shadow pair against the answered ones.
+- **Wording.** The `full` and `near` second lines read "Codex stated it full" and "in the near band"
+  (§8.2), not "stated full until it resets" and "stated nearly full": a plan change can end a full
+  window early, and the 80 threshold is SNACK's, not something Codex said.

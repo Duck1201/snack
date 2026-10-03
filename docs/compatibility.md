@@ -421,14 +421,20 @@ the new members; every frozen corpus — `0.9`, `1.2`, `1.3`, and the `1.4` corp
 whose invocation computed the shadow, written in the attempt's transaction, holding the shadow's
 interval, labels, policies and the binding window it read; immutable on `UPDATE`, deletable only by
 `data purge` (the `009` pattern), counted with `counts.predictions`, so `data-purge.schema.json`
-does not move. `018` adds `stated_band` and `stated_band_policy_version` to `prompt_execution` and
-two indexes: a rebuildable projection of the band each prompt began in, recomputed after every
-synchronization from the earliest prompt or statement that moved, and after every purge. It exists
+does not move. `018` adds `stated_band` and `stated_band_policy_version` to `prompt_execution`, in
+place, and the table `stated_band_projection`, one row per capacity source: a rebuildable projection
+of the band each prompt began in. The ingestion and purge transactions lower that row's `stale_from`
+as they commit; the recomputation after each synchronization and each purge starts there and clears
+it in the transaction that writes the bands, so a process stopped between the two is caught up by
+the next synchronization, and a source never projected, or projected under another policy version,
+is recomputed whole. Only the active period of a source a Codex installation feeds is computed;
+every other prompt keeps both columns null, and no index is added. It exists
 because replaying the stated timeline inside `status` cost the `status --no-sync` budget its margin
 (`docs/history/specs/reported-capacity-method/spec.md` §9.4). Neither the table nor the columns are
 **exported**: a new table or column would fail every version-2 validator. The first `sync` after the
 upgrade computes the whole projection once; on a 100,000-prompt Codex history with 200,000 reported
-rows it took 3.1 s with the backup, and the file grew 156.7 → 173.0 MB. `storage.test.js` upgrades
+rows it took 2.6 s with the backup, and the file grew 156.6 → 165.2 MB. A 100,000-prompt Claude Code
+history grows 12 KB. `storage.test.js` upgrades
 every published schema level, `1.4.0`'s included, straight to `018`, and `npm run upgrade:smoke`
 upgrades a database the published `1.4.0` wrote.
 
