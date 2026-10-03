@@ -329,6 +329,21 @@ The version was cut on the same branch as the change it releases, rather than in
 was cut in a follow-up after its PR merged at the head it had, which stranded the version commit and
 cost an extra PR — the failure the release skill warns about, reproduced once more.
 
+## From 1.2.1: the GitHub release is the record
+
+Each publication from `1.2.1` on is recorded by the GitHub release the workflow creates —
+[github.com/Duck1201/snack/releases](https://github.com/Duck1201/snack/releases) — carrying the
+published commit, the run, the channel, and both CHANGELOG entries, after the workflow has checked
+that the registry's tarballs match `docs/release/artifacts.md`. The sections below stop at `1.2.0`
+on purpose. Each was written by hand in a pull request of its own after the publish, restating what
+the registry and the release already said, and the tags `stable` and `latest` resolve to are a
+`npm view @snack-ai/cli dist-tags` away.
+
+`1.2.1` itself published through the previous workflow, from `b4122ab` by run
+[37100682154](https://github.com/Duck1201/snack/actions/runs/37100682154); its tag and release were
+created by hand, and its record is
+[v1.2.1](https://github.com/Duck1201/snack/releases/tag/v1.2.1).
+
 ## 1.2.0
 
 `@snack-ai/cli@1.2.0` and `@snack-ai/opencode@1.0.3` were published from commit `3298c91` by

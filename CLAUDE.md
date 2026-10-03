@@ -27,6 +27,7 @@ node --test --test-name-pattern "full sync converges" packages/cli/test/main.tes
 
 npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs clean, runs the bin
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
+npm run release:prepare  # changeset version + plugin pin + man page + release evidence, one PR
 npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
                        # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0; argv narrows to one) with
                        # the candidate. Needs the network; not part of `check`.
@@ -115,11 +116,14 @@ and a row in `docs/claude-support.md`, which `contracts.test.js` asserts against
 
 ## Release
 
-Changesets. Both packages publish to `latest`. The `@snack-ai/cli` version is the product version.
-`release:check` blocks publishing unless seven `^… gate: passed$` lines are present — trademark, npm
-trusted publisher, GitHub npm environment, WSL, freeze, performance, artifact evidence, spread
-across `docs/release/*.md` and `docs/compatibility.md` — and both support matrices have cleared
-their `Status:` line. It then packs the tree and requires every digest it produces to appear in
+One PR per release: `npm run release:prepare` cuts the version inside the change's own PR, and the
+dispatched workflow publishes, checks the registry's tarballs against the evidence, and creates the
+tag and GitHub release — the record of the publication; nothing is written back. Both packages
+publish to `latest`. The `@snack-ai/cli` version is the product version. `release:check` blocks
+publishing unless seven `^… gate: passed$` lines are present — trademark, npm trusted publisher,
+GitHub npm environment, WSL, freeze, performance, artifact evidence, spread across
+`docs/release/*.md` and `docs/compatibility.md` — and both support matrices have cleared their
+`Status:` line. It then packs the tree and requires every digest it produces to appear in
 `docs/release/artifacts.md`, so a file named in a package's `files` array that changed after the
 evidence was written blocks the release instead of reaching the registry. `release:staging` stages
 the tarballs on an isolated registry so the chain is rehearsed before npm sees it. CI runs the full

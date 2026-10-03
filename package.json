@@ -21,7 +21,7 @@
     "release:check": "node scripts/check-release-readiness.mjs",
     "release:evidence": "node scripts/release-evidence.mjs",
     "release:staging": "node scripts/staging-registry.mjs",
-    "release:version": "changeset version",
+    "release:prepare": "changeset version && node scripts/sync-plugin-pin.mjs && node scripts/generate-man.mjs && npm run release:evidence",
     "test": "npm test --workspaces --if-present && node --test \"scripts/*.test.mjs\"",
     "typecheck": "tsc --project jsconfig.json",
     "upgrade:smoke": "node scripts/upgrade-smoke.mjs"
