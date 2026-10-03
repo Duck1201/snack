@@ -504,7 +504,9 @@ other byte unchanged.
 **One new command, additive to the flag surface: `snack dash`.** A live screen, with no flag but
 `--help` (`contracts.test.js` gains `dash: ["--help"]`). It produces no document: `--json` — the
 program-level option Commander accepts on either side of it — is refused with exit `2` and the
-reason `dash_json_unsupported`, as one error envelope with `command: "dash"` and `data: null`; a
+reason `dash_json_unsupported`, as one error envelope with `command: "dash"` and `data: null`
+(`command: "snack"` when `--json` comes first, as every command's error envelope has said after a
+leading flag since `0.9`; `.scratch/envelope-command-after-leading-flag/`); a
 standard output or input that is not a terminal, or `TERM` unset, empty or `dumb`, is refused with
 exit `2` and `dash_requires_terminal`. Both are new values of the open `errors[].code` under an
 existing exit code, the shape `sequence_length_invalid` took; no exit code moves, and no payload
