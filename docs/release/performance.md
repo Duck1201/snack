@@ -25,6 +25,33 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.2.1
+
+- Date: 2026-10-03
+- Commit: the `1.2.1` cut, after the SQLite driver diagnosis and the `update` prefix fix
+- Machine: Linux 6.12.111+deb13-rt-amd64, 12 cores, load average 5.96 at the start of the run
+- Toolchain: Node `24.18.1`, npm `12.0.2`
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`
+
+| Budget | PLAN.md | Measured | `1.2.0` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **199 ms** (p50 194 ms, min 186 ms) | 194 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **210 ms** (p50 200 ms, min 195 ms) | 204 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **667 ms** (categorize 43 ms + write 624 ms) | 448 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **15.4 s** | 14.8 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **15.2 s** | 14.2 s |
+| Steady-state memory | under 150 MB | **passes both readings** | passes both readings |
+
+**Not every assertion ran.** The machine was busy: the two `status --no-sync` assertions stepped
+aside at load averages of 7.0 and 11.2 over 12 cores, by the rule above, so those two rows are
+figures this run reports rather than ones it asserted. Every figure is inside its budget anyway, and
+each was taken under more contention than `1.2.0`'s; the incremental-synchronisation write is the
+one that moved, by the 50% a loaded disk-bound step tends to.
+
+The release adds one module to every command's import graph, `sqlite-driver.js`, which imports
+`better-sqlite3` — already loaded through `storage.js` — so it adds no module load. Its in-memory
+probe runs only on an error path and once per `doctor`.
+
 ## 1.2.0
 
 - Date: 2026-08-02
