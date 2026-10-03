@@ -78,6 +78,15 @@ test("no command calls observed usage a quota percentage or a remaining balance"
     // The verbose panel is where the pressure percentiles reach a human surface, which is the one
     // number in this product most likely to be read as a share of a capacity.
     ["status", "--verbose"],
+    // Sequence viability is the one surface that sets a number of prompts beside a probability, so
+    // every shape of it is policed: the row, the verbose method row, the identity at one, the help,
+    // and the usage error.
+    ["status", "--sequence", "10"],
+    ["status", "--verbose", "--sequence", "10"],
+    ["status", "--source", "codex", "--sequence", "1"],
+    ["status", "--sequence", "100"],
+    ["status", "--help"],
+    ["status", "--sequence", "0"],
     ["stats", "--verbose"],
     // The per-client comparison renders refusal counts and intervals, which is exactly the shape of
     // output that drifts into sounding like a share of real capacity.
@@ -113,6 +122,10 @@ test("no command calls observed usage a quota percentage or a remaining balance"
   assert.match(transcript, /viability/iu);
   assert.match(transcript, /Codex states \d+% of its \w+ window/u);
   assert.match(transcript, /"reported_capacity"/u);
+  assert.match(transcript, /chance all 10 go through/u);
+  assert.match(transcript, /"sequence"/u);
+  assert.match(transcript, /interval is too wide to say much/u);
+  assert.match(transcript, /--sequence <n>/u);
 
   for (const output of outputs) {
     for (const term of forbidden) {
@@ -148,7 +161,15 @@ test("no command promises a number of prompts a plan still allows", async () => 
   );
   await run(["node", "snack", "sync", "--full"], fixture.options);
 
-  for (const argv of [["status"], ["status", "--json"], ["stats"], ["stats", "--json"]]) {
+  for (const argv of [
+    ["status"],
+    ["status", "--json"],
+    ["status", "--sequence", "5"],
+    ["status", "--sequence", "5", "--json"],
+    ["status", "--sequence", "100", "--verbose"],
+    ["stats"],
+    ["stats", "--json"],
+  ]) {
     fixture.stdout.value = "";
     fixture.stderr.value = "";
     await run(["node", "snack", ...argv], fixture.options);
@@ -160,6 +181,18 @@ test("no command promises a number of prompts a plan still allows", async () => 
       text,
       /\b(?:up to\s+)?\d+\s+(?:more\s+)?prompts?\s+(?:left|remaining|available|before)\b/iu,
       `\`snack ${argv.join(" ")}\` promises a prompt count`,
+    );
+    // "send up to 12", "run about 40": a count offered as an instruction rather than an allowance.
+    assert.doesNotMatch(
+      text,
+      /\b(?:send|run|make)\s+(?:up to\s+|about\s+)?\d+\b/iu,
+      `\`snack ${argv.join(" ")}\` offers a count to send`,
+    );
+    // "prompts until", "prompts to go": a countdown, which is a count with a direction.
+    assert.doesNotMatch(
+      text,
+      /\bprompts?\s+(?:until|to go)\b/iu,
+      `\`snack ${argv.join(" ")}\` counts down prompts`,
     );
   }
 });

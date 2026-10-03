@@ -92,6 +92,12 @@ const invocations = [
   { name: "sync", command: "sync", argv: ["sync", "--full"] },
   { name: "stats", command: "stats", argv: ["stats", "--verbose"] },
   { name: "status", command: "status", argv: ["status", "--no-sync"] },
+  // Added in 1.4.0: the optional `sequence` member, validated rather than merely allowed to be absent.
+  {
+    name: "status-sequence",
+    command: "status",
+    argv: ["status", "--no-sync", "--sequence", "5"],
+  },
   { name: "doctor", command: "doctor", argv: ["doctor"] },
   { name: "config-get", command: "config get", argv: ["config", "get"] },
   { name: "config-path", command: "config path", argv: ["config", "path"] },
@@ -177,6 +183,15 @@ test("every command's JSON document validates against the published envelope sch
           .every((/** @type {object} */ report) => !("reported_capacity" in report)),
         "a source no Codex installation feeds quoted a Codex figure",
       );
+      assert.ok(
+        reports.every((/** @type {object} */ report) => !("sequence" in report)),
+        "a sequence appeared without --sequence",
+      );
+    }
+    if (invocation.name === "status-sequence") {
+      const reports = document.data.sources ?? [document.data];
+      assert.ok(reports.length > 1, "the sequence was validated against one report only");
+      for (const report of reports) assert.equal(report.sequence?.length, 5);
     }
   }
 });
@@ -599,7 +614,15 @@ test("the published command and flag surface has not changed", async () => {
     // the percentile behind each pressure driver -- is what moving those off the default reading in
     // `1.1.3` required. The same flag already existed on `stats`, so the two commands spell the
     // same idea the same way.
-    status: ["--source", "--no-sync", "--prompt-file", "--verbose", "--json", "--help"],
+    status: [
+      "--source",
+      "--no-sync",
+      "--prompt-file",
+      "--sequence",
+      "--verbose",
+      "--json",
+      "--help",
+    ],
     sync: ["--source", "--full", "--json", "--help"],
     // `--finish` is deliberately absent: it is internal, hidden from help, and therefore invisible
     // to this test, which reads the help text rather than Commander's object graph. The test below
@@ -729,6 +752,7 @@ test("every command that publishes a payload publishes a schema for it", async (
 
   assert.deepEqual(
     published.sort(),
-    invocations.map((invocation) => payloadSchemaFor(invocation.command)).sort(),
+    // One schema per command, however many invocations exercise it.
+    [...new Set(invocations.map((invocation) => payloadSchemaFor(invocation.command)))].sort(),
   );
 });

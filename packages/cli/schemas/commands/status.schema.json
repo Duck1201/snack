@@ -61,42 +61,43 @@
             "coverage_target": { "type": "number" }
           }
         },
-        "risk": {
-          "type": "object",
-          "required": ["label", "policy_version"],
-          "properties": {
-            "label": { "type": "string" },
-            "policy_version": { "type": "string" }
-          }
-        },
+        "risk": { "$ref": "#/$defs/risk" },
         "evidence": {
           "description": "How much the estimate can be leaned on, and which gate is holding it down.",
-          "type": "object",
-          "required": ["level", "policy_version", "gates"],
-          "properties": {
-            "level": { "type": "string" },
-            "policy_version": { "type": "string" },
-            "gates": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "required": ["id", "level", "limiting"],
-                "properties": {
-                  "id": { "type": "string" },
-                  "level": { "type": "string" },
-                  "limiting": { "type": "boolean" }
-                }
-              }
-            }
-          }
+          "$ref": "#/$defs/evidence"
         },
         "method": {
           "description": "The named method behind the estimate, so a consumer can tell two releases apart.",
+          "$ref": "#/$defs/method"
+        },
+        "sequence": {
+          "description": "Added in 1.4.0, optional. Sequence viability: the probability that `length` consecutive prompts all complete without an observed restriction, from the same posterior as `viability`. `length` is the number the user passed to --sequence, echoed; SNACK never derives it. `point` is the posterior predictive probability E[p^length], not viability.point raised to a power; the interval is the single-prompt interval raised to `length`, widened if needed to contain `point`, so it holds at least `coverage_target` of the posterior. `risk` reads `viability.lower` under the single-prompt risk policy and `evidence` is the single-prompt evidence, unchanged. `width.too_wide` is true when `upper - lower` exceeds `width.max_width` under `width.policy_version`: the interval is then too wide to say much -- a statement about the estimate, never about capacity. Absent when --sequence was not given.",
           "type": "object",
-          "required": ["id", "version"],
+          "required": ["length", "viability", "risk", "evidence", "method", "width"],
           "properties": {
-            "id": { "type": "string" },
-            "version": { "type": "string" }
+            "length": { "type": "integer", "minimum": 1 },
+            "viability": {
+              "type": "object",
+              "required": ["lower", "point", "upper", "coverage_target"],
+              "properties": {
+                "lower": { "type": "number", "minimum": 0, "maximum": 1 },
+                "point": { "type": "number", "minimum": 0, "maximum": 1 },
+                "upper": { "type": "number", "minimum": 0, "maximum": 1 },
+                "coverage_target": { "type": "number" }
+              }
+            },
+            "risk": { "$ref": "#/$defs/risk" },
+            "evidence": { "$ref": "#/$defs/evidence" },
+            "method": { "$ref": "#/$defs/method" },
+            "width": {
+              "type": "object",
+              "required": ["too_wide", "max_width", "policy_version"],
+              "properties": {
+                "too_wide": { "type": "boolean" },
+                "max_width": { "type": "number" },
+                "policy_version": { "type": "string" }
+              }
+            }
           }
         },
         "model_policy_version": { "type": "string" },
@@ -142,6 +143,42 @@
           "type": "array",
           "items": { "$ref": "#/$defs/reportedCapacity" }
         }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "required": ["label", "policy_version"],
+      "properties": {
+        "label": { "type": "string" },
+        "policy_version": { "type": "string" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["level", "policy_version", "gates"],
+      "properties": {
+        "level": { "type": "string" },
+        "policy_version": { "type": "string" },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "level", "limiting"],
+            "properties": {
+              "id": { "type": "string" },
+              "level": { "type": "string" },
+              "limiting": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "method": {
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" }
       }
     },
     "reportedCapacity": {

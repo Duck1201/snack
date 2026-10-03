@@ -33,6 +33,7 @@ const LABEL = 13;
  * @property {{label: string}} risk
  * @property {{level: string, gates?: {id: string, level: string, limiting: boolean}[]}} evidence
  * @property {{id: string, version: string}} method
+ * @property {SequenceView} [sequence] present only when `--sequence` was given
  * @property {string} [model_policy_version]
  * @property {{band: string, score?: number, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[], trend?: {scores: number[]} | null}} pressure
  * @property {string} expected_prompt_category
@@ -41,6 +42,17 @@ const LABEL = 13;
  * @property {string[]} caveats
  * @property {ReportedCapacityView[]} [reported_capacity] present only when a Codex installation feeds
  *   the source
+ */
+
+/**
+ * Sequence viability as the status payload carries it: the user's own length, echoed, and the
+ * probability that that many consecutive prompts all go through.
+ *
+ * @typedef {object} SequenceView
+ * @property {number} length
+ * @property {{lower: number, upper: number}} viability
+ * @property {{label: string}} risk
+ * @property {{id: string, version: string}} method
  */
 
 /**
@@ -836,6 +848,8 @@ function renderSource(status, paint, verbose) {
       // terminal and a captured log all read the same sentence.
       [`risk ${status.risk.label}`, SCALE[status.risk.label], 0],
     ]),
+    // Directly beneath the single-prompt row, so the two readings compare line to line.
+    ...(status.sequence === undefined ? [] : [sequenceRow(status.sequence, paint)]),
     row(paint, "evidence", [
       [status.evidence.level, undefined, 0],
       [
@@ -1088,8 +1102,24 @@ function describeContributors(contributors, verbose) {
  */
 function methodRows(status, paint, verbose) {
   const identifier = `${status.method.id}@${status.method.version} · model ${status.model_policy_version ?? "unknown"}`;
+  // The sequence has a named method of its own, and it continues the method block rather than
+  // claiming a second `method` label in the column.
+  const sequenceIdentifier =
+    verbose && status.sequence !== undefined
+      ? [
+          row(paint, "", [
+            [
+              `${status.sequence.method.id}@${status.sequence.method.version} · next ${status.sequence.length}`,
+              undefined,
+              0,
+            ],
+          ]),
+        ]
+      : [];
   if (!isInitialHeuristic(status)) {
-    return verbose ? [row(paint, "method", [[identifier, undefined, 0]])] : [];
+    return verbose
+      ? [row(paint, "method", [[identifier, undefined, 0]]), ...sequenceIdentifier]
+      : [];
   }
   return [
     row(paint, "method", [
@@ -1097,7 +1127,31 @@ function methodRows(status, paint, verbose) {
       [" — no history of your own is behind this yet", "dim", 0],
     ]),
     ...(verbose ? [row(paint, "", [[identifier, undefined, 0]])] : []),
+    ...sequenceIdentifier,
   ];
+}
+
+/**
+ * The sequence row: the same sentence as `next prompt`, about all of the user's `N`.
+ *
+ * The label reads `next 10` under `next prompt`, and the sentence `all 10 go through`; the word
+ * "prompts" is never set beside the number, so nothing here reads as a count a plan allows. At one
+ * the sentence is the `next prompt` sentence, because "all 1 go through" is not English -- and the
+ * two rows then differ only in their label, which is the visible form of the identity.
+ *
+ * @param {SequenceView} sequence
+ * @param {(value: string, style?: Style) => string} paint
+ */
+function sequenceRow(sequence, paint) {
+  const outcome = sequence.length === 1 ? "it goes through" : `all ${sequence.length} go through`;
+  return row(paint, `next ${sequence.length}`, [
+    [
+      `${bare(sequence.viability.lower)}-${percent(sequence.viability.upper)} chance ${outcome} · `,
+      undefined,
+      0,
+    ],
+    [`risk ${sequence.risk.label}`, SCALE[sequence.risk.label], 0],
+  ]);
 }
 
 /**
