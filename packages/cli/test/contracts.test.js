@@ -244,9 +244,13 @@ test("an export validates against the published export schema", async () => {
  * declares envelope version 1 and must fail today's schema; a post-freeze one declares the current
  * version and must still pass it, unchanged. Stage 10 confirms the freeze rather than redefining
  * it, and this is that sentence written as a test.
+ *
+ * `1.2` is the last released minor before `1.3.0`, captured at `v1.2.1` before any 1.3 change. It
+ * sits beside `0.9` because it answers the same question: a consumer written against it keeps
+ * working, so its documents must still validate against today's schemas, unchanged.
  */
 const PRE_FREEZE_VERSIONS = ["0.6", "0.7", "0.8"];
-const FROZEN_VERSIONS = ["0.9"];
+const FROZEN_VERSIONS = ["0.9", "1.2"];
 const CAPTURED_VERSIONS = [...PRE_FREEZE_VERSIONS, ...FROZEN_VERSIONS];
 
 /**
