@@ -209,7 +209,7 @@ test("backtesting a long history stays linear in the number of prompts", () => {
     return Number(process.hrtime.bigint() - startedAt) / 1e6;
   };
 
-  // Both sizes are warmed, and both are measured as a median of several runs.
+  // Both sizes are warmed, then measured interleaved, and each is read as its fastest run.
   //
   // The first version of this warmed only `short` and then timed `long` cold, so the larger input
   // paid JIT and allocation costs the smaller one had already paid, and the ratio it reported was
@@ -217,22 +217,27 @@ test("backtesting a long history stays linear in the number of prompts", () => {
   // idle machine against a threshold of 8 -- under two-fold headroom on a wall-clock comparison --
   // and a loaded macOS runner read 9.7 and failed the build on `main`.
   //
+  // The second measured each size as a median of five consecutive runs, `short`'s all before
+  // `long`'s, and still failed under CPU contention: a burst of load landing on `long`'s runs alone
+  // moved its median and not `short`'s. Contention only ever adds time, so the fastest run is the
+  // best estimate of what the replay costs, and alternating the two sizes makes a burst land on
+  // both. The ratio of the minima is what is compared.
+  //
   // The algorithm is linear, which is why this is a fix to the measurement rather than to the code:
   // measured across 400 to 6400 prompts the cost per prompt stays flat at 0.022-0.026 ms and each
   // doubling costs about 2.05x. The signal this test exists for -- a quadratic replay, 16x at four
   // times the input -- is nowhere near the noise floor once both sides are measured the same way.
-  const median = (/** @type {import("../src/prediction.js").OutcomeRow[]} */ rows) => {
-    for (let run = 0; run < 3; run += 1) time(rows);
-    const runs = Array.from({ length: 5 }, () => time(rows)).sort((a, b) => a - b);
-    const middle = runs[2];
-    // Thrown rather than defaulted: a default here would be a made-up duration, and both of the
-    // plausible ones lie in the direction that hides a failure.
-    if (middle === undefined) throw new Error("timing produced no samples");
-    return middle;
-  };
-
-  const shortMs = Math.max(median(short), 1);
-  const longMs = median(long);
+  for (let run = 0; run < 3; run += 1) {
+    time(short);
+    time(long);
+  }
+  let shortMs = Number.POSITIVE_INFINITY;
+  let longMs = Number.POSITIVE_INFINITY;
+  for (let run = 0; run < 9; run += 1) {
+    shortMs = Math.min(shortMs, time(short));
+    longMs = Math.min(longMs, time(long));
+  }
+  shortMs = Math.max(shortMs, 1);
 
   // Four times the history must not cost sixteen times the work; a quadratic replay would.
   assert.ok(
@@ -480,14 +485,24 @@ const asOutcomes = (rows) =>
   }));
 
 const POLICIES = [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)];
+/**
+ * Not a shipped weighting: one whose time half-life differs from the answer's, so a walk that
+ * re-anchored every slot with slot 0's time decay would score it wrongly and be seen to.
+ */
+const ONE_HOUR = Object.freeze({
+  ...PREDICTION_POLICY,
+  version: "test-time-1h",
+  decay_half_life_seconds: 3600,
+});
 
 test("the shared walk scores every weighting exactly as the released backtest does, double for double", () => {
+  const policies = [...POLICIES, ONE_HOUR];
   fc.assert(
     fc.property(replayHistory, (rows) => {
       const outcomes = asOutcomes(rows);
-      const results = backtestWeightings(outcomes, { prior: PRIOR, policies: POLICIES });
-      assert.equal(results.length, POLICIES.length);
-      for (const [index, policy] of POLICIES.entries()) {
+      const results = backtestWeightings(outcomes, { prior: PRIOR, policies });
+      assert.equal(results.length, policies.length);
+      for (const [index, policy] of policies.entries()) {
         const released = backtestAsReleased(outcomes, { now: new Date(), prior: PRIOR, policy });
         const result = /** @type {(typeof results)[number]} */ (results[index]);
         // Bit for bit: `deepStrictEqual` compares doubles with Object.is.
