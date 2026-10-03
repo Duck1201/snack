@@ -60,9 +60,12 @@ quantile call**, so the cost on the `status` budget is one loop of at most 100 m
 **Why the `min`/`max` clamp.** A mean need not sit inside an equal-tailed interval, and for `p^N` it
 sometimes does not. Over a grid of 66,248 posteriors (`α, β ∈ 0.5 + [0, 45]` in steps of 0.5,
 `N ∈ {1,2,3,5,10,20,50,100}`), `E[p^N] > upper_quantile^N` in 18,419 cases — **never at `N = 1`,
-never with `point < lower`, never once `point ≥ 0.025`**. The largest gap is 0.0145
-(`Beta(1,1)`, `N = 50`: point 0.0196, 90th-percentile 0.0052). Every one of those cases is already
-`risk high` with an interval that renders `0-0%` or `0-1%`. Publishing `point > upper` would break
+never with `point < lower`**. The largest gap is 0.0145 (`Beta(1,1)`, `N = 50`: point 0.0196,
+90th-percentile 0.0052). Every one of those cases is already `risk high`. *Corrected in review:*
+this section first said "never once `point ≥ 0.025`", a bound read off the eight lengths of that
+grid. Over every `N` from 1 to 100 (`α, β ∈ 0.5 + [0, 45.5]`) the widening reaches a point of
+0.02857 (`Beta(1,1)`, `N = 34`), so the measured bound is: it fires only where the interval already
+renders `0-3%`. `prediction.test.js` pins it. Publishing `point > upper` would break
 the ordering every consumer, and `prediction_attempt`'s own `CHECK (lower <= point AND point <=
 upper)`, assumes. Widening the interval to include its point keeps at least `coverage_target` of
 posterior mass inside it — the interval contains the equal-tailed one — so `coverage_target` stays
@@ -126,7 +129,7 @@ Script: `scratchpad/seq/verify.mjs` and `order.mjs`, importing the real `beta.js
 | `N = 1` equals `assembleForecast`'s `viability` and `risk`, compared with `Object.is`, 20 posteriors incl. prior-only | 0 mismatches (bit-identical: `1·x = x`, `x**1 = x`) |
 | `lower`, `point`, `upper` non-increasing in `N`, 4,900 cases `N = 1..100` | 0 violations |
 | `E[p^N] ≥ (α/(α+β))^N` | 0 violations |
-| `point` outside the unclamped interval | 18,419 / 66,248; never at `N = 1`; only above `upper`; only when `point < 0.025` |
+| `point` outside the unclamped interval | 18,419 / 66,248; never at `N = 1`; only above `upper`; only where the interval renders `0-3%` (largest point 0.02857, `Beta(1,1)`, `N = 34`, over every `N ≤ 100`) |
 
 Worked examples (prior `Beta(0.5, 0.5)` from `generic.json`, rounded):
 

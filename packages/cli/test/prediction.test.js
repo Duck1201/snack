@@ -535,6 +535,34 @@ test("the sequence interval is widened to contain its point when the powered upp
   assert.equal(sequence.viability.point.toFixed(5), "0.01961");
 });
 
+test("the widening fires only where the interval already renders 0-3%", () => {
+  // Beta(1, 1), N = 34 is the largest point the widening ever reaches on the grid: 0.02857, above
+  // the 0.025 a coarser grid of lengths suggested as the bound.
+  const edge = assessSequence(posterior({ strength: 2 }), 34);
+  assert.ok(posterior({ strength: 2 }).viability.upper ** 34 < edge.viability.point);
+  assert.equal(edge.viability.point.toFixed(5), "0.02857");
+
+  let widened = 0;
+  for (const strength of [1, 2]) {
+    for (let successes = 0; successes <= 45; successes += 1) {
+      for (let restrictions = 0; restrictions <= 45; restrictions += 1) {
+        const base = posterior({ strength, successes, restrictions });
+        for (let length = 1; length <= SEQUENCE_MAX_LENGTH; length += 1) {
+          const sequence = assessSequence(base, length);
+          if (base.viability.upper ** length >= sequence.viability.point) continue;
+          widened += 1;
+          assert.ok(length > 1, "never at N = 1");
+          assert.ok(
+            sequence.viability.upper < 0.03,
+            `Beta(${base.contributors.evidence_window.alpha}, ${base.contributors.evidence_window.beta}), N = ${length}: ${sequence.viability.upper}`,
+          );
+        }
+      }
+    }
+  }
+  assert.ok(widened > 0);
+});
+
 test("the sequence risk label reads the sequence lower bound under the single-prompt policy", () => {
   const sequence = assessSequence(posterior({ successes: 30 }), 10);
   assert.deepEqual(sequence.risk, classifyRisk(sequence.viability.lower));
