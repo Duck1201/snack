@@ -472,13 +472,35 @@ that prefix; an install with the flag under both npm 11.16.0 and npm 12 loads th
 
 **The answer is recorded, which took a table.** The plan was silent on persistence. Every forecast SNACK shows is stored as an immutable attempt, and leaving the sequence out would have contradicted that; scoring it as an attempt would have corrupted live calibration, because a sequence is not a forecast about one prompt (ADR-0008). Migration `016` adds `prediction_sequence`, keyed on its attempt, written in the same transaction with the posterior that produced it, immutable, deleted only by `data purge` with its attempt, and neither exported nor calibrated in `1.4`.
 
-### 1.5.0 - `reported_capacity_v1` prediction method
+### 1.5.0 - `reported_capacity_v1` prediction method — **shipped**
 
 - a second versioned prediction method, named in the envelope beside the baseline, used only for capacity sources that report a figure;
 - calibration is reported per method: mixing a method informed by a stated figure with one estimating from history would make a single Brier score meaningless;
 - separated from `1.3.0` on purpose — shipping a new adapter and a new prediction method together leaves two candidate causes for any divergence and no way to separate them.
 
 **Exit:** both methods carry independent calibration figures with their own sample sizes; the baseline's numbers are unchanged for sources that report nothing.
+
+**Exit, met.** `stats --json` on a Codex-fed source carries `calibration.by_method`: one entry per method, each with its own live and backtest Brier, reliability and interval coverage beside their own sample sizes, and on the shadow a `paired` comparison over exactly the outcomes both were scored on; `calibration.test.js` holds the sample sizes independent and versions never pooled. For a source that reports nothing no statement is stored, the shadow never runs, `by_method` is absent, and `compatibility.test.js` replays the `1.4` corpus — captured at `v1.4.0` before any `1.5` change and now frozen beside `0.9`, `1.2` and `1.3` — byte for byte; the Codex report differs only by the additive `shadow` and `by_method`. `shadow.property.test.js` holds the answer, the `--sequence` answer and the overview identical to the baseline's for arbitrary fresh statements, and fails on the first run when a computed shadow is allowed to replace the answer. `upgrade:smoke` applies `017` and `018` over a database the published `1.4.0` wrote. Spec: [reported-capacity-method](./specs/reported-capacity-method/spec.md).
+
+**Where the plan above was wrong.**
+
+**It does not answer; it runs in shadow.** The plan said "used only for capacity sources that report a figure", which read as the method answering for them. The real Codex history it was designed from held one observed restriction in 65 days, never a stated figure at or above 100, and a stated 20% at the start of the one refused prompt — the prompt itself moved the window 76 points. A method that history cannot calibrate does not get to answer on its reasoning alone. In `1.5.0` it is computed, recorded in `prediction_reported_capacity` and calibrated beside the baseline, shown only on a `--verbose` row that says it is not the answer, in the additive `shadow` member and in `by_method`; the answer, `--sequence` included, stays the baseline's for every source. It may answer only in a later minor, by a new [ADR-0007](../adr/0007-quote-codex-reported-capacity.md) amendment, once its own record meets `reported-capacity-promotion-v1`: at least 200 checked live forecasts, at least 5 restrictions both live and in the backtest, and a strictly lower Brier score than the baseline on the same outcomes in both, measured on a real Codex history. Doing worse once the sample conditions hold withdraws or respecifies it rather than tuning it in place.
+
+**The method is `reported-capacity@1`.** `reported_capacity_v1` was the working name. Every method in the envelope is a kebab-case id with a separate version (`bayesian-pressure-band` + `1`), and a version inside the id would have broken that; the working name survives as the policy version `reported-capacity-v1`.
+
+**The stated band had to be stored: plan B, migration `018`.** The plan assumed the band each past prompt started in could be derived when `status` ran. Replaying the stated timeline in `status` put its p95 over the 250 ms budget in one batch in four on a 100,000-prompt Codex history, and within 10 ms of it in the rest. So `018` adds `stated_band` and its policy version to `prompt_execution` — a rebuildable projection like `size_category`, resolved at each prompt's start from statements strictly earlier — recomputed after each `sync` and each `data purge`, and `status` replays nothing.
+
+**The projection needed a durable frontier, per source.** The first `018` found stale bands through a partial index on prompts with no band and an index on statements first seen by the current invocation. Review found three defects in it: a prompt in an ended period is never computed, so on any source with two periods the frontier never cleared and every sync recomputed the whole active period; a source no Codex installation feeds indexed every prompt for nothing (+4.2 MB on 100,000 Claude Code prompts); and a process stopped between the ingestion commit and the restate left bands stale with nothing to find them by. Both indexes went. `stated_band_projection` holds one `stale_from` per source, lowered inside the ingestion and purge transactions to a normalized instant and cleared, with the bands, only if it still holds the value the restate read; a row under another policy version recomputes the source whole. `017` and `018` were unreleased, so `018` was edited in place.
+
+### 1.5.1 - alternative recency half-lives, in shadow
+
+**Purpose:** find out whether the answer's recency weighting is too short, without moving the answer. The 2026-10-03 offline analysis found that the 30-prompt recency half-life caps the effective sample at α + β ≤ 44.8, so the `--sequence` answer turns too wide to inform from about N ≈ 0.51 · (α + β) — at best around 23. Whether a longer half-life — 50 or 100, counted in prompts — predicts better cannot be judged from a history with one restriction in it.
+
+- run each alternative half-life as an additional shadow method, under a versioned policy of its own, beside the baseline and beside `reported-capacity@1`;
+- reuse what `1.5.0` built for that: the shadow record keyed on its attempt, `calibration.by_method` with a `paired` comparison over the same outcomes, and the per-method backtest;
+- never the answer, until the `1.5.0` promotion rule (`reported-capacity-promotion-v1`, applied to the variant) says so in a later minor.
+
+**Exit:** each variant carries independent calibration figures with its own sample size, and the answer — `status`, `status --sequence`, their `--json` answering members and `stats`' top-level figures — is byte-identical to `1.5.0`'s.
 
 ### 1.6.0 - `snack dash`
 
@@ -513,6 +535,7 @@ reasoning for the move is in the [`1.2.0`](#120---status---verbose-and-man-snack
   interval, the risk label, the evidence level, the method, the policy versions. A redraw that
   changes nothing writes nothing. The key and the panel must round through one shared function, or
   the screen writes a snapshot on a frame that redrew identical bytes.
+- **the sequence answer's ceiling, documented.** A forward table — evidence level and a fixed N in, the typical `--sequence` interval out — plus one line that recency-weighted history saturates near an effective sample of 44, so a longer history does not keep narrowing it. Never a "maximum N per level": reading the table backwards would be the probability-to-N inversion `1.4.0` refuses, done by hand. Optionally, when the interval is too wide and no recent restriction exists, a panel diagnostic that says "the low end of this interval comes from SNACK's starting assumption rather than from your history".
 
 **`status --watch` is dropped and superseded by `snack dash`.** It was specified as a flag that would
 put `status` into a second output mode, and the `1.1.3` work made the better answer obvious: a live
