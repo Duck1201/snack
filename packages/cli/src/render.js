@@ -500,7 +500,7 @@ function describeCalibration(calibration, verbose) {
   const headline =
     snapshots === 0
       ? "  no forecasts checked against an outcome yet"
-      : `  ${snapshots} forecasts checked against what happened next`;
+      : `  ${snapshots} ${snapshots === 1 ? "forecast" : "forecasts"} checked against what happened next`;
   if (!verbose) return [headline];
   return [
     headline,

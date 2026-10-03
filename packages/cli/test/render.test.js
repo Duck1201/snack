@@ -418,6 +418,10 @@ test("stats states what calibration is worth without stating a Brier score", () 
   assert.match(plain, /30 forecasts checked/u);
   assert.match(verbose, /brier 0\.002/u);
   assert.match(verbose, /stage5-calibration-v1/u);
+
+  const one = statsFor();
+  one.calibration = { ...one.calibration, snapshots: 1 };
+  assert.match(renderStats(one, { verbose: false }), /\b1 forecast checked\b/u);
 });
 
 test("--verbose breaks each window down by model", () => {

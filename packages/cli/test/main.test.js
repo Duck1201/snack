@@ -2651,12 +2651,12 @@ test("human stats describe the same calibration the JSON document reports", asyn
 
   // The default reading says how much has been checked, which is what decides whether to trust the
   // estimate; the score itself is a modeller's question and lives with the other statistics.
-  assert.match(concise, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.match(concise, new RegExp(`${calibration.snapshots} forecasts? checked`, "u"));
   assert.doesNotMatch(concise, /brier/iu);
 
   // Under `--verbose` both renderings must state the same facts: how many snapshots exist, what the
   // live score is with its sample size, and that backtesting is a separate stream.
-  assert.match(human, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.match(human, new RegExp(`${calibration.snapshots} forecasts? checked`, "u"));
   assert.match(human, new RegExp(`brier ${calibration.live.brier.value}`, "u"));
   assert.match(human, new RegExp(`sample ${calibration.live.brier.sample_size}`, "u"));
   assert.match(human, /backtest/iu);
