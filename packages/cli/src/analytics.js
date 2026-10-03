@@ -224,6 +224,19 @@ export const TREND_POLICY = Object.freeze({
 });
 
 /**
+ * How many windows the `snack dash` plot draws.
+ *
+ * A drawing, not a direction: `TREND_POLICY` decides `rising`/`steady`/`falling`, is published in
+ * every `--json` document and stays at five windows for the reasons above. A day of hourly windows
+ * is what a reader glancing at a screen left open wants to see, and nothing is computed from it, so
+ * it is versioned apart and never stamped on a stored row.
+ */
+export const PLOT_POLICY = Object.freeze({
+  version: "dash-plot-v1",
+  windows: 24,
+});
+
+/**
  * Describe which way usage pressure has been moving, without claiming where it is going.
  *
  * Each compared window is ranked against **one shared baseline** rather than against its own

@@ -5,7 +5,11 @@ import { afterEach, test } from "node:test";
 
 import { commandSurface } from "../../../scripts/man-surface.mjs";
 import { compareOutcomeGroups } from "../src/analytics.js";
+import { minimumRows, renderDash } from "../src/dash-view.js";
 import { run } from "../src/main.js";
+import { createScreen } from "../src/screen.js";
+import { everyDashState } from "./fixtures/dash-states.js";
+import { makeVirtualScreen } from "./fixtures/fake-screen.js";
 import {
   cleanupRunFixtures,
   createCodexHistory,
@@ -387,6 +391,69 @@ test("the count-before-prompts pattern catches every shape of a count and nothin
     "IN prompts",
   ]) {
     assert.doesNotMatch(phrase, countBeforePrompts, phrase);
+  }
+});
+
+test("no dash screen says what the panels refuse to, at any size or pane", () => {
+  // The dash is a screen rather than a stream, so it is policed as a reader sees it: every widget
+  // state is drawn at three widths and two heights besides its minimum, pushed through the screen
+  // buffer onto a virtual terminal, and the final screen -- colour on, escapes applied -- is held
+  // to the same patterns as every command's output. Each state is drawn over the previous one, so
+  // a row the frame diff forgot to clear would be read here too.
+  /** @type {{where: string, text: string}[]} */
+  const screens = [];
+  for (const columns of [64, 80, 120]) {
+    for (const rows of [24, 60]) {
+      const terminal = makeVirtualScreen({ columns, rows });
+      const screen = createScreen(terminal);
+      screen.enter();
+      for (const [name, state] of everyDashState()) {
+        for (const height of [minimumRows(state), rows]) {
+          if (height > rows) continue;
+          screen.frame(renderDash(state, { columns, rows: height }, { color: true }).lines);
+          screens.push({ where: `${name} at ${columns}x${height}`, text: terminal.text() });
+        }
+      }
+      // Too small is a widget too.
+      const [, first] = /** @type {[string, import("../src/dash-view.js").DashState]} */ (
+        everyDashState()[0]
+      );
+      screen.frame(renderDash(first, { columns: 58, rows: 20 }, { color: true }).lines);
+      screens.push({ where: `too small under ${columns}x${rows}`, text: terminal.text() });
+      screen.leave();
+    }
+  }
+
+  // Vacuity guards: the panes, the sequence row in both forms, the drawings and the too-small
+  // sentence were all really on a screen.
+  const transcript = screens.map((screen) => screen.text).join("\n");
+  assert.match(transcript, /chance all 10 go through/u);
+  assert.match(transcript, /interval is too wide to say much/u);
+  assert.match(transcript, /lightest ├─*●─*┤ heaviest/u);
+  assert.match(transcript, /each hour against your own history/u);
+  assert.match(transcript, /reading this screen/u);
+  assert.match(transcript, /Codex states \d+% of its \w+ window/u);
+  assert.match(transcript, /snack dash needs at least 64 columns/u);
+
+  for (const { where, text } of screens) {
+    for (const term of forbidden) {
+      assert.doesNotMatch(text, term.pattern, `${where} says ${term.label}`);
+    }
+    assert.doesNotMatch(text, countBeforePrompts, `${where} sets a count before "prompts"`);
+    assert.doesNotMatch(
+      text,
+      /\b(?:up to\s+)?\d+\s+(?:more\s+)?prompts?\s+(?:left|remaining|available|before)\b/iu,
+      `${where} promises a prompt count`,
+    );
+    assert.doesNotMatch(text, /\bprompts?\s+(?:until|to go)\b/iu, `${where} counts down prompts`);
+    // The two drawings are where a picture could say what a sentence never would: a scale with a
+    // used side, a plot with an empty end.
+    const drawings = text
+      .split("\n")
+      .filter((line) => /lightest|by hour|by window|\bago +now$/u.test(line));
+    for (const line of drawings) {
+      assert.doesNotMatch(line, /\b(?:full|empty|used|left|remaining)\b/iu, `${where}: ${line}`);
+    }
   }
 });
 
