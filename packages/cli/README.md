@@ -107,7 +107,11 @@ half the scale, the panel says so: on this same history `--sequence 25` reads `2
 "The 25-prompt interval is too wide to say much; it cannot tell whether all of them going through is
 more likely than not." Read that as an honest "not enough to say", not as a broken tool: a range
 that straddles even odds cannot tell you whether the run is more likely to go through than not. It
-suggests no fix, because neither a shorter sequence nor more history reliably narrows it.
+suggests no fix, because neither a shorter sequence nor more history reliably narrows it. From `1.6`
+that history gets one more line, because no refusal of yours is in its evidence yet: "Your recent
+history has no restriction to learn from, so the low end of this interval comes from SNACK's
+starting assumption rather than from your history." The bottom of `29-100%` is SNACK's assumption,
+not something you have seen happen.
 
 And `snack stats` shows you what your week actually looked like:
 

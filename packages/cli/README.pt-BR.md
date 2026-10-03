@@ -108,7 +108,11 @@ larga. Quando ela passa de metade da escala, o painel diz isso: neste mesmo hist
 tell whether all of them going through is more likely than not." Leia isso como um "não dá para
 dizer" honesto, não como ferramenta quebrada: uma faixa que atravessa o meio a meio não consegue
 dizer se é mais provável a sequência passar do que não. Ela não sugere conserto, porque nem uma
-sequência mais curta nem mais histórico a estreitam sempre.
+sequência mais curta nem mais histórico a estreitam sempre. A partir da `1.6`, esse histórico ganha
+mais uma linha, porque nenhuma recusa sua está na evidência ainda: "Your recent history has no
+restriction to learn from, so the low end of this interval comes from SNACK's starting assumption
+rather than from your history." O piso de `29-100%` é a suposição do SNACK, não algo que você viu
+acontecer.
 
 E o `snack stats` mostra como a sua semana realmente foi:
 

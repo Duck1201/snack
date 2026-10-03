@@ -97,7 +97,10 @@ same history, `--sequence 25` reads `29-100%` and adds "The 25-prompt interval i
 much; it cannot tell whether all of them going through is more likely than not." That is not the
 tool failing. It is an honest "not enough to say": the range straddles even odds, so it cannot tell
 you whether the whole run is more likely to go through than not. It suggests no fix, because neither
-a shorter sequence nor more history reliably narrows it.
+a shorter sequence nor more history reliably narrows it. From `1.6` that history gets one more line,
+because no refusal of yours is in its evidence yet: "Your recent history has no restriction to learn
+from, so the low end of this interval comes from SNACK's starting assumption rather than from your
+history." The bottom of `29-100%` is SNACK's assumption, not something you have seen happen.
 
 ## Quickstart
 

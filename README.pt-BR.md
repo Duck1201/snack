@@ -97,7 +97,11 @@ todas as letras. No mesmo histórico, `--sequence 25` dá `29-100%` e acrescenta
 interval is too wide to say much; it cannot tell whether all of them going through is more likely
 than not." Isso não é a ferramenta falhando. É um "não dá para dizer" honesto: a faixa atravessa o
 meio a meio, então não consegue dizer se é mais provável a sequência inteira passar do que não. Ela
-não sugere conserto, porque nem uma sequência mais curta nem mais histórico a estreitam sempre.
+não sugere conserto, porque nem uma sequência mais curta nem mais histórico a estreitam sempre. A
+partir da `1.6`, esse histórico ganha mais uma linha, porque nenhuma recusa sua está na evidência
+ainda: "Your recent history has no restriction to learn from, so the low end of this interval comes
+from SNACK's starting assumption rather than from your history." O piso de `29-100%` é a suposição
+do SNACK, não algo que você viu acontecer.
 
 ## Começando
 
