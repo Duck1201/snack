@@ -25,6 +25,69 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.3.0
+
+- Date: 2026-10-03
+- Commit: `release/1.3.0` after the Codex CLI adapter, migrations 014 and 015 and
+  `reported_capacity_latest` (`9449a86`); the two `status` rows re-taken at `a2f0533`
+- Machine: Linux 6.12.111+deb13-rt-amd64, 12 cores
+- Toolchain: Node `24.18.1`, npm `11.16.0` for the packaging scripts, `12.0.2` locally
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`; the Codex rows from a synthetic
+  history of 1,000 rollouts in the 0.159.3 shape, 100 turns each, one stated rate-limit snapshot per
+  turn with two windows (200,000 reported capacity rows)
+
+| Budget | PLAN.md | Measured | `1.2.1` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **205 ms** (p50 192 ms, min 186 ms) | 199 ms |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **196 ms** (p50 194 ms, min 189 ms) | 210 ms |
+| `status --no-sync` p95, Codex, 200,000 reported capacity rows | under 250 ms | **227 ms** (p50 218 ms, min 213 ms) | — |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **423 ms** (categorize 47 ms + write 376 ms) | 667 ms |
+| Incremental synchronisation, Codex, one turn appended to one rollout, spawned | under 2 s | **969 ms** p50, 1,089 ms max of 10 | — |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **14.9 s** | 15.4 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.7 s** | 15.2 s |
+| Initial backfill, 100,000 prompts, Codex CLI | under 30 s | **19.4 s** | — |
+| Steady-state memory | under 150 MB | **passes the heap cap for all three clients** | passes both readings |
+
+**Every figure is inside its budget, and the two `status` assertions still stepped aside.** The
+first full runs were taken while a JVM held three of the twelve cores, at load averages of 10-17;
+there `status --no-sync` read up to 290 ms, over budget, and no assertion was entitled to an opinion.
+The rows above are the re-run with that process gone: `vmstat` read 95-96% idle with no runnable
+queue, yet this real-time kernel's load average sat at 7.7-8.2, above the half-the-cores rule, so the
+assertions stepped aside again. The figures are therefore ones this run reports from an idle CPU
+rather than ones it asserted. The Codex rows are not in `performance.test.js`; they were measured
+with the spawned binary by the same method, 20 samples a batch, under the earlier load.
+
+**The Codex `status` figure is the one this release had to earn.** Before `9449a86`,
+`readReportedCapacity` ranked every statement a source had stored to keep one per limit, and read
+476 ms p95 over 200,000 rows. Keeping the latest stated figure per group in
+`reported_capacity_latest`, upserted in the transaction that stores it and recomputed by `data
+purge`, makes the read 0.53 ms in process, and the spawned command lands within 10-20 ms of a
+prompt-only history. A wall clock would not guard that, so `storage.test.js` asserts the query plan
+instead: the history table is reached only through its unique key, never scanned.
+
+### What migrations 014 and 015 cost the person upgrading
+
+A 100,000-prompt Claude Code history, backfilled by the published `@snack-ai/cli@1.2.1` (schema
+013), then opened by this tree:
+
+| | Measured |
+| --- | --- |
+| Wall clock for both migrations, in process, three runs | **0.83-1.01 s** |
+| Peak process RSS during it | **85 MB** |
+| First `sync` after the upgrade, spawned | **2.2 s** (1.5-1.6 s once migrated) |
+| Database file, before | 73.9 MB |
+| Database file, after | 78.4 MB |
+| Rows in every pre-existing table, before and after | identical |
+| `prompt_execution.installation_id` mismatches | 0 of 100,000 |
+| `integrity_check` / `foreign_key_check` | ok / no violations |
+
+014 rebuilds `client_installation` and its three dependents through a keyed stash of
+`prompt_execution.installation_id`, rather than copying `prompt_execution` out and back. That is why
+it costs half of 013's 1.8 s on a database half again as large, and grows the file by 6% rather than
+1.7x. 015 creates `reported_capacity_observation`, its index and `reported_capacity_latest` empty.
+The pre-migration backup is still taken first, so the peak disk is roughly twice the database, once.
+`upgrade:smoke` now includes `1.2.1` as a floor and applies both over a database that release wrote.
+
 ## 1.2.1
 
 - Date: 2026-10-03
