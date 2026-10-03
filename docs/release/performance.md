@@ -25,6 +25,55 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.4.0
+
+- Date: 2026-10-03
+- Commit: `release/1.4.0` after `status --sequence N` and migration 016 (`338caa4`); the review fixes that followed touch wording, tests and the release workflow, not a measured path
+- Machine: Linux 6.12.111+deb13-rt-amd64, 12 cores
+- Toolchain: Node `24.18.1`, npm `11.16.0` for the packaging scripts
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`; the Codex rows from a synthetic
+  history of 1,000 rollouts in the 0.159.3 shape, 100 turns each, one stated rate-limit snapshot per
+  turn with two windows (200,000 reported capacity rows)
+
+| Budget | PLAN.md | Measured | `1.3.0` |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **195 ms** (p50 193 ms, min 189 ms) | 205 ms |
+| `status --no-sync --sequence 100` p95 | under 250 ms | **194-196 ms** (p50 191-192 ms, min 184-188 ms), three batches | — |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **195 ms** (p50 192 ms, min 187 ms) | 196 ms |
+| `status --no-sync` p95, Codex, 200,000 reported capacity rows | under 250 ms | **208-211 ms** plain, **208-216 ms** with `--sequence 100` (p50 204-207 ms both) | 227 ms |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **424 ms** (categorize 40 ms + write 384 ms) | 423 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **14.4 s** | 14.9 s |
+| Initial backfill, 100,000 prompts, Claude Code | under 30 s | **13.6 s** | 13.7 s |
+| Initial backfill, 100,000 prompts, Codex CLI, spawned | under 30 s | **16.7 s** | 19.4 s |
+| Steady-state memory | under 150 MB | **passes the heap cap for all three clients** | passes |
+
+**`--sequence` costs nothing a wall clock can see.** Three alternating batches of 20 spawned samples
+each put the plain and the `--sequence 100` command within 2 ms of each other at p95 and p50 on the
+100,000-prompt history: the sequence answer is a closed-form transform of the posterior the
+single-prompt forecast already computed, plus one row in `prediction_sequence`. The Codex batches
+were taken while another process intermittently took the box down to 47% idle; the batches it
+touched read up to 321 ms p95 in either variant alike, and the figures above are the ones taken at
+85-99% idle. `performance.test.js` ran at a load average of 5.2-5.9, under the half-the-cores line,
+so this time its two `status` assertions did assert, and passed; `vmstat` read 98-99% idle before
+and after every measurement, against a real-time kernel's load average of 5-9.
+
+### What migration 016 costs the person upgrading
+
+A 100,000-prompt Codex CLI history with 200,000 reported capacity rows, backfilled by the published
+`@snack-ai/cli@1.3.0` (schema 015), then opened by this tree:
+
+| | Measured |
+| --- | --- |
+| First `sync` after the upgrade, spawned, backup included | **1.17 s** (0.99 s once migrated) |
+| Database file, before | 156.0 MB |
+| Database file, after | 156.0 MB (+4 KB) |
+| Rows in every pre-existing table, before and after | identical |
+| `integrity_check` / `foreign_key_check` | ok / no violations |
+
+016 only creates `prediction_sequence` and its two immutability triggers, empty; the cost is the
+pre-migration backup, a copy of the database taken once. `upgrade:smoke` now includes `1.3.0` as a
+floor and applies 016 over a database that release wrote.
+
 ## 1.3.0
 
 - Date: 2026-10-03
