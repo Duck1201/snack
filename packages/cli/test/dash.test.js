@@ -8,7 +8,8 @@ import { setImmediate } from "node:timers";
 import Database from "better-sqlite3";
 import lockfile from "proper-lockfile";
 
-import { SYNC_DELAY_MS, TICK_MS, classifySync } from "../src/dash.js";
+import { readConfig } from "../src/config.js";
+import { SYNC_DELAY_MS, TICK_MS, classifySync, createStoragePort, runDash } from "../src/dash.js";
 import { RESTORE } from "../src/screen.js";
 import {
   SYNC_OK,
@@ -723,4 +724,70 @@ test("a terminal error after the session let go of the streams is absorbed, neve
   assert.doesNotThrow(() => stdin.emit("error", new Error("EIO")));
   assert.doesNotThrow(() => stdout.emit("error", new Error("EIO")));
   assert.equal(gone, 1);
+});
+
+test("SQLite reporting busy while the dash records is a busy lock, retried, never an internal error", async () => {
+  // The storage operation lock keeps other snack commands out, but SQLite itself can still answer
+  // SQLITE_BUSY to a write. That is storage being busy, as `storage_locked` is: the reading stays,
+  // marked old, and the next tick tries again -- not a crash that exits 10.
+  const source = await seeded();
+  const config = await readConfig(source.paths.configFile);
+  const sources = /** @type {never[]} */ (config.sources);
+  const real = createStoragePort({
+    paths: source.paths,
+    config,
+    selected: sources,
+    inScope: sources,
+    invocationId: "00000000-0000-4000-8000-000000000000",
+  });
+  let busy = 1;
+  /** @type {import("../src/dash.js").StoragePort} */
+  const storage = {
+    ...real,
+    session: (work) =>
+      real.session((tx) =>
+        work({
+          ...tx,
+          record: (built, length) => {
+            if (busy > 0) {
+              busy -= 1;
+              throw new Database.SqliteError("database is locked", "SQLITE_BUSY");
+            }
+            return tx.record(built, length);
+          },
+        }),
+      ),
+  };
+  const terminal = makeFakeTerminal();
+  const clock = makeFakeClock(start);
+  const signals = makeFakeSignals();
+  /** @type {{idle(): Promise<void>, state(): import("../src/dash-view.js").DashState} | null} */
+  let controller = null;
+  const done = runDash({
+    terminal: terminal.port,
+    clock: clock.now,
+    scheduler: clock.scheduler,
+    // A sync that never ends, so only the tick's retry can record what the busy write did not.
+    sync: makeFakeSync(() => new Promise(() => {}), { held: true }).port,
+    signals: signals.port,
+    storage,
+    color: false,
+    probe: (probe) => {
+      controller = probe;
+    },
+  });
+  const probe =
+    /** @type {{idle(): Promise<void>, state(): import("../src/dash-view.js").DashState}} */ (
+      /** @type {unknown} */ (controller)
+    );
+  await probe.idle();
+  assert.equal(busy, 0, "the busy write was never reached");
+  assert.equal(probe.state().reading.computedAt, null);
+  assert.equal(count(source.paths.databaseFile, "SELECT COUNT(*) AS n FROM prediction_attempt"), 0);
+  // The next tick retries, and records.
+  await clock.advance(TICK_MS);
+  await probe.idle();
+  assert.ok(count(source.paths.databaseFile, "SELECT COUNT(*) AS n FROM prediction_attempt") > 0);
+  terminal.press("q");
+  assert.equal(await done, 0);
 });

@@ -1,5 +1,5 @@
 import { renderDash } from "./dash-view.js";
-import { SnackError } from "./errors.js";
+import { ExitCode, SnackError } from "./errors.js";
 import { SEQUENCE_MAX_LENGTH, assessSequence } from "./prediction.js";
 import { shownForecast } from "./render.js";
 import { RESTORE, createScreen } from "./screen.js";
@@ -329,8 +329,9 @@ export async function runDash(ports) {
         const { drawn } = draw();
         confirmDrawn(tx, drawn);
       });
-    } catch (error) {
+    } catch (caught) {
       // Busy storage: the pending snapshot stays pending, and the next frame tries again.
+      const error = asStorageError(caught);
       if (!isStorageError(error)) throw error;
     } finally {
       delivering = false;
@@ -430,7 +431,8 @@ export async function runDash(ports) {
         const { drawn } = draw();
         confirmDrawn(tx, drawn);
       });
-    } catch (error) {
+    } catch (caught) {
+      const error = asStorageError(caught);
       if (!isStorageError(error)) throw error;
       const reason = /** @type {SnackError} */ (error).reason;
       if (reason === "storage_newer_than_application") {
@@ -743,6 +745,25 @@ function failedAliases(envelope) {
       .filter((entry) => typeof entry.failed === "number" && entry.failed > 0)
       .map((entry) => String(entry.alias)),
   );
+}
+
+/**
+ * SQLite answering `SQLITE_BUSY` to a read or write the dash makes under the storage lock is storage
+ * being busy, exactly as the lock itself being held is: the reading stays, marked old, and the next
+ * tick tries again. Left raw it would end the session as an internal error, exit 10.
+ *
+ * @param {unknown} error
+ */
+function asStorageError(error) {
+  const code = /** @type {{code?: unknown}} */ (error)?.code;
+  if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) {
+    return new SnackError("Storage is busy with another operation; retry after it finishes.", {
+      code: ExitCode.storage,
+      reason: "storage_locked",
+      cause: error,
+    });
+  }
+  return error;
 }
 
 /** @param {unknown} error */
