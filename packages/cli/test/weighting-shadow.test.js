@@ -4,17 +4,36 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 import fc from "fast-check";
 
+import { rm } from "node:fs/promises";
+
+import { backtestWeightings, scoreVariant } from "../src/calibration.js";
 import { run } from "../src/main.js";
+import { resolvePlanProfile } from "../src/plan-profile.js";
 import { PREDICTION_POLICY, WEIGHTING_VARIANTS, buildForecast } from "../src/prediction.js";
+import { readOutcomeRows } from "../src/storage.js";
 import {
   attachShadows,
   createSourceStatus,
   createWeightingShadows,
   prepareForecastInput,
 } from "../src/status.js";
-import { cleanupRunFixtures, createCodexHistory, makeRunFixture } from "./fixtures/run-fixture.js";
+import { backtestAsReleased } from "./fixtures/backtest-1.5.0.js";
+import {
+  cleanupRunFixtures,
+  createCodexHistory,
+  makeRunFixture,
+  sink,
+} from "./fixtures/run-fixture.js";
+import { makeSeededSource } from "./fixtures/seeded-history.js";
 
+/** @type {string[]} */
+const seededRoots = [];
 afterEach(cleanupRunFixtures);
+afterEach(async () => {
+  await Promise.all(
+    seededRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
 
 const now = new Date("2026-02-01T00:00:00.000Z");
 const source = { alias: "work", provider: "anthropic", profile: "default", plan: "pro" };
@@ -202,4 +221,62 @@ test("a source with no outcome of the user's records no variant and says why", a
     fixture.stdout.value,
     /bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — no outcome of yours to read yet/u,
   );
+});
+
+test("stats wires each replay to its own entry: the answer's to the answer, each variant's to its own", async () => {
+  // A history long enough that the replay scores, with refusals, so the answer and both variants
+  // produce different doubles. The `1.5` corpus replays nothing (`forecasts: 0`), which let a
+  // swapped or reordered replay through the whole suite.
+  const origin = new Date("2026-01-01T00:00:00.000Z");
+  const seeded = await makeSeededSource({ origin, roots: seededRoots });
+  seeded.plant(
+    Array.from({ length: 90 }, (_unused, index) => ({
+      at: new Date(origin.getTime() + index * 7 * 60_000),
+      restricted: index % 9 === 4 || (index > 70 && index % 3 === 0),
+    })),
+  );
+  const stdout = sink();
+  const code = await run(["node", "snack", "stats", "--json"], {
+    stdout,
+    stderr: sink(),
+    env: seeded.env,
+    home: seeded.root,
+    now: new Date(origin.getTime() + 24 * 3_600_000),
+  });
+  assert.equal(code, 0);
+  const { calibration } = JSON.parse(stdout.value).data;
+
+  const outcomes = readOutcomeRows(seeded.paths.databaseFile, "work");
+  const profile = resolvePlanProfile(seeded.source).profile;
+  const prior = { strength: profile.prior_strength, viability: profile.prior_viability };
+  const released = backtestAsReleased(outcomes, { now: new Date(), prior });
+  assert.ok(released.forecasts > 0, "the replay scored nothing: the test would be vacuous");
+  assert.ok(released.scored.some((forecast) => forecast.outcome === "restricted"));
+  const answerBacktest = { ...released.calibration, forecasts: released.forecasts };
+  assert.deepEqual(calibration.backtest, answerBacktest);
+
+  const [answerEntry, ...variantEntries] = calibration.by_method;
+  assert.equal(answerEntry.role, "answer");
+  assert.deepEqual(answerEntry.backtest, answerBacktest);
+
+  const [answerReplay] = backtestWeightings(outcomes, { prior, policies: [PREDICTION_POLICY] });
+  assert.equal(variantEntries.length, WEIGHTING_VARIANTS.length);
+  /** @type {unknown[]} */
+  const seen = [];
+  for (const [index, variant] of WEIGHTING_VARIANTS.entries()) {
+    const entry = variantEntries[index];
+    assert.equal(entry.id, variant.method.id);
+    const [own] = backtestWeightings(outcomes, { prior, policies: [variant.policy] });
+    const replayed = scoreVariant(
+      /** @type {NonNullable<typeof own>} */ (own),
+      /** @type {NonNullable<typeof answerReplay>} */ (answerReplay),
+    );
+    assert.ok(replayed.forecasts > 0);
+    assert.deepEqual(entry.backtest, { ...replayed.calibration, forecasts: replayed.forecasts });
+    assert.deepEqual(entry.paired.backtest, replayed.paired);
+    seen.push(entry.backtest);
+  }
+  // Non-vacuity: every weighting's numbers differ, so a swap cannot pass by coincidence.
+  assert.notDeepEqual(seen[0], seen[1]);
+  assert.notDeepEqual(seen[0], answerBacktest);
 });
