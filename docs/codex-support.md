@@ -32,7 +32,9 @@ observed in a real rollout; their fixtures are taken from the strings in the `0.
 
 ## Where SNACK looks
 
-`$CODEX_HOME` when it is an absolute path, otherwise `~/.codex`. SNACK lists
+`$CODEX_HOME` when it is set and not empty — a relative value is resolved against the working
+directory of `snack setup codex`, as Codex resolves it, and setup records the resolved path —
+otherwise `~/.codex`. SNACK lists
 `<home>/sessions/**/rollout-*.jsonl` and `<home>/archived_sessions/rollout-*.jsonl` — Codex moves
 archived threads to the second — and never lists `<home>` itself. `~/.codex/history.jsonl` holds
 raw prompt history and is never opened; no file under `packages/cli/src/` names it, and a test

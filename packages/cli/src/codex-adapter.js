@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir as systemHomedir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { ExitCode, SnackError } from "./errors.js";
 
@@ -130,15 +130,18 @@ const RATE_LIMITS_PARSER_VERSION = "codex-rate-limits-v1";
  * sibling `<home>/archived_sessions` are ever listed; the home directory itself is not, which is
  * what keeps the prompt-history file Codex writes beside them out of reach.
  *
- * @param {{env?: NodeJS.ProcessEnv, home?: string}} [options]
+ * A relative `CODEX_HOME` is resolved against the working directory, because that is what Codex
+ * does (`find_codex_home` canonicalizes the value); an empty one is unset, as it is to Codex.
+ * Setup records the resolved path, so a later `sync` from another directory reads the same history.
+ *
+ * @param {{env?: NodeJS.ProcessEnv, home?: string, cwd?: string}} [options]
  */
 export function resolveCodexSessionsDirectory(options = {}) {
   const env = options.env ?? process.env;
   const configured = env.CODEX_HOME;
-  const codexHome =
-    configured && isAbsolute(configured)
-      ? configured
-      : join(options.home ?? systemHomedir(), ".codex");
+  const codexHome = configured
+    ? resolve(options.cwd ?? process.cwd(), configured)
+    : join(options.home ?? systemHomedir(), ".codex");
   return join(codexHome, "sessions");
 }
 

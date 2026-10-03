@@ -59,13 +59,24 @@ function assertRefused(read) {
   });
 }
 
-test("CODEX_HOME relocates the sessions directory, and only an absolute one does", () => {
+test("CODEX_HOME relocates the sessions directory, resolved the way Codex resolves it", () => {
   assert.equal(
     resolveCodexSessionsDirectory({ env: { CODEX_HOME: "/srv/codex" }, home: "/home/u" }),
     "/srv/codex/sessions",
   );
+  // Codex resolves a relative CODEX_HOME against the working directory (it canonicalizes it), so
+  // falling back to ~/.codex would read another history than the one Codex writes.
   assert.equal(
-    resolveCodexSessionsDirectory({ env: { CODEX_HOME: "relative" }, home: "/home/u" }),
+    resolveCodexSessionsDirectory({
+      env: { CODEX_HOME: "relative" },
+      home: "/home/u",
+      cwd: "/work/dir",
+    }),
+    "/work/dir/relative/sessions",
+  );
+  // An empty CODEX_HOME is unset, to Codex and to SNACK.
+  assert.equal(
+    resolveCodexSessionsDirectory({ env: { CODEX_HOME: "" }, home: "/home/u", cwd: "/work" }),
     "/home/u/.codex/sessions",
   );
   assert.equal(
