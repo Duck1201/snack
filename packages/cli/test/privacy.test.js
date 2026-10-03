@@ -3,6 +3,8 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
+import Database from "better-sqlite3";
+
 import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
 import {
@@ -94,6 +96,7 @@ test("no command writes or prints prompt text, credentials, or local paths", asy
     ["sync", "--full"],
     ["status"],
     ["status", "--prompt-file", promptFile],
+    ["status", "--prompt-file", promptFile, "--sequence", "5"],
     ["stats", "--verbose"],
     ["doctor"],
     ["config", "get"],
@@ -103,6 +106,8 @@ test("no command writes or prints prompt text, credentials, or local paths", asy
     ["data", "purge", "--source", "work", "--dry-run"],
     ["data", "purge", "--source", "work", "--prevent-reimport", "--yes"],
     ["sync", "--full"],
+    // After the purge, so the database the sweep reads still holds recorded sequence answers.
+    ["status", "--sequence", "10"],
   ];
 
   /** @type {string[]} */
@@ -134,6 +139,16 @@ test("no command writes or prints prompt text, credentials, or local paths", asy
     snackFiles.some((file) => file.path.endsWith("snack.sqlite3")),
     "the storage database was never created",
   );
+  // The swept database holds recorded sequence answers, so their table is part of the sweep.
+  const database = new Database(fixture.paths.databaseFile, { readonly: true });
+  try {
+    const recorded = /** @type {{total: number}} */ (
+      database.prepare("SELECT COUNT(*) AS total FROM prediction_sequence").get()
+    ).total;
+    assert.ok(recorded > 0, "no sequence answer was recorded");
+  } finally {
+    database.close();
+  }
 
   for (const [name, canary] of Object.entries(privacyCanaries)) {
     const pattern = new RegExp(String(canary), "u");
@@ -157,6 +172,7 @@ test("an error carries no trace of the input that caused it", async () => {
       ["export", "--format", "json", "--output", "-", "--source", String(canary)],
       ["export", "--format", "json", "--output", "-", "--since", String(canary)],
       ["data", "purge", "--source", String(canary), "--yes"],
+      ["status", "--sequence", String(canary)],
     ]) {
       fixture.stdout.value = "";
       fixture.stderr.value = "";

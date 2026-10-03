@@ -33,6 +33,7 @@ const LABEL = 13;
  * @property {{label: string}} risk
  * @property {{level: string, gates?: {id: string, level: string, limiting: boolean}[]}} evidence
  * @property {{id: string, version: string}} method
+ * @property {SequenceView} [sequence] present only when `--sequence` was given
  * @property {string} [model_policy_version]
  * @property {{band: string, score?: number, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[], trend?: {scores: number[]} | null}} pressure
  * @property {string} expected_prompt_category
@@ -41,6 +42,17 @@ const LABEL = 13;
  * @property {string[]} caveats
  * @property {ReportedCapacityView[]} [reported_capacity] present only when a Codex installation feeds
  *   the source
+ */
+
+/**
+ * Sequence viability as the status payload carries it: the user's own length, echoed, and the
+ * probability that that many consecutive prompts all go through.
+ *
+ * @typedef {object} SequenceView
+ * @property {number} length
+ * @property {{lower: number, upper: number}} viability
+ * @property {{label: string}} risk
+ * @property {{id: string, version: string}} method
  */
 
 /**
@@ -144,7 +156,7 @@ const OVERVIEW = [
     header: "NEXT PROMPT",
     width: 11,
     align: "center",
-    read: (status) => `${bare(status.viability.lower)}-${percent(status.viability.upper)}`,
+    read: (status) => interval(status.viability),
   },
   {
     header: "RISK",
@@ -827,15 +839,13 @@ function renderSource(status, paint, verbose) {
   const lines = [
     status.source.alias,
     row(paint, "next prompt", [
-      [
-        `${bare(status.viability.lower)}-${percent(status.viability.upper)} chance it goes through · `,
-        undefined,
-        0,
-      ],
+      [`${interval(status.viability)} chance it goes through · `, undefined, 0],
       // The label is a word first and a colour second, so a colourblind reader, a NO_COLOR
       // terminal and a captured log all read the same sentence.
       [`risk ${status.risk.label}`, SCALE[status.risk.label], 0],
     ]),
+    // Directly beneath the single-prompt row, so the two readings compare line to line.
+    ...(status.sequence === undefined ? [] : [sequenceRow(status.sequence, paint)]),
     row(paint, "evidence", [
       [status.evidence.level, undefined, 0],
       [
@@ -1088,8 +1098,24 @@ function describeContributors(contributors, verbose) {
  */
 function methodRows(status, paint, verbose) {
   const identifier = `${status.method.id}@${status.method.version} · model ${status.model_policy_version ?? "unknown"}`;
+  // The sequence has a named method of its own, and it continues the method block rather than
+  // claiming a second `method` label in the column.
+  const sequenceIdentifier =
+    verbose && status.sequence !== undefined
+      ? [
+          row(paint, "", [
+            [
+              `${status.sequence.method.id}@${status.sequence.method.version} · next ${status.sequence.length}`,
+              undefined,
+              0,
+            ],
+          ]),
+        ]
+      : [];
   if (!isInitialHeuristic(status)) {
-    return verbose ? [row(paint, "method", [[identifier, undefined, 0]])] : [];
+    return verbose
+      ? [row(paint, "method", [[identifier, undefined, 0]]), ...sequenceIdentifier]
+      : [];
   }
   return [
     row(paint, "method", [
@@ -1097,7 +1123,27 @@ function methodRows(status, paint, verbose) {
       [" — no history of your own is behind this yet", "dim", 0],
     ]),
     ...(verbose ? [row(paint, "", [[identifier, undefined, 0]])] : []),
+    ...sequenceIdentifier,
   ];
+}
+
+/**
+ * The sequence row: the same sentence as `next prompt`, about all of the user's `N`.
+ *
+ * The label reads `next 10` under `next prompt`, and the sentence `all 10 go through`; the word
+ * "prompts" is never set beside the number, so nothing here reads as a count a plan allows. At one
+ * the sentence is the `next prompt` sentence, because "all 1 go through" is not English -- and the
+ * two rows then differ only in their label, which is the visible form of the identity.
+ *
+ * @param {SequenceView} sequence
+ * @param {(value: string, style?: Style) => string} paint
+ */
+function sequenceRow(sequence, paint) {
+  const outcome = sequence.length === 1 ? "it goes through" : `all ${sequence.length} go through`;
+  return row(paint, `next ${sequence.length}`, [
+    [`${interval(sequence.viability)} chance ${outcome} · `, undefined, 0],
+    [`risk ${sequence.risk.label}`, SCALE[sequence.risk.label], 0],
+  ]);
 }
 
 /**
@@ -1130,14 +1176,45 @@ function plainly(dimension) {
   return dimension === "prompts" ? "prompt count" : dimension.replaceAll("_", " ");
 }
 
-/** @param {number} value */
-function percent(value) {
-  return `${bare(value)}%`;
+/**
+ * A viability interval in whole percents, rounded outward.
+ *
+ * The lower end is floored and the upper ceiled, so the interval shown always contains the
+ * interval estimated: a reader is never shown more certainty than the estimate has. Rounding to
+ * the nearest percent showed Beta(1, 1.25) at `N = 4`, whose upper end is 0.5015, as `0-50%`
+ * beside a caveat that it cannot tell whether going through is more likely than not.
+ *
+ * Two guards keep the rounding honest. An end within float error of a whole percent is that
+ * percent (`0.95 * 100` is `94.99999999999999`, and is 95), and that snap never lands on 50 from
+ * the far side: an end strictly below even odds stays below 50, one strictly above stays above it.
+ * So an interval wider than one half -- `sequence-width-v1`'s too wide to inform, which always
+ * holds even odds strictly inside it -- always shows 50 strictly inside it too. `--json` carries
+ * the unrounded values; only this human formatting rounds.
+ *
+ * @param {{lower: number, upper: number}} viability
+ */
+function interval(viability) {
+  const lower = clampPercent(Math.floor(snap(viability.lower * 100)));
+  const upper = clampPercent(Math.ceil(snap(viability.upper * 100)));
+  const low = viability.lower < 0.5 ? Math.min(lower, 49) : lower;
+  const high = viability.upper > 0.5 ? Math.max(upper, 51) : upper;
+  // The sign belongs to the range, not to each end of it.
+  return `${low}-${Math.max(low, high)}%`;
 }
 
-/** The sign belongs to the range, not to each end of it. @param {number} value */
-function bare(value) {
-  return (value * 100).toFixed(0);
+/**
+ * A percentage within float error of a whole number is that whole number.
+ *
+ * @param {number} value
+ */
+function snap(value) {
+  const whole = Math.round(value);
+  return Math.abs(value - whole) < 1e-9 ? whole : value;
+}
+
+/** @param {number} value */
+function clampPercent(value) {
+  return Math.min(100, Math.max(0, value));
 }
 
 /** @param {number} seconds */

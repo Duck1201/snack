@@ -101,6 +101,54 @@ test("prediction attempts stay immutable outside a purge", async () => {
   }
 });
 
+test("purge deletes the sequence answers recorded with the forecasts it removes", async () => {
+  const fixture = await makePurgeableHistory();
+  const { databaseFile } = fixture.resolved;
+  await run(["node", "snack", "status", "--no-sync", "--sequence", "10"], fixture.options);
+  assert.equal(count(databaseFile, "prediction_attempt"), 2);
+  assert.equal(count(databaseFile, "prediction_sequence"), 1);
+
+  const preview = await purgeScope(
+    fixture.resolved,
+    { source: "work" },
+    { now: new Date(), preview: true },
+  );
+  const result = await purgeScope(fixture.resolved, { source: "work" }, { now: new Date() });
+
+  assert.equal(count(databaseFile, "prediction_sequence"), 0);
+  assert.equal(count(databaseFile, "prediction_attempt"), 0);
+  // A sequence rides with its forecast: it is counted with it, not beside it, so the purge payload
+  // keeps the shape `data-purge.schema.json` froze.
+  assert.equal(preview.counts.predictions, 2);
+  assert.equal(result.counts.predictions, 2);
+  assert.deepEqual(Object.keys(result.counts).sort(), [
+    "predictions",
+    "prompts",
+    "reported_capacity_observations",
+  ]);
+});
+
+test("recorded sequence answers stay immutable outside a purge", async () => {
+  const fixture = await makePurgeableHistory();
+  await run(["node", "snack", "status", "--no-sync", "--sequence", "3"], fixture.options);
+  const database = new Database(fixture.resolved.databaseFile);
+  try {
+    assert.equal(
+      /** @type {{total: number}} */ (
+        database.prepare("SELECT COUNT(*) AS total FROM prediction_sequence").get()
+      ).total,
+      1,
+    );
+    assert.throws(() => database.prepare("DELETE FROM prediction_sequence").run(), /immutable/u);
+    assert.throws(
+      () => database.prepare("UPDATE prediction_sequence SET risk_label = 'low'").run(),
+      /immutable/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("a dry run previews the same shape it would apply, and changes nothing", async () => {
   const fixture = await makePurgeableHistory();
   const { databaseFile } = fixture.resolved;

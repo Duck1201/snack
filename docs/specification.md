@@ -45,11 +45,12 @@ The primary user is an individual developer who operates AI coding clients local
 
 1. `snack status` runs an incremental synchronization unless `--no-sync` is supplied.
 2. With one source, status shows its detailed assessment.
-3. With multiple sources and no selection, status shows a concise table for all sources.
+3. With multiple sources and no selection, status shows a concise table for all sources; `--verbose`, and from 1.4 `--sequence <n>`, take the detailed shape for each source instead.
 4. `--source <alias>` selects a detailed source assessment.
 5. `--prompt-file <path>` or `--prompt-file -` enables prospective analysis for the selected source.
 6. The forecast displays its assumptions, interval, risk, evidence, method, pressure, freshness, and caveats.
 7. The forecast calculation is stored as an immutable prediction attempt; successful output delivery promotes it to a prediction snapshot through a separate delivery record.
+8. From 1.4, `--sequence <n>` also reports **sequence viability** for a user-supplied number of consecutive prompts, from the same posterior, with its own interval, risk label, evidence level and named method, and says plainly when that interval is too wide to inform ([analysis.md §9.8](./specification/analysis.md#98-sequence-viability), [cli.md §12.3](./specification/cli.md#123-snack-status)). The number is always the user's; SNACK never derives one from a probability.
 
 ### 3.4 Correction Scenario
 

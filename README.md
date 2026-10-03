@@ -36,11 +36,11 @@ SNACK reads that history and turns it into three things:
 ```text
 $ snack status --source work
 work
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  as of        5m ago · sync ok · period since 2026-10-03
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -62,6 +62,43 @@ credentials, and there is no service behind it to send anything to. The one exce
 `snack update`, which installs packages: it carries a package name and a version, and nothing about
 your usage in either direction.
 
+## More than the next one
+
+From `1.4`, `--sequence <n>` puts a second estimate beneath the first: the chance that all of the
+next `<n>` go through, not only the next one.
+
+```text
+$ snack status --source work --sequence 10
+work
+  next prompt  95-100% chance it goes through · risk low
+  next 10      61-100% chance all 10 go through · risk elevated
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     moderate · above 74% of your own history · typical prompt
+  drivers      input tokens, output tokens
+  as of        11m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
+  ! The 10-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.
+```
+
+The `next 10` row is the same kind of answer as `next prompt`: an interval, a risk label read off
+its lower bound, and the evidence level of the single-prompt estimate, read from the same posterior.
+It has a named method of its own, `sequence-bayesian-pressure-band@1` here, which `--verbose` and
+`--json` show.
+
+The number is always yours — a whole number from 1 to 100; anything else exits `2` without repeating
+what you typed. SNACK never works one out for you, and never turns a probability into a count of
+prompts: that count would be a claim about remaining capacity, which is exactly what it does not
+know. The last line above says what the estimate assumes.
+
+When the interval is wider than half the probability scale, a further line says so plainly. On the
+same history, `--sequence 25` reads `29-100%` and adds "The 25-prompt interval is too wide to say
+much; it cannot tell whether all of them going through is more likely than not." That is not the
+tool failing. It is an honest "not enough to say": the range straddles even odds, so it cannot tell
+you whether the whole run is more likely to go through than not. It suggests no fix, because neither
+a shorter sequence nor more history reliably narrows it.
+
 ## Quickstart
 
 Requires Node.js 24 on Linux, macOS, or Windows through WSL2.
@@ -80,17 +117,17 @@ treat their usage as the single pool it really is.
 
 ## Commands
 
-| Command                                     | What it does                                                                                                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                             |
-| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                |
-| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method and the policy versions |
-| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                                               |
-| `snack doctor`                              | Diagnose the local installation without changing it                                                                                            |
-| `snack config`                              | Inspect or update local configuration                                                                                                          |
-| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                         |
-| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                |
-| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                          |
+| Command                                     | What it does                                                                                                                                                                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                                                                                                     |
+| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                                                                                        |
+| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method and the policy versions; `--sequence <n>` adds the chance that all of the next `<n>` go through |
+| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                                                                                                                       |
+| `snack doctor`                              | Diagnose the local installation without changing it                                                                                                                                                                    |
+| `snack config`                              | Inspect or update local configuration                                                                                                                                                                                  |
+| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                                                                                                 |
+| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                                                                                        |
+| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                                                                                                  |
 
 Every command takes `--json` and emits one versioned document. Every command is also in `man snack`,
 generated from the CLI's own flag surface so it cannot describe a version you are not running.
@@ -143,12 +180,12 @@ SNACK's — on a row of its own beside the estimate:
 ```text
 $ snack status --source codex
 codex
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
-  as of        5m ago · sync ok · period since 2026-10-03
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 9m ago
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -181,6 +218,7 @@ Each release had a single job. Nothing shipped until the thing before it was pro
 | `1.1.0`–`1.1.3` | Made to be read. `snack update` puts the CLI and the capture plugin on versions that belong together, and is the only command that reaches the network. `status` became a panel and `stats` a pair of tables, both written in words rather than lines to decode. Three patches came out of racing the published build against a real history. |
 | `1.2.0` `1.2.1` | `status --verbose` gives the method and the evidence gates a human route, `man snack` is generated from the CLI's own flag surface and gated by the build, and a SQLite driver that fails to load is named rather than reported as damaged storage.                                                                                           |
 | `1.3.0`         | Codex CLI, the third client, read from its rollouts by field allowlist. The figure Codex states about its own windows is quoted beside the estimate, never inside it.                                                                                                                                                                         |
+| `1.4.0`         | `status --sequence <n>`: the chance that all of the next `<n>` go through, from the same posterior, with its own interval, risk label and named method, and a plain word when that interval is too wide to inform. The number is always yours; SNACK never derives one.                                                                       |
 
 The full staged plan, with per-wave exit criteria and everything deliberately left out, is in
 [PLAN.md](./PLAN.md).

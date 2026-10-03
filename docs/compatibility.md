@@ -118,7 +118,8 @@ audit adds is evidence that the confirmation is real rather than asserted:
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
 | A document from `0.9` still validates, unchanged         | `packages/cli/test/fixtures/contracts/0.9/`, captured at `v0.9.0`, checked in `contracts.test.js` against today's schemas with no relabelling and no intended break to name |
 | A document from `1.2` still validates, unchanged (from `1.3.0`) | `packages/cli/test/fixtures/contracts/1.2/`, captured at `v1.2.1` before any `1.3` change; `1.2` sits beside `0.9` in `FROZEN_VERSIONS` in `contracts.test.js`, so the same assertion runs over both corpora |
-| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2` and `0.9.0` from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
+| A document from `1.3` still validates, unchanged (from `1.4.0`) | `packages/cli/test/fixtures/contracts/1.3/`, twelve documents captured at `v1.3.0` before any `1.4` change — the first corpus with `setup codex` and a `status` carrying `reported_capacity`; `1.3` is the third entry in `FROZEN_VERSIONS` |
+| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2`, `0.9.0`, `1.2.1` (from `1.3.0`) and `1.3.0` (from `1.4.0`) from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
 | The published matrix names families the product reads    | `contracts.test.js` compares the family identifiers in these documents against the adapters |
 | The artifacts are what passed the gates                  | `npm run release:evidence` — per-tarball checksums, a CycloneDX SBOM per package, and two packs of the same source compared entry by entry |
 
@@ -330,6 +331,50 @@ the one reference to it is set aside, the parent rebuilt, and the reference rest
 derived pointer to the latest statement per source, installation and limit, so `status` reads one
 row per group rather than ranking the history. The pre-migration backup is taken as for every
 migration, and `npm run upgrade:smoke` now upgrades a database left by the published `1.2.1` too.
+
+## What 1.4.0 adds, and why it is a minor
+
+**One new option, additive to the flag surface.** `status --sequence <n>` also assesses sequence
+viability: the probability that all of the next `n` complete without an observed restriction.
+`n` is a whole number from 1 to 100 in its canonical decimal spelling; anything else exits `2`
+(`usage`) with the reason `sequence_length_invalid`, a new reason on an existing exit code, and the
+rejected value is never echoed. The cap is argv policy: raising it later is additive, lowering it
+would be breaking, so it starts at 100. `contracts.test.js` gains the option in its literal map, in
+help order after `--prompt-file`.
+
+**`status --json` gains one optional member per report.** With `--sequence`, each report — the
+single one, or each entry of `sources` — carries `sequence`: `length` (the user's `n`, echoed),
+`viability` (`lower`, `point`, `upper`, `coverage_target`), `risk`, `evidence`, `method`
+(`sequence-<base method>`, version `1`) and `width` (`too_wide`, `max_width`, `policy_version`
+`sequence-width-v1`). Without `--sequence` it is absent — never `null` — and the document is
+byte-identical to `1.3`'s for the same input; a test asserts it. Each report's `caveats` gains the
+sequence caveats, last, only when `--sequence` is given; `caveats` was always an open array of
+strings. `status.schema.json` declares `sequence` in `$defs/report` without a `maximum` on `length`,
+and hoists `risk`, `evidence` and `method` into `$defs` so the report and its sequence share one
+shape; the hoist changes no document's validity. Every frozen corpus — `0.9`, `1.2`, and the `1.3`
+corpus captured at `v1.3.0` before any of this changed — still validates against it, unchanged.
+
+**No version moves.** The envelope stays at `schema_version` 2 — the schema pins it as a constant,
+so bumping it would make every frozen corpus fail — the export at 2, configuration at 1, spool
+events at 1. `PREDICTION_POLICY.version` (`stage5-prediction-v2`) does not move either: the
+posterior is unchanged, and the sequence is a new named method beside it.
+
+**One migration, append-only.** `016` creates `prediction_sequence`, one row per sequence answer,
+keyed on the prediction attempt the same invocation recorded and written in the same transaction;
+immutable on `UPDATE`, and deletable only by `data purge` (the `009` pattern). It is **not
+exported**: a new table in the export document would fail every consumer's version-2 validator. It
+is **not calibrated**: a sequence scored as if it predicted one prompt would corrupt the live
+calibration stream (ADR-0008), so `stats` is byte-identical whether or not `--sequence` was ever
+used, and a test asserts it. `data purge` deletes the rows with their attempts and counts them with
+`counts.predictions`, so `data-purge.schema.json` does not move. The pre-migration backup is taken as
+for every migration; `storage.test.js` upgrades every published schema level, `1.3.0`'s included,
+straight to `016`, and `npm run upgrade:smoke` upgrades a database the published `1.3.0` wrote.
+
+**Human formatting only: intervals are rounded outward.** Every viability interval the human
+`status` output shows — the overview column, `next prompt` and `next <n>` — floors its lower end and
+ceils its upper end to a whole percent, where `1.3` rounded both to the nearest one. A shown end can
+move by one point (`0.6394` was `64` and is `63`). Human formatting is not a frozen surface, and no
+`--json` value, corpus document or export byte changes with it.
 
 ## Upgrading from 0.6+
 

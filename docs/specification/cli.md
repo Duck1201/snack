@@ -52,7 +52,7 @@ The plan label and the plan profile are asked as two separate questions, because
 
 ```text
 snack status [--source <alias>] [--no-sync]
-             [--prompt-file <path|->] [--verbose] [--json]
+             [--prompt-file <path|->] [--sequence <n>] [--verbose] [--json]
 ```
 
 Human output has two shapes, chosen by whether a source is named, because they answer two different
@@ -82,6 +82,16 @@ what it is the probability of, the risk label, the evidence level with a plain s
 that level supports, the pressure band with the reading behind it, the top pressure contributors,
 the expected prompt category, the active period, the data age, the synchronization status, and the
 uncertainty statement.
+
+**A shown interval is rounded outward.** Every viability interval a human surface shows — the
+overview's `NEXT PROMPT` column, the `next prompt` row, the `next <n>` row — is stated in whole
+percents with its lower end rounded down and its upper end rounded up, so the interval shown always
+contains the interval estimated and never claims more certainty than the estimate has. An end within
+float error of a whole percent is that percent (`0.95` shows as `95`, not `94`), and that allowance
+never carries an end across even odds: an end below one half shows below `50`, one above it shows
+above `50`. From 1.4.0; rounding to the nearest percent before it showed an upper end of `0.5015` as
+`50%`. The `--json` values are unrounded and unchanged; only the human formatting rounds, and it is
+not a frozen surface.
 
 The method identifier and its version, the model policy version, the evidence gates, and the
 percentile each pressure contributor ranks at are **not** in the default human output. They identify
@@ -140,6 +150,49 @@ limit, its latest statement, each window carrying `reset_passed` — absent for 
 installation feeds. A figure is attributed to a source only when the stating thread's provider maps
 to that one source; while the provider maps to more than one source of the installation, it waits
 with that thread's prompts.
+
+**With `--sequence <n>`, a second estimate beneath the first.** From 1.4, `--sequence <n>` also
+assesses **sequence viability**: the probability that prompts sent one after another — all of the
+next `n` — complete without an observed restriction. `n` is the user's own number, a whole number from 1 to
+100 written in its canonical decimal form; anything else — `0`, `101`, `010`, `+5`, `5.0`, `1e1`,
+a leading space, an empty value, other scripts' digits — exits `2` with `sequence_length_invalid` and the
+message `--sequence takes a whole number from 1 to 100.`, never repeating the rejected value. It is
+validated before anything else runs, so a rejected value creates no database and records no
+forecast.
+
+The panel gains one row directly beneath `next prompt`, so the two readings compare line to line.
+
+```text
+work
+  next prompt  95-100% chance it goes through · risk low
+  next 10      61-100% chance all 10 go through · risk elevated
+```
+
+The label is `next <n>`; the sentence is `{lower}-{upper}% chance all {n} go through · risk {label}`,
+or, at `n = 1`, the `next prompt` sentence itself, because "all 1 go through" is not English — the
+two rows then differ only in their label. The word "prompts" is never set beside the number, and no
+phrase on any surface says how many prompts are left, remain, or are available: the number is an
+echo of argv, and SNACK never derives one from a probability. The risk label is read from the
+sequence's own lower bound under the same risk policy; the evidence level is the single-prompt
+one. `--sequence` takes the panel shape even without a source selection, as `--verbose` does: the
+row's label carries `n`, and a header built for it would change width with every invocation.
+`--verbose` continues the method block with the sequence method, `sequence-<method>@1 · next <n>`.
+
+For `n` of 2 or more, each report carries a caveat naming what the estimate assumes: "The
+10-prompt estimate assumes each prompt meets the conditions the next one does; it does not model
+usage pressure rising as they are sent." At `n = 1` there is no next prompt to assume about, and the
+caveat is omitted. When the sequence interval is wider than half the probability scale
+(`sequence-width-v1`), a further caveat says so plainly — "The 10-prompt interval is too wide to say
+much; it cannot tell whether all of them going through is more likely than not." — so that a
+`0-79%` reads as an honest "not enough to say" rather than as a broken tool. At `n = 1`, where "all
+of them" is as wrong as "all 1", it speaks of the next prompt as the `next prompt` row does: "The
+1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to
+go through than not." It names no remedy:
+neither a shorter sequence nor more history always narrows the interval. Each is shared beneath the
+panels when every source carries it, by the rule above. In `--json` each report gains the
+optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without
+`--sequence` it is absent and every byte is what 1.3 emitted. The mathematics is
+[analysis.md §9.8](analysis.md).
 
 `status` draws no chart. The window scores remain in `pressure.trend` in `--json`; the drawing of
 them belongs to a surface with room for a series worth drawing.

@@ -36,11 +36,11 @@ O SNACK lê esse histórico e transforma em três coisas:
 ```text
 $ snack status --source work
 work
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  as of        5m ago · sync ok · period since 2026-10-03
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -62,6 +62,43 @@ existe serviço por trás para onde mandar qualquer coisa. A única exceção é
 instala pacotes: ele carrega um nome de pacote e uma versão, e nada sobre o seu uso, em nenhuma das
 direções.
 
+## Mais do que o próximo
+
+A partir da `1.4`, `--sequence <n>` põe uma segunda estimativa abaixo da primeira: a chance de que
+todos os próximos `<n>` passem, e não só o próximo.
+
+```text
+$ snack status --source work --sequence 10
+work
+  next prompt  95-100% chance it goes through · risk low
+  next 10      61-100% chance all 10 go through · risk elevated
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     moderate · above 74% of your own history · typical prompt
+  drivers      input tokens, output tokens
+  as of        11m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
+  ! The 10-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.
+```
+
+A linha `next 10` é o mesmo tipo de resposta que `next prompt`, tirada do mesmo posterior: um
+intervalo, um rótulo de risco lido pela base desse intervalo, e o nível de evidência da estimativa
+do próximo prompt. Ela tem um método nomeado próprio, aqui `sequence-bayesian-pressure-band@1`, que
+o `--verbose` e o `--json` mostram.
+
+O número é sempre seu — um inteiro de 1 a 100; qualquer outra coisa sai com `2` sem repetir o que
+você digitou. O SNACK nunca calcula um para você, e nunca transforma uma probabilidade numa contagem
+de prompts: essa contagem seria uma afirmação sobre capacidade restante, que é exatamente o que ele
+não sabe. A última linha acima diz o que a estimativa supõe.
+
+Quando o intervalo é mais largo que metade da escala de probabilidade, mais uma linha diz isso com
+todas as letras. No mesmo histórico, `--sequence 25` dá `29-100%` e acrescenta "The 25-prompt
+interval is too wide to say much; it cannot tell whether all of them going through is more likely
+than not." Isso não é a ferramenta falhando. É um "não dá para dizer" honesto: a faixa atravessa o
+meio a meio, então não consegue dizer se é mais provável a sequência inteira passar do que não. Ela
+não sugere conserto, porque nem uma sequência mais curta nem mais histórico a estreitam sempre.
+
 ## Começando
 
 Requer Node.js 24 em Linux, macOS ou Windows via WSL2.
@@ -80,17 +117,17 @@ fonte de capacidade, e o SNACK trata o uso deles como o pote único que de fato 
 
 ## Comandos
 
-| Comando                                     | O que faz                                                                                                                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                                              |
-| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                                                       |
-| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência, o método e as versões de política |
-| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                                                 |
-| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                                                  |
-| `snack config`                              | Consulta ou atualiza a configuração local                                                                                                                     |
-| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                                           |
-| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                                        |
-| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                                           |
+| Comando                                     | O que faz                                                                                                                                                                                                                                 |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Mapeia uma fonte de capacidade; opcionalmente registra o plugin de captura ao vivo (só OpenCode)                                                                                                                                          |
+| `snack sync`                                | Importa histórico novo; `--full` relê e reconcilia tudo                                                                                                                                                                                   |
+| `snack status`                              | Avalia o próximo prompt, com pressão de uso contra a sua própria linha de base; `--verbose` mostra os portões de evidência, o método e as versões de política; `--sequence <n>` acrescenta a chance de que todos os próximos `<n>` passem |
+| `snack stats`                               | Descreve o uso observado em horizontes móveis; `--verbose` detalha por modelo                                                                                                                                                             |
+| `snack doctor`                              | Diagnostica a instalação local sem alterá-la                                                                                                                                                                                              |
+| `snack config`                              | Consulta ou atualiza a configuração local                                                                                                                                                                                                 |
+| `snack export`                              | Escreve suas observações e previsões em JSON ou CSV                                                                                                                                                                                       |
+| `snack data purge`                          | Apaga observações armazenadas, opcionalmente bloqueando a reimportação                                                                                                                                                                    |
+| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam entre si                                                                                                                                                                       |
 
 Todo comando aceita `--json` e emite um documento versionado. Todo comando também está no
 `man snack`, gerado a partir da própria superfície de flags do CLI, então ele não descreve uma
@@ -146,12 +183,12 @@ do cliente, não do SNACK — numa linha só dele, ao lado da estimativa:
 ```text
 $ snack status --source codex
 codex
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
-  as of        5m ago · sync ok · period since 2026-10-03
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 9m ago
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -184,6 +221,7 @@ Cada release teve um único trabalho. Nada foi adiante antes de a anterior estar
 | `1.1.0`–`1.1.3` | Feito para ser lido. `snack update` põe o CLI e o plugin de captura em versões que combinam, e é o único comando que alcança a rede. `status` virou um painel e `stats` um par de tabelas, ambos escritos em palavras em vez de linhas para decifrar. Três patches saíram de rodar a build publicada contra um histórico real. |
 | `1.2.0` `1.2.1` | `status --verbose` dá ao método e aos portões de evidência um caminho humano, `man snack` é gerado da própria superfície de flags do CLI e verificado pela build, e um driver SQLite que não carrega é nomeado em vez de reportado como armazenamento danificado.                                                              |
 | `1.3.0`         | Codex CLI, o terceiro cliente, lido dos rollouts por lista de campos permitidos. O número que o Codex declara sobre as próprias janelas é citado ao lado da estimativa, nunca dentro dela.                                                                                                                                     |
+| `1.4.0`         | `status --sequence <n>`: a chance de que todos os próximos `<n>` passem, do mesmo posterior, com intervalo, rótulo de risco e método nomeado próprios, e uma palavra clara quando esse intervalo é largo demais para informar. O número é sempre seu; o SNACK nunca deriva um.                                                 |
 
 O plano completo por estágios, com critérios de saída por onda e tudo que ficou deliberadamente de
 fora, está no [PLAN.md](./PLAN.md).

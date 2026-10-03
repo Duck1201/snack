@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import fc from "fast-check";
+
 import { renderStats, renderStatus, renderStatusTable, sparkline } from "../src/render.js";
 
 test("a series of scores draws one block per window, low to high", () => {
@@ -814,4 +816,259 @@ test("a source no Codex installation feeds has no reported row; one that stated 
     renderStatus([statusFor({ reported_capacity: [] })], { color: false }),
     / {2}reported {5}no figure stated by Codex yet/u,
   );
+});
+
+/**
+ * @param {number} length
+ * @param {{lower: number, upper: number}} viability
+ * @param {string} [label]
+ */
+function sequenceFor(length, viability, label = "elevated") {
+  return {
+    length,
+    viability: {
+      ...viability,
+      point: (viability.lower + viability.upper) / 2,
+      coverage_target: 0.8,
+    },
+    risk: { label, policy_version: "stage2-risk-v2" },
+    method: { id: "sequence-bayesian-pressure-band", version: "1" },
+  };
+}
+
+test("the sequence row sits beneath the next prompt row and says all of them go through", () => {
+  const text = renderStatus(
+    [statusFor({ sequence: sequenceFor(10, { lower: 0.6394, upper: 0.9974 }) })],
+    { color: false },
+  );
+  const lines = text.split("\n");
+
+  assert.equal(lines[1], "  next prompt  95-100% chance it goes through · risk low");
+  assert.equal(lines[2], "  next 10      63-100% chance all 10 go through · risk elevated");
+  // The word "prompts" is never set beside the number, so the row cannot read as a count a plan
+  // allows; the only integers in it besides the interval are the user's own N, echoed.
+  assert.doesNotMatch(lines[2], /\d+\s+prompts?/u);
+  assert.deepEqual(
+    lines[2]
+      .replace(/\d+-\d+%/u, "")
+      .match(/\d+/gu)
+      ?.map(Number),
+    [10, 10],
+  );
+});
+
+test("a sequence of one reads exactly as the next prompt row, under its own label", () => {
+  const text = renderStatus(
+    [statusFor({ sequence: sequenceFor(1, { lower: 0.95, upper: 1 }, "low") })],
+    { color: false },
+  );
+  const [, single = "", sequence = ""] = text.split("\n");
+
+  assert.equal(sequence, "  next 1       95-100% chance it goes through · risk low");
+  assert.equal(sequence.slice(15), single.slice(15));
+});
+
+test("the longest sequence keeps its label inside the label column", () => {
+  const text = renderStatus(
+    [statusFor({ sequence: sequenceFor(100, { lower: 0, upper: 0.12 }, "high") })],
+    { color: false },
+  );
+
+  assert.match(text, /\n {2}next 100 {5}0-12% chance all 100 go through · risk high\n/u);
+});
+
+test("the sequence risk is a word first and a colour second", () => {
+  const status = statusFor({ sequence: sequenceFor(10, { lower: 0.3, upper: 0.8 }, "high") });
+  const plain = renderStatus([status], { color: false });
+  const coloured = renderStatus([status], { color: true });
+
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.equal(coloured.replace(/\u001B\[[0-9;]*m/gu, ""), plain);
+  // eslint-disable-next-line no-control-regex -- matching the escape is the assertion
+  assert.match(coloured, /all 10 go through · \u001B\[[0-9;]+mrisk high\u001B/u);
+});
+
+test("the verbose panel continues the method block with the sequence method", () => {
+  const verbose = renderStatus(
+    [statusFor({ sequence: sequenceFor(10, { lower: 0.6, upper: 0.99 }) })],
+    { color: false, verbose: true },
+  );
+
+  assert.match(
+    verbose,
+    / {2}method {7}bayesian-pressure-band@1 · model stage5-prediction-v2\n {15}sequence-bayesian-pressure-band@1 · next 10\n/u,
+  );
+  assert.doesNotMatch(
+    renderStatus([statusFor({ sequence: sequenceFor(10, { lower: 0.6, upper: 0.99 }) })], {
+      color: false,
+    }),
+    /sequence-bayesian-pressure-band/u,
+  );
+});
+
+test("a verbose heuristic panel names the sequence method after the base one", () => {
+  const verbose = renderStatus(
+    [
+      statusFor({
+        method: { id: "initial-generic", version: "1" },
+        evidence: { level: "very_low", policy_version: "1", gates: [] },
+        sequence: {
+          ...sequenceFor(5, { lower: 0, upper: 0.9 }, "high"),
+          method: { id: "sequence-initial-generic", version: "1" },
+        },
+      }),
+    ],
+    { color: false, verbose: true },
+  );
+
+  assert.match(
+    verbose,
+    / {2}method {7}initial heuristic — [^\n]*\n {15}initial-generic@1 · model [^\n]*\n {15}sequence-initial-generic@1 · next 5\n/u,
+  );
+});
+
+test("a sequence caveat every panel carries is stated once beneath them", () => {
+  const caveat =
+    "The 5-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.";
+  const text = renderStatus(
+    [
+      statusFor({
+        source: { alias: "one", active_period: { started_at: null } },
+        sequence: sequenceFor(5, { lower: 0.8, upper: 0.99 }, "low"),
+        caveats: ["Real provider capacity is unknown.", caveat],
+      }),
+      statusFor({
+        source: { alias: "two", active_period: { started_at: null } },
+        sequence: sequenceFor(5, { lower: 0.7, upper: 0.99 }, "elevated"),
+        caveats: ["Real provider capacity is unknown.", caveat],
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.equal(text.split("\n").filter((line) => line.includes(caveat)).length, 1);
+  assert.equal(text.split("\n").filter((line) => line.startsWith("  next 5 ")).length, 2);
+});
+
+/**
+ * The two ends of every interval a status panel shows, as numbers, in the order they appear.
+ *
+ * @param {string} text
+ */
+function shownIntervals(text) {
+  return [...text.matchAll(/(\d+)-(\d+)% chance/gu)].map((match) => [
+    Number(match[1]),
+    Number(match[2]),
+  ]);
+}
+
+test("a shown interval is rounded outward, so it contains the estimate it stands for", () => {
+  // Beta(1, 1.25) at N = 4 has an upper end of 0.5015. Rounded to the nearest percent it read
+  // `0-50%` beside a caveat saying the interval cannot tell whether going through is more likely
+  // than not -- which a `0-50%` plainly can. Floor the lower end, ceil the upper.
+  const text = renderStatus(
+    [
+      statusFor({
+        viability: { lower: 0.1249, point: 0.2, upper: 0.5015, coverage_target: 0.8 },
+        sequence: sequenceFor(4, { lower: 0.0001, upper: 0.5015 }, "high"),
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.deepEqual(shownIntervals(text), [
+    [12, 51],
+    [0, 51],
+  ]);
+  // The overview's column is the same interval, so it rounds the same way.
+  const overview = renderStatusTable(
+    [statusFor({ viability: { lower: 0.1249, point: 0.2, upper: 0.5015, coverage_target: 0.8 } })],
+    { color: false, columns: 80 },
+  );
+  assert.match(overview, / 12-51% /u);
+});
+
+test("an end that is a whole percent before floating error is not pushed a point outward", () => {
+  // 0.95 * 100 is 94.99999999999999 and 0.07 * 100 is 7.000000000000001; both are the whole
+  // percent they were written as, and a bare floor and ceil would show `94` and `8`.
+  const text = renderStatus(
+    [
+      statusFor({
+        viability: { lower: 0.95, point: 0.97, upper: 0.99, coverage_target: 0.8 },
+        sequence: sequenceFor(3, { lower: 0.07, upper: 0.29 }, "high"),
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.deepEqual(shownIntervals(text), [
+    [95, 99],
+    [7, 29],
+  ]);
+});
+
+test("every shown interval contains the true one and stays inside 0-100", () => {
+  const unit = fc.double({ min: 0, max: 1, noNaN: true });
+  fc.assert(
+    fc.property(unit, unit, unit, unit, (a, b, c, d) => {
+      const [lower, upper] = a <= b ? [a, b] : [b, a];
+      const [sequenceLower, sequenceUpper] = c <= d ? [c, d] : [d, c];
+      const text = renderStatus(
+        [
+          statusFor({
+            viability: { lower, point: lower, upper, coverage_target: 0.8 },
+            sequence: sequenceFor(7, { lower: sequenceLower, upper: sequenceUpper }, "high"),
+          }),
+        ],
+        { color: false },
+      );
+      const truth = [
+        [lower, upper],
+        [sequenceLower, sequenceUpper],
+      ];
+      const shown = shownIntervals(text);
+      assert.equal(shown.length, 2);
+      shown.forEach(([low = NaN, high = NaN], index) => {
+        const [trueLow = NaN, trueHigh = NaN] = truth[index] ?? [];
+        // A whole-percent end may sit within float error of its true value, never further.
+        assert.ok(low <= trueLow * 100 + 1e-6, `${low} above ${trueLow}`);
+        assert.ok(high >= trueHigh * 100 - 1e-6, `${high} below ${trueHigh}`);
+        assert.ok(low >= 0 && high <= 100 && low <= high);
+      });
+    }),
+    { numRuns: 2000 },
+  );
+});
+
+test("a too-wide sequence interval always shows even odds strictly inside it", () => {
+  // `sequence-width-v1` flags an interval wider than one half, which necessarily holds 0.5 strictly
+  // inside it. The caveat says so in words, so the shown interval must say so in digits: an end
+  // that rounds onto 50 from the far side would contradict the sentence beneath it.
+  const unit = fc.double({ min: 0, max: 1, noNaN: true });
+  fc.assert(
+    fc.property(unit, unit, (a, b) => {
+      const [lower, upper] = a <= b ? [a, b] : [b, a];
+      fc.pre(upper - lower > 0.5);
+      const text = renderStatus(
+        [statusFor({ sequence: sequenceFor(9, { lower, upper }, "high") })],
+        { color: false },
+      );
+      const [low = NaN, high = NaN] = shownIntervals(text)[1] ?? [];
+      assert.ok(low < 50 && high > 50, `${low}-${high}% for ${lower}-${upper}`);
+    }),
+    { numRuns: 2000 },
+  );
+  /** @type {[number, number][]} */
+  const edges = [
+    [0.4999999999999, 0.99999999999995],
+    [0.0001, 0.5015],
+    [0.4999, 1],
+  ];
+  for (const [lower, upper] of edges) {
+    const text = renderStatus([statusFor({ sequence: sequenceFor(9, { lower, upper }, "high") })], {
+      color: false,
+    });
+    const [low = NaN, high = NaN] = shownIntervals(text)[1] ?? [];
+    assert.ok(low < 50 && high > 50, `${low}-${high}% for ${lower}-${upper}`);
+  }
 });

@@ -27,11 +27,11 @@ snack status
 ```text
 $ snack status --source work
 work
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  as of        5m ago · sync ok · period since 2026-10-03
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -45,7 +45,7 @@ Here is what each piece means, no statistics required:
 
 | You see                                        | It means                                                                                                                            |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `96-100% chance it goes through`               | A range, not a promise. Somewhere in there is the chance your next prompt completes.                                                |
+| `95-100% chance it goes through`               | A range, not a promise. Somewhere in there is the chance your next prompt completes.                                                |
 | `risk low`                                     | Read off the **bottom** of that range, never the middle. A wide range can never look confident.                                     |
 | `evidence moderate`                            | How much your own history actually backs this up. A fresh install says `very_low`, and means it.                                    |
 | `pressure high`                                | You, right now, compared to you on a normal day. Nothing to do with your provider's limits.                                         |
@@ -71,6 +71,43 @@ Two gates hold this one at `moderate`: `restrictions`, because SNACK has not yet
 this pressure, and `relevance`, because the estimate pools prompts of every size at this pressure
 rather than only prompts like yours. More prompts alone will not lift it. Plain `snack status`, with
 no `--source`, puts every source on one row so you can compare them.
+
+Planning a run rather than a single prompt? `--sequence <n>` adds the chance that all of the next
+`<n>` go through, on a row of its own directly beneath `next prompt`:
+
+```text
+$ snack status --source work --sequence 10
+work
+  next prompt  95-100% chance it goes through · risk low
+  next 10      61-100% chance all 10 go through · risk elevated
+  evidence     moderate — some history, but few refusals seen yet
+  pressure     moderate · above 74% of your own history · typical prompt
+  drivers      input tokens, output tokens
+  as of        11m ago · sync ok · period since 2026-10-03
+  ! The estimate is not yet calibrated against observed outcomes.
+  ! Real provider capacity is unknown.
+  ! Usage pressure compares this window with local history; it is not a share of capacity.
+  ! The 10-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.
+```
+
+| You see                            | It means                                                                                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `next 10`                          | The number you asked about, echoed back. SNACK never picks it, and never tells you how far you can go.                                   |
+| `61-100% chance all 10 go through` | A range for the whole run. Lower than the single-prompt one, because every one of them has to make it.                                   |
+| `risk elevated`                    | Read off the bottom of that range, under the same thresholds as `next prompt`.                                                           |
+| the last `!`                       | What the estimate assumes: each prompt meets the conditions the next one does, with no allowance for pressure climbing as you send them. |
+
+The number is a whole number from 1 to 100, and anything else exits `2` without repeating what you
+typed. The evidence level is the single-prompt one, because the history behind both is the same, and
+the method has its own name — `sequence-bayesian-pressure-band@1` here — on the `--verbose` method
+row and in `--json`.
+
+Ask about a long enough run on a short enough history and the range gets wide. When it is wider than
+half the scale, the panel says so: on this same history `--sequence 25` reads `29-100%` and adds
+"The 25-prompt interval is too wide to say much; it cannot tell whether all of them going through is
+more likely than not." Read that as an honest "not enough to say", not as a broken tool: a range
+that straddles even odds cannot tell you whether the run is more likely to go through than not. It
+suggests no fix, because neither a shorter sequence nor more history reliably narrows it.
 
 And `snack stats` shows you what your week actually looked like:
 
@@ -123,17 +160,17 @@ fails the build if a single one shows up in any byte SNACK writes.
 
 ## The commands
 
-| Command                                     | What it does                                                                                                                                                       |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                          |
-| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method and the policy versions. |
-| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored.                                                                       |
-| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                           |
-| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                               |
-| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                  |
-| `snack config`                              | Reads and edits local configuration.                                                                                                                               |
-| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                       |
-| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                            |
+| Command                                     | What it does                                                                                                                                                                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                                                                                                  |
+| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method and the policy versions; `--sequence <n>` adds the chance that all of the next `<n>` go through. |
+| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored.                                                                                                                                               |
+| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                                                                                                   |
+| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                                                                                                       |
+| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                                                                                          |
+| `snack config`                              | Reads and edits local configuration.                                                                                                                                                                                                       |
+| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                                                                                               |
+| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                                                                                                    |
 
 Every command takes `--json` and answers with one versioned document, so scripting it never means
 parsing prose. Every command is also in `man snack`, which ships in the package and is generated
@@ -231,6 +268,36 @@ weekend from looking like a collapse in usage. A minimum number of baseline wind
 before any window is ranked at all; below it, pressure reports `unknown` instead of guessing.
 
 Pressure is relative to you. It is not, and is never presented as, a fraction of provider capacity.
+
+#### Sequence viability
+
+`--sequence <n>` asks about a run instead of one prompt — all of the next `n` — from the same
+posterior `p ~ Beta(α, β)`. The point is the posterior predictive probability that all `n` complete,
+`E[pⁿ] = ∏ (α + k) / (α + β + k)` for `k` from `0` to `n − 1` — the Beta-Binomial probability of `n`
+successes in `n` trials. The tempting shortcut, the point estimate raised to the `n`th power, is
+never computed: by Jensen's inequality it is always lower, because it treats the estimate as known
+and so counts its uncertainty twice.
+
+The interval needs no new quantile. `p ↦ pⁿ` is increasing on `[0, 1]`, so the single-prompt bounds
+raised to `n` are the sequence's bounds at the same `coverage_target`. On a weak posterior and a
+long sequence the mean can sit just above the powered upper bound; the interval is then widened to
+contain it, which only adds coverage, so the target stays an honest floor. Risk is read off the
+lower bound under the same thresholds; evidence is inherited unchanged, with no gate of its own. A
+different estimand is a different named method, `sequence-<base method>@1`, and at `n = 1` every
+member equals the single-prompt answer bit for bit.
+
+An interval wider than one half (`sequence-width-v1`) necessarily contains one half, so it cannot
+say whether the run is more likely to go through than not, and the panel says so. The width
+`upperⁿ − lowerⁿ` is not monotone in `n`, and one more success can widen it, which is why that
+caveat recommends nothing.
+
+The relation runs one way only, `(posterior, n) → probability`. Nothing in SNACK solves for `n`
+given a probability — a test scans the source for any such solver — because that `n` would be a
+claim about the capacity a plan allows. `n` stops at 100: past that, the answer is the prior's tail
+raised to a power rather than a reading of your history. Each answer is recorded beside its
+prediction attempt, with the posterior that produced it, but it is not exported and not yet
+calibrated: a sequence scored as if it predicted one prompt would corrupt the live calibration
+stream.
 
 #### Calibration: does any of this work?
 
@@ -340,12 +407,12 @@ The figure Codex states about its own windows is quoted on the `reported` row of
 ```text
 $ snack status --source codex
 codex
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
-  as of        5m ago · sync ok · period since 2026-10-03
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 9m ago
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.

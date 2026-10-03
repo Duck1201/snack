@@ -2255,13 +2255,35 @@ async function pathExists(path) {
  */
 
 /**
- * Store one immutable prediction attempt.
+ * The sequence answer one `status --sequence` invocation recorded beside its attempt.
+ *
+ * @typedef {object} PredictionSequenceRow
+ * @property {number} length
+ * @property {string} method_id
+ * @property {string} method_version
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ * @property {number} coverage_target
+ * @property {string} risk_label
+ * @property {string} risk_policy_version
+ * @property {0 | 1} width_too_wide
+ * @property {string} width_policy_version
+ * @property {number} posterior_alpha
+ * @property {number} posterior_beta
+ */
+
+/**
+ * Store one immutable prediction attempt, and the sequence answer the same invocation gave when
+ * one was asked for -- in one transaction, so an attempt never exists without the sequence the
+ * user was shown beside it.
  *
  * @param {string} databaseFile
  * @param {Record<string, unknown>} attempt
+ * @param {PredictionSequenceRow} [sequence]
  * @returns {number} attempt id
  */
-export function recordPredictionAttempt(databaseFile, attempt) {
+export function recordPredictionAttempt(databaseFile, attempt, sequence) {
   const database = new Database(databaseFile, { fileMustExist: true });
   try {
     database.pragma("foreign_keys = ON");
@@ -2293,13 +2315,31 @@ export function recordPredictionAttempt(databaseFile, attempt) {
       "data_as_of",
       "completeness",
     ];
-    const result = database
-      .prepare(
-        `INSERT INTO prediction_attempt (${columns.join(", ")})
-         VALUES (${columns.map((column) => `@${column}`).join(", ")})`,
-      )
-      .run(Object.fromEntries(columns.map((column) => [column, attempt[column] ?? null])));
-    return Number(result.lastInsertRowid);
+    const insert = database.transaction(() => {
+      const result = database
+        .prepare(
+          `INSERT INTO prediction_attempt (${columns.join(", ")})
+           VALUES (${columns.map((column) => `@${column}`).join(", ")})`,
+        )
+        .run(Object.fromEntries(columns.map((column) => [column, attempt[column] ?? null])));
+      const id = Number(result.lastInsertRowid);
+      if (sequence !== undefined) {
+        database
+          .prepare(
+            `INSERT INTO prediction_sequence
+               (prediction_attempt_id, length, method_id, method_version, lower, point, upper,
+                coverage_target, risk_label, risk_policy_version, width_too_wide,
+                width_policy_version, posterior_alpha, posterior_beta)
+             VALUES
+               (@prediction_attempt_id, @length, @method_id, @method_version, @lower, @point,
+                @upper, @coverage_target, @risk_label, @risk_policy_version, @width_too_wide,
+                @width_policy_version, @posterior_alpha, @posterior_beta)`,
+          )
+          .run({ ...sequence, prediction_attempt_id: id });
+      }
+      return id;
+    });
+    return insert();
   } finally {
     database.close();
   }
@@ -2627,6 +2667,14 @@ function purgeScopeLocked(paths, scope, options) {
               SELECT id FROM prediction_attempt WHERE ${attemptFilter})`,
         )
         .run(parameters);
+      // A sequence answer rides with its attempt: it goes with it, and is counted with it.
+      database
+        .prepare(
+          `DELETE FROM prediction_sequence
+            WHERE prediction_attempt_id IN (
+              SELECT id FROM prediction_attempt WHERE ${attemptFilter})`,
+        )
+        .run(parameters);
       const deletedPredictions = database
         .prepare(`DELETE FROM prediction_attempt WHERE ${attemptFilter}`)
         .run(parameters).changes;
@@ -2855,12 +2903,14 @@ export async function assertReadableStorage(databaseFile) {
     // is. Every upgrade passes through this state, so the honest answer names the way out.
     const pending = available.filter((migration) => !applied.has(migration.number));
     if (pending.length > 0) {
-      throw new SnackError(
-        `Storage is at an older schema: ${pending.length} migration${
-          pending.length === 1 ? "" : "s"
-        } have not been applied. Run \`snack sync\` to apply them; a backup is taken first.`,
-        { code: ExitCode.storage, reason: "storage_migrations_pending" },
-      );
+      const counted =
+        pending.length === 1
+          ? "1 migration has not been applied. Run `snack sync` to apply it"
+          : `${pending.length} migrations have not been applied. Run \`snack sync\` to apply them`;
+      throw new SnackError(`Storage is at an older schema: ${counted}; a backup is taken first.`, {
+        code: ExitCode.storage,
+        reason: "storage_migrations_pending",
+      });
     }
   } catch (error) {
     if (error instanceof SnackError) throw error;

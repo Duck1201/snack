@@ -1,6 +1,6 @@
 import { assignPressureBands } from "./analytics.js";
 import { resolvePlanProfile } from "./plan-profile.js";
-import { buildForecast } from "./prediction.js";
+import { assessSequence, buildForecast } from "./prediction.js";
 
 /**
  * Assemble the status document for one capacity source.
@@ -14,6 +14,8 @@ import { buildForecast } from "./prediction.js";
  * @param {{performed: boolean, status: string}} [synchronization]
  * @param {{band: string, policy_version: string, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[]}} [pressure] usage pressure for the primary horizon
  * @param {{outcomes?: import("./prediction.js").OutcomeRow[], windowSeconds?: number, category?: string, prospective?: object, completeness?: {level: "complete" | "partial" | "unknown", reasons: string[], policy_version: string}}} [history]
+ * @param {{sequenceLength?: number}} [request] what the user asked for beyond the next prompt:
+ *   `sequenceLength` is the number passed to `--sequence`, already validated, and absent without it
  */
 export function createSourceStatus(
   source,
@@ -22,6 +24,7 @@ export function createSourceStatus(
   synchronization = { performed: false, status: "not_requested" },
   pressure = { band: "unknown", policy_version: "no-analytics" },
   history = {},
+  request = {},
 ) {
   const planProfile = resolvePlanProfile(source).profile;
   const asOf = observed.as_of;
@@ -47,6 +50,12 @@ export function createSourceStatus(
     outcomes,
     dataCompleteness: completeness.level,
   });
+  // The one call site. The length is the user's number and only ever travels inward: nothing
+  // searches for a length that meets a probability (docs/specification/analysis.md §9.8).
+  const sequence =
+    request.sequenceLength === undefined
+      ? undefined
+      : assessSequence(forecast, request.sequenceLength);
 
   return {
     source: {
@@ -66,6 +75,8 @@ export function createSourceStatus(
     risk: forecast.risk,
     evidence: forecast.evidence,
     method: forecast.method,
+    // Absent, never null, without `--sequence`: the document is then the one 1.3 emitted.
+    ...(sequence === undefined ? {} : { sequence }),
     model_policy_version: forecast.model_policy_version,
     contributors: forecast.contributors,
     pressure,
@@ -90,8 +101,44 @@ export function createSourceStatus(
         : "The estimate is not yet calibrated against observed outcomes.",
       "Real provider capacity is unknown.",
       "Usage pressure compares this window with local history; it is not a share of capacity.",
+      ...(sequence === undefined ? [] : sequenceCaveats(sequence)),
     ],
   };
+}
+
+/**
+ * What a sequence estimate does not claim, said once per report.
+ *
+ * The first caveat is the assumption the evidence gates cannot see: every prompt is taken to meet
+ * the band and category the next one does. A sequence of one has no next prompt to assume about,
+ * so it is omitted there. The second is owed only when the interval is too wide to inform
+ * (`SEQUENCE_WIDTH_POLICY`), so that a `0-79%` reads as an honest "not enough to say" rather than
+ * as a broken tool. It states the rule and nothing more: the width `upper^N - lower^N` is not
+ * monotone in `N`, and one more success can widen it, so no remedy holds in general -- and advice
+ * to try another length would have the reader search `N` for a probability, the inversion SNACK
+ * never performs. The length is written `N-prompt`, never `N prompts`, so no phrase here can be
+ * read as a number of prompts a plan allows. At one, "all of them" is as wrong as "all 1", so the
+ * width caveat speaks of the next prompt, as the `next prompt` row does.
+ *
+ * @param {import("./prediction.js").SequenceAssessment} sequence
+ * @returns {string[]}
+ */
+function sequenceCaveats(sequence) {
+  const length = sequence.length;
+  return [
+    ...(length === 1
+      ? []
+      : [
+          `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
+        ]),
+    ...(sequence.width.too_wide
+      ? [
+          length === 1
+            ? "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not."
+            : `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
+        ]
+      : []),
+  ];
 }
 
 /**

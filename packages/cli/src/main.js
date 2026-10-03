@@ -63,7 +63,11 @@ import {
   removeAcknowledgedSegments,
   removeFullyConsumedSegments,
 } from "./spool.js";
-import { PREDICTION_POLICY, classifyIngestionCompleteness } from "./prediction.js";
+import {
+  PREDICTION_POLICY,
+  SEQUENCE_MAX_LENGTH,
+  classifyIngestionCompleteness,
+} from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
 import { createSourceStatus, describeReportedCapacity } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
@@ -679,9 +683,19 @@ export async function run(argv, options = {}) {
     .option("--source <alias>", "capacity-source alias")
     .option("--no-sync", "use already synchronized observations")
     .option("--prompt-file <path>", "analyze an unsent prompt from a file, or - for stdin")
+    .option(
+      "--sequence <n>",
+      "also estimate the chance that all of the next <n> go through (1-100)",
+    )
     .option("--verbose", "add the evidence gates, the method and the policy versions")
     .option("--json", "emit one versioned JSON document")
     .action(async function status(commandOptions) {
+      // First, before the lock, the configuration, sync or any recorded attempt: a usage error has
+      // no side effects.
+      const sequenceLength =
+        commandOptions.sequence === undefined
+          ? undefined
+          : parseSequenceLength(commandOptions.sequence);
       /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>})[]} */
       const statuses = [];
       /** @type {number[]} */
@@ -777,22 +791,30 @@ export async function run(argv, options = {}) {
               });
             }
           }
-          const sourceStatus = createSourceStatus(source, summary, now, synchronization, pressure, {
-            outcomes: readOutcomeRows(paths.databaseFile, source.alias, {
-              limit: PREDICTION_POLICY.evidence_window_prompts,
-            }),
-            windowSeconds: parseHorizon(primaryHorizon(current)),
-            completeness: classifyIngestionCompleteness({
-              synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
-              issues: readSpoolIssueCount(paths.databaseFile, source.alias),
-              pendingMappings: readPendingMappingCount(paths.databaseFile, source),
-              pendingSpoolObservations: readPendingSpoolObservations(paths.databaseFile, source)
-                .length,
-            }),
-            ...(prospective
-              ? { category: prospective.category, prospective: prospective.prospective }
-              : {}),
-          });
+          const sourceStatus = createSourceStatus(
+            source,
+            summary,
+            now,
+            synchronization,
+            pressure,
+            {
+              outcomes: readOutcomeRows(paths.databaseFile, source.alias, {
+                limit: PREDICTION_POLICY.evidence_window_prompts,
+              }),
+              windowSeconds: parseHorizon(primaryHorizon(current)),
+              completeness: classifyIngestionCompleteness({
+                synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
+                issues: readSpoolIssueCount(paths.databaseFile, source.alias),
+                pendingMappings: readPendingMappingCount(paths.databaseFile, source),
+                pendingSpoolObservations: readPendingSpoolObservations(paths.databaseFile, source)
+                  .length,
+              }),
+              ...(prospective
+                ? { category: prospective.category, prospective: prospective.prospective }
+                : {}),
+            },
+            sequenceLength === undefined ? {} : { sequenceLength },
+          );
           // Attached after the forecast is built, and beside it: what Codex states about its own
           // windows is quoted, never an input to the interval, the risk, the evidence or pressure
           // (ADR-0007). Absent unless a Codex installation feeds this capacity source.
@@ -815,6 +837,12 @@ export async function run(argv, options = {}) {
               recordPredictionAttempt(
                 paths.databaseFile,
                 toPredictionAttempt(source.alias, summary.active_period_id, sourceStatus, now),
+                // The sequence the same invocation answered rides with its attempt, in its own
+                // table: a `prediction_attempt` row is scored against one prompt, and a sequence
+                // scored that way would corrupt the live calibration stream (ADR-0008).
+                sourceStatus.sequence === undefined
+                  ? undefined
+                  : toPredictionSequence(sourceStatus),
               ),
             );
           }
@@ -857,8 +885,11 @@ export async function run(argv, options = {}) {
         // four rows per source, and four more rows each is a stack of panels wearing a table's
         // header rather than a comparison. Asking for the detail is asking for the shape with room
         // for it.
+        //
+        // `--sequence` takes it too: the extra row's label carries the length, so a header built for
+        // it would change width with every invocation.
         stdout.write(
-          commandOptions.source || commandOptions.verbose === true
+          commandOptions.source || commandOptions.verbose === true || sequenceLength !== undefined
             ? renderStatus(statuses, { color, verbose: commandOptions.verbose === true })
             : renderStatusTable(statuses, { color, columns: terminalColumns(stdout, env) }),
         );
@@ -2472,6 +2503,56 @@ function toPredictionAttempt(alias, capacityPeriodId, status, now) {
     data_as_of: status.freshness.as_of,
     completeness: status.completeness.level,
   };
+}
+
+/**
+ * Shape a status result's sequence answer as the row recorded beside its attempt.
+ *
+ * The posterior is stored because the parent attempt does not carry it, and a later calibration
+ * must be able to reproduce the answer without recalculating the past.
+ *
+ * @param {ReturnType<typeof createSourceStatus>} status
+ * @returns {import("./storage.js").PredictionSequenceRow}
+ */
+function toPredictionSequence(status) {
+  const sequence = /** @type {import("./prediction.js").SequenceAssessment} */ (status.sequence);
+  return {
+    length: sequence.length,
+    method_id: sequence.method.id,
+    method_version: sequence.method.version,
+    lower: sequence.viability.lower,
+    point: sequence.viability.point,
+    upper: sequence.viability.upper,
+    coverage_target: sequence.viability.coverage_target,
+    risk_label: sequence.risk.label,
+    risk_policy_version: sequence.risk.policy_version,
+    width_too_wide: sequence.width.too_wide ? 1 : 0,
+    width_policy_version: sequence.width.policy_version,
+    posterior_alpha: status.contributors.evidence_window.alpha,
+    posterior_beta: status.contributors.evidence_window.beta,
+  };
+}
+
+/**
+ * Read the length `--sequence` was given, or refuse it.
+ *
+ * Only the canonical spelling of a whole number is accepted -- no sign, no leading zero, no
+ * exponent, no whitespace, no other script's digits -- so what the user typed and what was assessed
+ * are the same number. The rejected value is never repeated back, the same rule every other
+ * rejected input follows.
+ *
+ * @param {string} value
+ * @returns {number}
+ */
+function parseSequenceLength(value) {
+  const length = /^[1-9]\d*$/u.test(value) ? Number(value) : Number.NaN;
+  if (!(length >= 1 && length <= SEQUENCE_MAX_LENGTH)) {
+    throw new SnackError(`--sequence takes a whole number from 1 to ${SEQUENCE_MAX_LENGTH}.`, {
+      code: ExitCode.usage,
+      reason: "sequence_length_invalid",
+    });
+  }
+  return length;
 }
 
 /**

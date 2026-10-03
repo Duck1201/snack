@@ -116,6 +116,7 @@ test("the walk over the real CLI reaches every command with a description and fl
     "--source",
     "--no-sync",
     "--prompt-file",
+    "--sequence",
     "--verbose",
     "--json",
     "--help",
@@ -290,6 +291,22 @@ test("the checked-in snack.1 is what the generator produces from today's surface
     await generate(),
     "packages/cli/man/snack.1 is stale -- run `node scripts/generate-man.mjs`",
   );
+});
+
+test("no paragraph of the checked-in snack.1 ends in a colon", async () => {
+  // The generator drops fenced blocks, so prose that introduces one ("compare line to line:") is
+  // left pointing at nothing. The specification's paragraphs must read whole without their
+  // examples.
+  const { readFile } = await import("node:fs/promises");
+  const { MAN_PAGE } = await import("./generate-man.mjs");
+  const lines = (await readFile(MAN_PAGE, "utf8")).split("\n");
+  const dangling = lines.filter(
+    (line, index) =>
+      !line.startsWith(".") &&
+      line.trimEnd().endsWith(":") &&
+      (index + 1 === lines.length || /^\.(?:PP|SH|SS)\b/u.test(lines[index + 1] ?? "")),
+  );
+  assert.deepEqual(dangling, []);
 });
 
 test("every flag the CLI publishes is documented in the specification's synopsis", async () => {

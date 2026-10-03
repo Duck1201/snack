@@ -86,7 +86,8 @@ This layout is a starting constraint, not a requirement to create one file per c
 In practice the CLI source is flat and the layering above is a convention, not a directory
 tree. The prediction seam is spread across four pure modules that never open SQLite:
 `beta.js` (incomplete Beta function and quantiles), `prediction.js` (the weighted
-Beta-Binomial cells, hierarchical backoff, evidence gates, and risk policy),
+Beta-Binomial cells, hierarchical backoff, evidence gates, risk policy, and, from 1.4, sequence
+viability read from the same posterior),
 `prompt-features.js` (the ephemeral input analyzer and the chronological size
 categorization), and `calibration.js` (Brier score, reliability, interval coverage, and
 rolling-origin backtesting). `status.js` assembles the domain result for output, and

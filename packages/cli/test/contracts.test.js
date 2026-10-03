@@ -92,6 +92,12 @@ const invocations = [
   { name: "sync", command: "sync", argv: ["sync", "--full"] },
   { name: "stats", command: "stats", argv: ["stats", "--verbose"] },
   { name: "status", command: "status", argv: ["status", "--no-sync"] },
+  // Added in 1.4.0: the optional `sequence` member, validated rather than merely allowed to be absent.
+  {
+    name: "status-sequence",
+    command: "status",
+    argv: ["status", "--no-sync", "--sequence", "5"],
+  },
   { name: "doctor", command: "doctor", argv: ["doctor"] },
   { name: "config-get", command: "config get", argv: ["config", "get"] },
   { name: "config-path", command: "config path", argv: ["config", "path"] },
@@ -177,6 +183,15 @@ test("every command's JSON document validates against the published envelope sch
           .every((/** @type {object} */ report) => !("reported_capacity" in report)),
         "a source no Codex installation feeds quoted a Codex figure",
       );
+      assert.ok(
+        reports.every((/** @type {object} */ report) => !("sequence" in report)),
+        "a sequence appeared without --sequence",
+      );
+    }
+    if (invocation.name === "status-sequence") {
+      const reports = document.data.sources ?? [document.data];
+      assert.ok(reports.length > 1, "the sequence was validated against one report only");
+      for (const report of reports) assert.equal(report.sequence?.length, 5);
     }
   }
 });
@@ -288,9 +303,13 @@ test("an export validates against the published export schema", async () => {
  * `1.2` is the last released minor before `1.3.0`, captured at `v1.2.1` before any 1.3 change. It
  * sits beside `0.9` because it answers the same question: a consumer written against it keeps
  * working, so its documents must still validate against today's schemas, unchanged.
+ *
+ * `1.3` was captured at `v1.3.0` before any 1.4 change. It is the first corpus that exercises
+ * `reported_capacity` and `setup codex` -- twelve documents, three sources -- and the 1.4 edit to
+ * `status.schema.json` lands in the same `$defs/report` that holds `reported_capacity`.
  */
 const PRE_FREEZE_VERSIONS = ["0.6", "0.7", "0.8"];
-const FROZEN_VERSIONS = ["0.9", "1.2"];
+const FROZEN_VERSIONS = ["0.9", "1.2", "1.3"];
 const CAPTURED_VERSIONS = [...PRE_FREEZE_VERSIONS, ...FROZEN_VERSIONS];
 
 /**
@@ -312,9 +331,11 @@ async function capturedDocuments(version) {
 }
 
 /**
- * Every top-level property name a payload schema declares, gathered across the `oneOf` branches and
- * `$defs` it is written with. The union rather than one branch: `status` and `stats` answer with a
- * single report or with one per source, and both spellings are the same contract.
+ * Every top-level property name a payload schema declares, gathered across its own `properties` and
+ * its `oneOf` branches, following a branch's `$ref` into `$defs`. The union rather than one branch:
+ * `status` and `stats` answer with a single report or with one per source, and both spellings are
+ * the same contract. Only what the top level reaches is walked: `$defs` also holds nested shapes
+ * (`evidence`, `risk`, ...), and their keys -- `level`, `label`, `gates` -- are not report keys.
  *
  * @param {Record<string, unknown>} schema
  * @returns {Set<string>}
@@ -322,21 +343,32 @@ async function capturedDocuments(version) {
 function declaredProperties(schema) {
   /** @type {Set<string>} */
   const names = new Set();
+  const definitions = /** @type {Record<string, unknown>} */ (schema.$defs ?? {});
   /** @param {unknown} node */
   const walk = (node) => {
     if (typeof node !== "object" || node === null) return;
-    const { properties, oneOf, $defs } = /** @type {Record<string, unknown>} */ (node);
+    const { properties, oneOf, $ref } = /** @type {Record<string, unknown>} */ (node);
+    if (typeof $ref === "string") {
+      const name = $ref.startsWith("#/$defs/") ? $ref.slice("#/$defs/".length) : undefined;
+      assert.ok(name !== undefined && Object.hasOwn(definitions, name), `unresolved ${$ref}`);
+      walk(definitions[name]);
+    }
     if (typeof properties === "object" && properties !== null) {
       for (const name of Object.keys(properties)) names.add(name);
     }
     if (Array.isArray(oneOf)) for (const branch of oneOf) walk(branch);
-    if (typeof $defs === "object" && $defs !== null) {
-      for (const definition of Object.values($defs)) walk(definition);
-    }
   };
   walk(schema);
   return names;
 }
+
+test("the declared report keys are the report's own, not those of a nested definition", async () => {
+  const declared = declaredProperties(await readSchema("commands/status.schema.json"));
+  for (const nested of ["level", "label", "gates"]) assert.ok(!declared.has(nested), nested);
+  for (const own of ["source", "viability", "risk", "evidence", "method", "caveats", "sequence"]) {
+    assert.ok(declared.has(own), own);
+  }
+});
 
 test("every payload declares each field it emits", async () => {
   // The other half of the freeze, and the half a validator cannot give. The published schemas stay
@@ -595,7 +627,15 @@ test("the published command and flag surface has not changed", async () => {
     // the percentile behind each pressure driver -- is what moving those off the default reading in
     // `1.1.3` required. The same flag already existed on `stats`, so the two commands spell the
     // same idea the same way.
-    status: ["--source", "--no-sync", "--prompt-file", "--verbose", "--json", "--help"],
+    status: [
+      "--source",
+      "--no-sync",
+      "--prompt-file",
+      "--sequence",
+      "--verbose",
+      "--json",
+      "--help",
+    ],
     sync: ["--source", "--full", "--json", "--help"],
     // `--finish` is deliberately absent: it is internal, hidden from help, and therefore invisible
     // to this test, which reads the help text rather than Commander's object graph. The test below
@@ -725,6 +765,7 @@ test("every command that publishes a payload publishes a schema for it", async (
 
   assert.deepEqual(
     published.sort(),
-    invocations.map((invocation) => payloadSchemaFor(invocation.command)).sort(),
+    // One schema per command, however many invocations exercise it.
+    [...new Set(invocations.map((invocation) => payloadSchemaFor(invocation.command)))].sort(),
   );
 });

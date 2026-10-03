@@ -72,16 +72,35 @@ refusing:
    - requires CI green for the commit, then `check`, `pack:smoke`, `release:check`;
    - publishes each package whose version is absent from the registry (a retried run is safe);
    - waits up to five minutes for both versions and the channel tag to resolve;
-   - downloads the registry's tarballs and requires their digests to appear in `artifacts.md`;
+   - downloads the registry's tarballs — retrying the download for up to five minutes while the
+     registry propagates — and requires their digests to appear in `artifacts.md`;
    - creates the GitHub release `v<version>` on the published commit, notes taken from both
-     CHANGELOGs (`scripts/release-notes.mjs`), marked Latest only on the `latest` channel.
+     CHANGELOGs (`scripts/release-notes.mjs`), marked Latest only on the `latest` channel — whenever
+     that release does not exist yet, so a retried run that publishes nothing still records it; when
+     the run did not publish, only if the registry's `gitHead` is this commit and the channel tag
+     names this version.
 
    That release **is** the record of the publication. Nothing is written back into the repository,
    so nothing needs a PR.
 
 7. **Check, do not set.** `npm view @snack-ai/cli dist-tags` after the run. If the run failed after
-   publishing, read which step: a digest mismatch means the published artifact is not what the gates
-   approved — `latest` already moved, so restart with a new patch rather than patching in place.
+   publishing, read which step and which line:
+   - a verify step failing **with** an `::error::registry … does not record` line is a digest
+     mismatch: the published artifact is not what the gates approved, `latest` already moved, so
+     restart with a new patch rather than patching in place;
+   - `::error::… resolves to '…', not <version>` is a dist-tag mismatch, not propagation: the
+     version is on the registry but the channel names another one (moved by hand, or another publish
+     took it). Read `npm view @snack-ai/cli dist-tags` (and `@snack-ai/opencode`'s, when the error
+     names it), move the tag yourself if this version should hold it, then rerun; a retry that did
+     not publish refuses to create the release until each package's channel names the version the
+     commit carries — an unmoved plugin's channel already does;
+   - a verify step failing with anything else — `::error::registry propagation`, a version not yet
+     readable, an `npm pack` error — is registry propagation, not a defect. Rerun the failed jobs
+     with `gh run rerun <id> --failed`, which keeps the run's inputs; dispatching again means
+     retyping the confirmation and the channel, and a wrong channel is a different release. Both
+     publishes skip, the checks run again, and the GitHub release is created once they pass. 1.3.0
+     hit this: it published, then `npm pack` failed before comparing a digest. Never cut a patch for
+     it.
 
 ## Gotchas
 

@@ -459,3 +459,85 @@ export function assembleForecast(input) {
     },
   };
 }
+
+/**
+ * The longest sequence `status --sequence` accepts.
+ *
+ * The estimate assumes every prompt in the sequence meets the pressure band and size category the
+ * next one does, and that assumption stretches with the length. Recency decay saturates the
+ * effective sample near 44 and halves a prompt's weight every 30, so well before 100 the answer is
+ * the prior's tail raised to a power rather than a reading of the user's history. Raising the cap
+ * later is additive; lowering it would turn an accepted invocation into a usage error.
+ */
+export const SEQUENCE_MAX_LENGTH = 100;
+
+/**
+ * When a sequence interval is too wide to inform.
+ *
+ * An interval wider than half the probability scale necessarily contains one half: its lower end
+ * is below even odds and its upper end above them. Such an interval cannot say even whether all of
+ * the prompts going through is more likely than not, so the panel says so plainly rather than
+ * leaving a `0-78%` for the reader to take as a broken tool. Width, not position: a narrow interval
+ * near zero is informative -- it says the sequence is unlikely to go through -- and is never
+ * flagged. The edge is exclusive, so an interval of exactly half still sits on one side of even
+ * odds at its edge. Changing the rule moves the version.
+ */
+export const SEQUENCE_WIDTH_POLICY = Object.freeze({
+  version: "sequence-width-v1",
+  max_width: 0.5,
+});
+
+/**
+ * @typedef {object} SequenceAssessment
+ * @property {number} length The user-supplied number of consecutive prompts, echoed.
+ * @property {{lower: number, point: number, upper: number, coverage_target: number}} viability
+ * @property {{label: string, policy_version: string}} risk
+ * @property {{level: string, policy_version: string, gates: EvidenceGate[]}} evidence
+ * @property {{id: string, version: string}} method
+ * @property {{too_wide: boolean, max_width: number, policy_version: string}} width
+ */
+
+/**
+ * Sequence viability: the probability that `length` consecutive prompts all complete without an
+ * observed restriction, read from the same posterior as the single-prompt forecast.
+ *
+ * The point is the posterior predictive probability `E[p^length]`, the Beta-Binomial probability
+ * of `length` successes in `length` trials. The naive `point^length` is never computed: by Jensen
+ * it is always lower, because it treats the estimate as known and counts its uncertainty twice.
+ * `p ↦ p^length` is increasing on `[0, 1]`, so the single-prompt quantiles raised to `length` are
+ * the sequence quantiles -- no new quantile call. A mean need not sit inside an equal-tailed
+ * interval, and for a long sequence on a weak posterior it can fall just above the powered upper
+ * bound; the interval is then widened to contain it, which keeps at least `coverage_target` of
+ * the posterior inside. At `length = 1` every member is the single-prompt one, bit for bit.
+ *
+ * The relation runs one way. `length` is the user's number, echoed; nothing here or anywhere else
+ * searches for a length that meets a probability, because that number would be a claim about
+ * remaining capacity.
+ *
+ * @param {Forecast} forecast
+ * @param {number} length an integer from 1 to `SEQUENCE_MAX_LENGTH`, validated by the caller
+ * @returns {SequenceAssessment}
+ */
+export function assessSequence(forecast, length) {
+  const { alpha, beta } = forecast.contributors.evidence_window;
+  let point = 1;
+  for (let k = 0; k < length; k += 1) point *= (alpha + k) / (alpha + beta + k);
+  const lower = Math.min(forecast.viability.lower ** length, point);
+  const upper = Math.max(forecast.viability.upper ** length, point);
+  return {
+    length,
+    viability: { lower, point, upper, coverage_target: forecast.viability.coverage_target },
+    risk: classifyRisk(lower),
+    // The gates assess the history behind the posterior, and the sequence reads that posterior.
+    evidence: {
+      ...forecast.evidence,
+      gates: forecast.evidence.gates.map((gate) => ({ ...gate })),
+    },
+    method: { id: `sequence-${forecast.method.id}`, version: "1" },
+    width: {
+      too_wide: upper - lower > SEQUENCE_WIDTH_POLICY.max_width,
+      max_width: SEQUENCE_WIDTH_POLICY.max_width,
+      policy_version: SEQUENCE_WIDTH_POLICY.version,
+    },
+  };
+}

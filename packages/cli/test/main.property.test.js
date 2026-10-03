@@ -58,6 +58,7 @@ const flags = [
   "--profile",
   "--plan",
   "--prompt-file",
+  "--sequence",
   "--not-a-flag",
   "-x",
 ];

@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
+import { commandSurface } from "../../../scripts/man-surface.mjs";
 import { compareOutcomeGroups } from "../src/analytics.js";
 import { run } from "../src/main.js";
 import {
@@ -78,6 +79,15 @@ test("no command calls observed usage a quota percentage or a remaining balance"
     // The verbose panel is where the pressure percentiles reach a human surface, which is the one
     // number in this product most likely to be read as a share of a capacity.
     ["status", "--verbose"],
+    // Sequence viability is the one surface that sets a number of prompts beside a probability, so
+    // every shape of it is policed: the row, the verbose method row, the identity at one, the help,
+    // and the usage error.
+    ["status", "--sequence", "10"],
+    ["status", "--verbose", "--sequence", "10"],
+    ["status", "--source", "codex", "--sequence", "1"],
+    ["status", "--sequence", "100"],
+    ["status", "--help"],
+    ["status", "--sequence", "0"],
     ["stats", "--verbose"],
     // The per-client comparison renders refusal counts and intervals, which is exactly the shape of
     // output that drifts into sounding like a share of real capacity.
@@ -113,6 +123,10 @@ test("no command calls observed usage a quota percentage or a remaining balance"
   assert.match(transcript, /viability/iu);
   assert.match(transcript, /Codex states \d+% of its \w+ window/u);
   assert.match(transcript, /"reported_capacity"/u);
+  assert.match(transcript, /chance all 10 go through/u);
+  assert.match(transcript, /"sequence"/u);
+  assert.match(transcript, /interval is too wide to say much/u);
+  assert.match(transcript, /--sequence <n>/u);
 
   for (const output of outputs) {
     for (const term of forbidden) {
@@ -148,7 +162,15 @@ test("no command promises a number of prompts a plan still allows", async () => 
   );
   await run(["node", "snack", "sync", "--full"], fixture.options);
 
-  for (const argv of [["status"], ["status", "--json"], ["stats"], ["stats", "--json"]]) {
+  for (const argv of [
+    ["status"],
+    ["status", "--json"],
+    ["status", "--sequence", "5"],
+    ["status", "--sequence", "5", "--json"],
+    ["status", "--sequence", "100", "--verbose"],
+    ["stats"],
+    ["stats", "--json"],
+  ]) {
     fixture.stdout.value = "";
     fixture.stderr.value = "";
     await run(["node", "snack", ...argv], fixture.options);
@@ -161,7 +183,113 @@ test("no command promises a number of prompts a plan still allows", async () => 
       /\b(?:up to\s+)?\d+\s+(?:more\s+)?prompts?\s+(?:left|remaining|available|before)\b/iu,
       `\`snack ${argv.join(" ")}\` promises a prompt count`,
     );
+    // "send up to 12", "run about 40": a count offered as an instruction rather than an allowance.
+    assert.doesNotMatch(
+      text,
+      /\b(?:send|run|make)\s+(?:up to\s+|about\s+)?\d+\b/iu,
+      `\`snack ${argv.join(" ")}\` offers a count to send`,
+    );
+    // "prompts until", "prompts to go": a countdown, which is a count with a direction.
+    assert.doesNotMatch(
+      text,
+      /\bprompts?\s+(?:until|to go)\b/iu,
+      `\`snack ${argv.join(" ")}\` counts down prompts`,
+    );
   }
+});
+
+/**
+ * A count set before the word "prompts": a number or a placeholder for one, up to two words, then
+ * "prompts" as a word of its own.
+ *
+ * CONTEXT.md, Sequence viability: the user's count is said as "all 10 go through" or a "10-prompt"
+ * estimate, never "10 prompts" -- that phrase is one word away from an allowance, and a qualifier
+ * between them ("10 more prompts", "N consecutive prompts", "the 10 next prompts") does not move it
+ * any further away. The number is a whole one, so "1.5 prompts" is not a count; the placeholder is
+ * `<n>`, `<N>`, `n` or `N` standing alone, so "N prompt-sized" and "prompt-sized" are not either.
+ */
+const countBeforePrompts =
+  /(?:(?<![\w.,])\d+(?:,\d{3})*(?![.,]?\d)|<[nN]>|(?<![\w<\\-])[nN](?![\w>-]))\s+(?:[A-Za-z]+\s+){0,2}prompts?(?![\w-])/u;
+
+/**
+ * The man page as a reader sees it: roff font changes dropped, an escaped space a space.
+ *
+ * `\fIn\fR prompts` renders as "n prompts", and `n\ prompts` as "n prompts"; read raw, the font
+ * escape glues the placeholder to a letter and the escaped space hides the separator.
+ *
+ * @param {string} roff
+ */
+function asRendered(roff) {
+  return roff
+    .replaceAll(/\\f(?:\(..|\[[^\]]*\]|.)/gu, "")
+    .replaceAll(/\\[ ~0|^&]/gu, (escape) =>
+      escape === "\\&" || escape === "\\|" || escape === "\\^" ? "" : " ",
+    );
+}
+
+test("the count-before-prompts pattern catches every shape of a count and nothing else", () => {
+  for (const phrase of [
+    "10 prompts",
+    "1 prompt",
+    "1,000 prompts",
+    "N prompts",
+    "n prompts",
+    "<n> prompts",
+    "<N> prompts",
+    "N consecutive prompts",
+    "next <n> consecutive prompts",
+    "10 more prompts",
+    "the 10 next prompts",
+    "send 10 more consecutive prompts",
+    "(10 prompts)",
+  ]) {
+    assert.match(phrase, countBeforePrompts, phrase);
+  }
+  for (const roff of ["n\\ prompts", "\\fIn\\fR prompts", "\\fI<n>\\fP consecutive prompts"]) {
+    assert.match(asRendered(roff), countBeforePrompts, roff);
+  }
+  for (const phrase of [
+    "N prompt-sized",
+    "a prompt-sized request",
+    "1.5 prompts",
+    "the 10-prompt estimate",
+    "all 10 go through",
+    "next 10 go through",
+    "between prompts",
+    "an1 prompts",
+    "the next prompts",
+    "within 10 minutes of three other things and prompts",
+    "IN prompts",
+  ]) {
+    assert.doesNotMatch(phrase, countBeforePrompts, phrase);
+  }
+});
+
+test("no help page or manual sets a number directly before the word prompts", async () => {
+  const fixture = await makeRunFixture("snack-vocabulary-help-");
+  /** @type {Map<string, string>} */
+  const pages = new Map();
+  // Every page the program itself lists, read the way `snack.1` is built: from the root help down
+  // through every group, so a command added tomorrow is scanned without being named here.
+  await commandSurface(async (argv) => {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...argv, "--help"], fixture.options);
+    const text = `${fixture.stdout.value}\n${fixture.stderr.value}`;
+    pages.set(argv.join(" "), text);
+    return fixture.stdout.value;
+  });
+  assert.ok(pages.size >= 17, [...pages.keys()].join(", "));
+  for (const command of ["status", "setup codex", "data purge", "update"]) {
+    assert.ok(pages.has(command), `the walk reached \`snack ${command}\``);
+  }
+  for (const [command, text] of pages) {
+    assert.doesNotMatch(text, countBeforePrompts, `\`snack ${command} --help\``);
+  }
+  assert.match([...pages.values()].join("\n"), /--sequence <n>/u);
+  const manual = await readFile(new URL("../man/snack.1", import.meta.url), "utf8");
+  assert.match(manual, /--sequence/u);
+  assert.doesNotMatch(asRendered(manual), countBeforePrompts, "man/snack.1");
 });
 
 test("the export manifest cannot smuggle the vocabulary the interface refuses", async () => {
