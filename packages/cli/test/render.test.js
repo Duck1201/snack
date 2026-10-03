@@ -3,7 +3,15 @@ import { test } from "node:test";
 
 import fc from "fast-check";
 
-import { renderStats, renderStatus, renderStatusTable, sparkline } from "../src/render.js";
+import {
+  formatInterval,
+  renderStats,
+  renderStatus,
+  renderStatusTable,
+  shownForecast,
+  shownInterval,
+  sparkline,
+} from "../src/render.js";
 
 test("a series of scores draws one block per window, low to high", () => {
   // Scores are percentiles in [0, 1] -- `computeUsagePressure().score` -- so the mapping is fixed
@@ -1378,4 +1386,42 @@ test("stats --verbose lists each weighting variant with its paired comparison", 
     / {2}by method\n {4}bayesian-pressure-band@1 {8}answer · live brier 0\.010, sample 40 · backtest brier 0\.017, sample 84\n {4}bayesian-pressure-band-hl50@1 {3}shadow · live not available yet · backtest brier 0\.016, sample 84\n {36}same outcomes as the baseline · live not available yet · backtest brier 0\.016 against 0\.017, sample 84, 1 restricted\n {4}bayesian-pressure-band-hl100@1 {2}shadow · /u,
   );
   assert.equal(renderStats(report, { verbose: false }), renderStats(base, { verbose: false }));
+});
+
+test("every printed interval is formatted from shownInterval, the one rounding function", () => {
+  // The dash keys its snapshots on these two integers (ADR-0008), so the key and every panel must
+  // round through the same function or a snapshot could record what no one was shown.
+  fc.assert(
+    fc.property(
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      (a, b) => {
+        const viability = {
+          lower: Math.min(a, b),
+          point: (a + b) / 2,
+          upper: Math.max(a, b),
+          coverage_target: 0.8,
+        };
+        const shown = shownInterval(viability);
+        assert.ok(Number.isInteger(shown.lower) && Number.isInteger(shown.upper));
+        assert.ok(0 <= shown.lower && shown.lower <= shown.upper && shown.upper <= 100);
+        const text = `${shown.lower}-${shown.upper}%`;
+        assert.equal(formatInterval(viability), text);
+        const status = /** @type {never} */ (statusFor({ viability }));
+        assert.ok(renderStatus([status], { color: false }).includes(`${text} chance`), text);
+        assert.ok(renderStatusTable([status], { color: false, columns: 120 }).includes(text));
+      },
+    ),
+  );
+});
+
+test("shownForecast states what a human surface shows of one answer, already rounded", () => {
+  const status = statusFor({
+    viability: { lower: 0.6394, point: 0.8, upper: 0.95, coverage_target: 0.8 },
+  });
+  assert.deepEqual(shownForecast(/** @type {never} */ (status)), {
+    interval: { lower: 63, upper: 95 },
+    risk: "low",
+    evidence: "moderate",
+  });
 });

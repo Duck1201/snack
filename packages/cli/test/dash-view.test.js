@@ -5,7 +5,8 @@ import fc from "fast-check";
 
 import { PLOT_POLICY, TREND_POLICY } from "../src/analytics.js";
 import { MINIMUM_COLUMNS, measure, minimumRows, renderDash } from "../src/dash-view.js";
-import { renderStatus } from "../src/render.js";
+import { snapshotKey } from "../src/dash.js";
+import { renderStatus, shownInterval } from "../src/render.js";
 import {
   CODEX,
   FRESH,
@@ -329,6 +330,74 @@ test("the interval the dash prints is the interval status prints, for any viabil
       },
     ),
   );
+});
+
+test("the snapshot key carries the two integers the list and the detail print", () => {
+  // A key that rounded on its own could record a snapshot nobody was shown, or miss one somebody
+  // was: the key and every printed interval go through `shownInterval`.
+  fc.assert(
+    fc.property(
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      (a, b) => {
+        const viability = {
+          lower: Math.min(a, b),
+          point: (a + b) / 2,
+          upper: Math.max(a, b),
+          coverage_target: 0.8,
+        };
+        const report = reportFor({ viability });
+        const shown = shownInterval(viability);
+        const text = `${shown.lower}-${shown.upper}%`;
+        const state = stateFor();
+        const first = /** @type {DashState["sources"][number]} */ (state.sources[0]);
+        const { lines } = renderDash(
+          { ...state, sources: [{ ...first, report }, ...state.sources.slice(1)] },
+          { columns: 80, rows: 24 },
+          { color: false },
+        );
+        assert.ok(lines.join("\n").includes(`   next prompt  ${text} chance`), text);
+        assert.ok(String(lines[2]).includes(` ${text} `), String(lines[2]));
+        const key = JSON.parse(
+          snapshotKey(
+            /** @type {never} */ ({
+              ...report,
+              pressure: { ...report.pressure, policy_version: "p" },
+            }),
+            1,
+          ),
+        );
+        assert.deepEqual(key.slice(2, 4), [shown.lower, shown.upper]);
+      },
+    ),
+  );
+});
+
+test("the snapshot key moves with what is shown and with the period, not with the unrounded ends", () => {
+  const base = /** @type {never} */ ({
+    ...reportFor({
+      viability: { lower: 0.9512, point: 0.98, upper: 0.9991, coverage_target: 0.8 },
+    }),
+    pressure: { band: "moderate", score: 0.4, policy_version: "stage3-analytics-v1" },
+  });
+  const nudged = /** @type {never} */ ({
+    .../** @type {object} */ (base),
+    viability: { lower: 0.9518, point: 0.97, upper: 0.9993, coverage_target: 0.8 },
+    pressure: { band: "high", score: 0.9, policy_version: "stage3-analytics-v1" },
+    freshness: { as_of: NOW, age_seconds: 0 },
+  });
+  assert.equal(snapshotKey(nudged, 1), snapshotKey(base, 1));
+  assert.notEqual(snapshotKey(base, 2), snapshotKey(base, 1));
+  const lower = /** @type {never} */ ({
+    .../** @type {object} */ (base),
+    viability: { lower: 0.9499, point: 0.98, upper: 0.9991, coverage_target: 0.8 },
+  });
+  assert.notEqual(snapshotKey(lower, 1), snapshotKey(base, 1));
+  const riskier = /** @type {never} */ ({
+    .../** @type {object} */ (base),
+    risk: { label: "elevated", policy_version: "1" },
+  });
+  assert.notEqual(snapshotKey(riskier, 1), snapshotKey(base, 1));
 });
 
 test("an informative sequence row states its interval beneath next prompt", () => {

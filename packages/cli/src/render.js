@@ -243,6 +243,18 @@ const OVERVIEW = [
 ];
 
 /**
+ * The overview's layout without its readers: each column's header, minimum width, alignment and
+ * sacrifice rank. `snack dash` draws its list from this, so its columns, their widths and the order
+ * a narrow terminal gives them up in are the overview's, while what each cell reads -- `LAST SEEN`
+ * from the frame's clock, `SYNC` from the dash's own synchronization -- is the dash's.
+ */
+export const OVERVIEW_LAYOUT = Object.freeze(
+  OVERVIEW.map(({ header, width, align, sacrifice }) =>
+    Object.freeze({ header, width, align, ...(sacrifice === undefined ? {} : { sacrifice }) }),
+  ),
+);
+
+/**
  * The counting columns of the statistics report, one row per analysis horizon.
  *
  * Horizons are rows because comparing them is the only question this report exists to answer, and
@@ -794,7 +806,7 @@ function spans(statuses, columns) {
  * @param {(value: string, style?: Style) => string} paint
  * @param {Style} [style]
  */
-function place(value, width, align, paint, style) {
+export function place(value, width, align, paint, style) {
   const padding = Math.max(0, width - measure(value));
   const before = align === "center" ? Math.floor(padding / 2) : 0;
   return " ".repeat(before) + paint(value, style) + " ".repeat(padding - before);
@@ -810,7 +822,7 @@ function place(value, width, align, paint, style) {
  *
  * @param {string} value
  */
-function measure(value) {
+export function measure(value) {
   let width = 0;
   // eslint-disable-next-line no-control-regex -- an escape sequence is exactly what is being removed
   for (const character of value.replace(/\u001B\[[0-9;]*m/gu, "")) {
@@ -926,11 +938,7 @@ function renderSource(status, paint, verbose) {
     ...(status.sequence === undefined ? [] : [sequenceRow(status.sequence, paint)]),
     row(paint, "evidence", [
       [status.evidence.level, undefined, 0],
-      [
-        ` — ${EVIDENCE_MEANS[status.evidence.level] ?? "how far the local history reaches"}`,
-        "dim",
-        0,
-      ],
+      [` — ${describeEvidence(status.evidence.level)}`, "dim", 0],
     ]),
     row(paint, "pressure", [
       [status.pressure.band, band, 0],
@@ -987,7 +995,7 @@ function renderSource(status, paint, verbose) {
  *
  * @param {ReportedCapacityView[]} reported
  */
-function describeReported(reported) {
+export function describeReported(reported) {
   if (reported.length === 0) return "no figure stated by Codex yet";
   return reported
     .map((entry) => {
@@ -1236,6 +1244,15 @@ const EVIDENCE_MEANS = {
 };
 
 /**
+ * What an evidence level buys the reader, in the words of the `evidence` row.
+ *
+ * @param {string} level
+ */
+export function describeEvidence(level) {
+  return EVIDENCE_MEANS[level] ?? "how far the local history reaches";
+}
+
+/**
  * Whether this estimate is the plan-profile prior and nothing else.
  *
  * `buildForecast` names the method `initial-generic` exactly when it backed off past every local
@@ -1258,7 +1275,7 @@ function isInitialHeuristic(status) {
  *
  * @param {number} [score]
  */
-function describePercentile(score) {
+export function describePercentile(score) {
   if (typeof score !== "number") return "no baseline to compare against yet";
   // The ends are statements rather than percentages. `percentileRank` is the fraction of baseline
   // windows at or below the observed one, counting ties as half, so a score of 0 means no window in
@@ -1311,7 +1328,7 @@ function row(paint, label, cells) {
  * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
  * @param {boolean} verbose
  */
-function describeContributors(contributors, verbose) {
+export function describeContributors(contributors, verbose) {
   const ranked = contributors
     .filter((contributor) => contributor.contribution !== null)
     .sort((left, right) => Number(right.contribution) - Number(left.contribution))
@@ -1438,15 +1455,49 @@ function plainly(dimension) {
  * holds even odds strictly inside it -- always shows 50 strictly inside it too. `--json` carries
  * the unrounded values; only this human formatting rounds.
  *
+ * Returned as the two whole percents, so the dash's snapshot key and every printed interval are
+ * the same arithmetic rather than two copies of it.
+ *
  * @param {{lower: number, upper: number}} viability
+ * @returns {{lower: number, upper: number}}
  */
-function interval(viability) {
+export function shownInterval(viability) {
   const lower = clampPercent(Math.floor(snap(viability.lower * 100)));
   const upper = clampPercent(Math.ceil(snap(viability.upper * 100)));
   const low = viability.lower < 0.5 ? Math.min(lower, 49) : lower;
   const high = viability.upper > 0.5 ? Math.max(upper, 51) : upper;
   // The sign belongs to the range, not to each end of it.
-  return `${low}-${Math.max(low, high)}%`;
+  return { lower: low, upper: Math.max(low, high) };
+}
+
+/**
+ * A viability interval as every human surface prints it: `shownInterval`, formatted.
+ *
+ * @param {{lower: number, upper: number}} viability
+ */
+export function formatInterval(viability) {
+  const { lower, upper } = shownInterval(viability);
+  return `${lower}-${upper}%`;
+}
+
+/** The private name every panel row already used. */
+const interval = formatInterval;
+
+/**
+ * Everything a human surface states about one source's answer, already rounded: the interval as
+ * `shownInterval` rounds it, the risk word and the evidence level. `snack dash` keys its snapshots
+ * on exactly this (ADR-0008), so a snapshot is written when, and only when, what a reader is shown
+ * changes.
+ *
+ * @param {{viability: {lower: number, upper: number}, risk: {label: string}, evidence: {level: string}}} report
+ * @returns {{interval: {lower: number, upper: number}, risk: string, evidence: string}}
+ */
+export function shownForecast(report) {
+  return {
+    interval: shownInterval(report.viability),
+    risk: report.risk.label,
+    evidence: report.evidence.level,
+  };
 }
 
 /**
@@ -1465,7 +1516,7 @@ function clampPercent(value) {
 }
 
 /** @param {number} seconds */
-function age(seconds) {
+export function age(seconds) {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
@@ -1473,7 +1524,7 @@ function age(seconds) {
 }
 
 /** @param {string | null} timestamp */
-function day(timestamp) {
+export function day(timestamp) {
   return timestamp === null ? "unknown" : (timestamp.split("T")[0] ?? "unknown");
 }
 

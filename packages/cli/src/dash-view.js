@@ -2,7 +2,21 @@ import { styleText } from "node:util";
 
 import { PLOT_POLICY } from "./analytics.js";
 import { SEQUENCE_MAX_LENGTH } from "./prediction.js";
-import { sparkline } from "./render.js";
+import {
+  OVERVIEW_LAYOUT,
+  age,
+  day,
+  describeContributors,
+  describeEvidence,
+  describePercentile,
+  describeReported,
+  formatInterval as interval,
+  measure,
+  place,
+  sparkline,
+} from "./render.js";
+
+export { measure };
 
 /**
  * The widgets of `snack dash`, as one pure function: `renderDash(state, size, options)`.
@@ -360,49 +374,40 @@ function listCells(source, nowMs) {
 }
 
 /**
- * The overview columns (`render.js` `OVERVIEW`), read from list cells.
- * S1 replaces this, `fit`, `spans` and `place` with render.js `overviewLines()`.
+ * What each overview column reads from a list row's cells. The columns themselves -- headers,
+ * widths, alignment, the order a narrow terminal gives them up in -- are `render.js`'s
+ * `OVERVIEW_LAYOUT`, so the dash's list is the overview's.
  *
- * @type {{header: string, width: number, align: "left" | "center", sacrifice?: number, read: (cells: Cells) => string, style?: (cells: Cells) => Style | undefined}[]}
+ * @type {Record<string, {read: (cells: Cells) => string, style?: (cells: Cells) => Style | undefined}>}
  */
-const OVERVIEW = [
-  { header: "SOURCE", width: 0, align: "left", read: (cells) => cells.alias },
-  {
-    header: "NEXT PROMPT",
-    width: 11,
-    align: "center",
+const READERS = {
+  SOURCE: { read: (cells) => cells.alias },
+  "NEXT PROMPT": {
     read: (cells) => cells.next,
     style: (cells) => (cells.reading ? undefined : "dim"),
   },
-  {
-    header: "RISK",
-    width: 6,
-    align: "center",
-    sacrifice: 5,
-    read: (cells) => cells.risk,
-    style: (cells) => SCALE[cells.risk],
-  },
-  { header: "EVIDENCE", width: 8, align: "center", sacrifice: 2, read: (cells) => cells.evidence },
-  {
-    header: "PRESSURE",
-    width: 8,
-    align: "center",
-    sacrifice: 3,
-    read: (cells) => cells.band,
-    style: (cells) => SCALE[cells.band],
-  },
-  { header: "LAST SEEN", width: 9, align: "center", sacrifice: 4, read: (cells) => cells.seen },
-  {
-    header: "SYNC",
-    width: 6,
-    align: "center",
-    sacrifice: 1,
+  RISK: { read: (cells) => cells.risk, style: (cells) => SCALE[cells.risk] },
+  EVIDENCE: { read: (cells) => cells.evidence },
+  PRESSURE: { read: (cells) => cells.band, style: (cells) => SCALE[cells.band] },
+  "LAST SEEN": { read: (cells) => cells.seen },
+  SYNC: {
     read: (cells) => cells.sync,
     // A word first and a colour second: `busy` and `waiting` are not failures.
     style: (cells) =>
       cells.sync === "failed" ? "red" : cells.sync === "busy" ? "yellow" : undefined,
   },
-];
+};
+
+/**
+ * @typedef {{header: string, width: number, align: "left" | "center", sacrifice?: number, read: (cells: Cells) => string, style?: (cells: Cells) => Style | undefined}} Column
+ */
+
+/** @type {Column[]} */
+const OVERVIEW = OVERVIEW_LAYOUT.map((column) => {
+  const reader = READERS[column.header];
+  if (reader === undefined) throw new Error(`no dash reader for the ${column.header} column`);
+  return { ...column, ...reader };
+});
 
 /**
  * Give up columns in `sacrifice` order until the widest row fits (`render.js` `fit`).
@@ -424,26 +429,13 @@ function fit(cells, available) {
 
 /**
  * @param {Cells[]} cells
- * @param {typeof OVERVIEW} columns
+ * @param {Column[]} columns
  */
 function spans(cells, columns) {
   const widths = columns.map((column) =>
     Math.max(column.width, ...[column.header, ...cells.map(column.read)].map(measure)),
   );
   return 2 + widths.reduce((total, width) => total + width, 0) + 2 * (columns.length - 1);
-}
-
-/**
- * @param {string} value
- * @param {number} width
- * @param {"left" | "center"} align
- * @param {Paint} paint
- * @param {Style} [style]
- */
-function place(value, width, align, paint, style) {
-  const padding = Math.max(0, width - measure(value));
-  const before = align === "center" ? Math.floor(padding / 2) : 0;
-  return " ".repeat(before) + paint(value, style) + " ".repeat(padding - before);
 }
 
 /**
@@ -488,17 +480,17 @@ function detailLines(source, state, width, nowMs, paint) {
     {
       text: row(paint, "evidence", [
         [report.evidence.level, undefined],
-        [
-          ` — ${EVIDENCE_MEANS[report.evidence.level] ?? "how far the local history reaches"}`,
-          "dim",
-        ],
+        [` — ${describeEvidence(report.evidence.level)}`, "dim"],
       ]),
       priority: 9,
     },
     {
       text: row(paint, "pressure", [
         [band, SCALE[band]],
-        [` · ${describePercentile(score)} · ${report.expected_prompt_category} prompt`, undefined],
+        [
+          ` · ${describePercentile(score ?? undefined)} · ${report.expected_prompt_category} prompt`,
+          undefined,
+        ],
       ]),
       priority: 9,
     },
@@ -506,7 +498,7 @@ function detailLines(source, state, width, nowMs, paint) {
     ...plotLines(source, score, width, paint),
     {
       text: row(paint, "drivers", [
-        [describeContributors(report.pressure.contributors ?? []), undefined],
+        [describeContributors(report.pressure.contributors ?? [], false), undefined],
       ]),
       priority: 3,
     },
@@ -832,129 +824,6 @@ function tooSmall(state, size) {
   ];
 }
 
-// --- S1 replaces these with render.js exports (shownInterval, the panel's row builders). ---
-
-/**
- * A viability interval in whole percents, rounded outward, exactly as `render.js` `interval()`:
- * floor the lower end, ceil the upper, snap float error, and keep 50 strictly inside an interval
- * that straddles even odds.
- * S1 replaces this with render.js shownInterval().
- *
- * @param {{lower: number, upper: number}} viability
- */
-function interval(viability) {
-  const lower = clampPercent(Math.floor(snap(viability.lower * 100)));
-  const upper = clampPercent(Math.ceil(snap(viability.upper * 100)));
-  const low = viability.lower < 0.5 ? Math.min(lower, 49) : lower;
-  const high = viability.upper > 0.5 ? Math.max(upper, 51) : upper;
-  return `${low}-${Math.max(low, high)}%`;
-}
-
-/** @param {number} value */
-function snap(value) {
-  const whole = Math.round(value);
-  return Math.abs(value - whole) < 1e-9 ? whole : value;
-}
-
-/** @param {number} value */
-function clampPercent(value) {
-  return Math.min(100, Math.max(0, value));
-}
-
-/** @type {Record<string, string>} */
-const EVIDENCE_MEANS = {
-  very_low: "barely any history yet — mostly a starting assumption",
-  low: "a little history, still thin",
-  moderate: "some history, but few refusals seen yet",
-  high: "enough of your own history to lean on",
-};
-
-/** @param {number | null} score */
-function describePercentile(score) {
-  if (score === null) return "no baseline to compare against yet";
-  if (score <= 0) return "lower than every window in your own history";
-  if (score >= 1) return "higher than every window in your own history";
-  const rank = Math.round(score * 100);
-  if (rank === 0) return "in the lowest 1% of your own history";
-  if (rank === 100) return "in the highest 1% of your own history";
-  return `above ${rank}% of your own history`;
-}
-
-/** @param {{dimension: string, contribution: number | null}[]} contributors */
-function describeContributors(contributors) {
-  const ranked = contributors
-    .filter((contributor) => contributor.contribution !== null)
-    .sort((left, right) => Number(right.contribution) - Number(left.contribution))
-    .slice(0, 2);
-  if (ranked.length === 0) return "nothing to compare against yet";
-  return ranked
-    .map((contributor) =>
-      contributor.dimension === "prompts"
-        ? "prompt count"
-        : contributor.dimension.replaceAll("_", " "),
-    )
-    .join(", ");
-}
-
-/**
- * What Codex states about its own windows, in its words (`render.js` `describeReported`).
- *
- * @param {ReportedView[]} reported
- */
-function describeReported(reported) {
-  if (reported.length === 0) return "no figure stated by Codex yet";
-  return reported
-    .map((entry) => {
-      const nowMs = Date.parse(entry.stated_at) + entry.age_seconds * 1000;
-      const live = entry.windows.filter((window) => !window.reset_passed);
-      const ended = entry.windows.filter((window) => window.reset_passed);
-      const named = reported.length > 1 && entry.limit_id !== null ? ` (${entry.limit_id})` : "";
-      const parts = [];
-      if (live.length > 0) {
-        parts.push(
-          `Codex${named} states ${live
-            .map((window) => {
-              const resets =
-                window.resets_at === null ? "" : `, resets ${until(window.resets_at, nowMs)}`;
-              return `${Number(window.used_percent.toFixed(1))}% of its ${windowLength(window.window_minutes)} window${resets}`;
-            })
-            .join(" · ")}`,
-        );
-      }
-      for (const window of ended) {
-        parts.push(
-          `Codex's${named} ${windowLength(window.window_minutes)} window reset ${String(window.resets_at).slice(11, 16)} UTC; no figure stated since`,
-        );
-      }
-      parts.push(`${age(entry.age_seconds)} ago`);
-      return parts.join(" · ");
-    })
-    .join(" · ");
-}
-
-/** @param {number} minutes */
-function windowLength(minutes) {
-  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-  if (minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes}m`;
-}
-
-/** @param {string} resetsAt @param {number} nowMs */
-function until(resetsAt, nowMs) {
-  const seconds = Math.max(0, (Date.parse(resetsAt) - nowMs) / 1000);
-  if (seconds >= 86400) {
-    const weekday = new Date(resetsAt).toLocaleDateString("en-US", {
-      weekday: "short",
-      timeZone: "UTC",
-    });
-    return `${weekday} UTC`;
-  }
-  const total = Math.round(seconds / 60);
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  return hours === 0 ? `in ${minutes}m` : `in ${hours}h ${minutes}m`;
-}
-
 /**
  * One detail row: margin, indent, a dimmed label in the label column, then its cells.
  *
@@ -966,21 +835,6 @@ function row(paint, label, cells) {
   const body = cells.map(([value, style]) => paint(value, style)).join("");
   return `   ${paint(label.padEnd(LABEL), "dim")}${body}`.trimEnd();
 }
-
-/** @param {number} seconds */
-function age(seconds) {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-  return `${Math.round(seconds / 86400)}d`;
-}
-
-/** @param {string | null} timestamp */
-function day(timestamp) {
-  return timestamp === null ? "unknown" : (timestamp.split("T")[0] ?? "unknown");
-}
-
-// --- end of the S1 replacements ---
 
 /**
  * @param {boolean} color
@@ -1018,41 +872,10 @@ function fitLine(line, width) {
       painted = true;
       continue;
     }
-    const cost = isWide(token.codePointAt(0) ?? 0) ? 2 : 1;
+    const cost = measure(token);
     if (used + cost > width - 1) break;
     out += token;
     used += cost;
   }
   return `${out}…${painted ? "\u001B[0m" : ""}`;
-}
-
-/**
- * How wide `value` is on a screen (`render.js` `measure`): escapes cost nothing, East Asian wide
- * characters and emoji cost two.
- *
- * @param {string} value
- */
-export function measure(value) {
-  let width = 0;
-  // eslint-disable-next-line no-control-regex -- an escape sequence is exactly what is being removed
-  for (const character of value.replace(/\u001B\[[0-9;]*m/gu, "")) {
-    width += isWide(character.codePointAt(0) ?? 0) ? 2 : 1;
-  }
-  return width;
-}
-
-/** @param {number} code */
-function isWide(code) {
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  );
 }
