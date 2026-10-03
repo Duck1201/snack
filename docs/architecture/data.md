@@ -51,7 +51,8 @@ status command
   -> optional ephemeral prospective analysis
   -> query rolling usage and eligible outcomes
   -> calculate pressure and forecast
-  -> create immutable prediction attempt transactionally
+  -> with --sequence N (1.4+), assess sequence viability from the same posterior
+  -> create immutable prediction attempt transactionally, with its sequence answer if any
   -> attach the latest reported capacity usage beside the result (Codex sources, 1.3+);
      read after the forecast is built and never an input to it
   -> render and flush human/JSON output
@@ -268,6 +269,18 @@ Tombstones store no deleted content or statistical values.
 - parser version (`codex-rate-limits-v1`) and first-seen timestamp.
 
 One row per stated window per statement, unique by installation, observation key and window length, and never updated. A statement is stored only for the source whose provider the stating thread names. `plan_type` is shown and never rotates the capacity period. Migration `015` adds it with `reported_capacity_latest`, which keeps a pointer to the latest statement per source, installation and limit so `status` reads it without ranking the history. The pointer is derived: it advances in the transaction that inserts a later statement, and `data purge` recomputes it from the remaining rows. Neither table is read by analytics, prediction or export.
+
+### 8.17 `prediction_sequence` (1.4+)
+
+- prediction-attempt ID (the key: one invocation, one posterior, at most one sequence);
+- the user-supplied length;
+- sequence method ID and version (`sequence-<base>@1`);
+- lower/point/upper and coverage target;
+- risk label and risk-policy version;
+- whether the interval was too wide to inform, and the width-policy version;
+- posterior alpha and beta.
+
+Written by migration `016`, in the transaction that inserts its parent attempt. Immutable like the parent, and deleted only by `data purge` together with it. Delivery, evidence, period and completeness are the parent's and are not repeated. Not linked by `prediction_evaluation`, not calibrated and not exported in 1.4: a sequence scored against one prompt would corrupt the live calibration stream (ADR-0008).
 
 ## 9. Reconciliation Rules
 

@@ -13,8 +13,12 @@ The estimated probability that a prompt completes without an observed restrictio
 _Avoid_: Feature viability, remaining quota, real capacity
 
 **Sequence viability**:
-The estimated probability that a stated number of consecutive prompts all complete without an observed restriction from the capacity source being assessed. The count is always supplied by the user; SNACK never derives it, because a count derived from a probability is a claim about remaining capacity.
-_Avoid_: Feature viability, prompts remaining, budget, real capacity
+The estimated probability that a stated number of consecutive prompts all complete without an observed restriction from the capacity source being assessed. The count is always supplied by the user; SNACK never derives it, because a count derived from a probability is a claim about remaining capacity. Said as "all 10 go through" beside a label `next 10`, and as a `10-prompt` estimate — the number never set directly before the word "prompts".
+_Avoid_: Feature viability, prompts remaining, budget, real capacity, N prompts left
+
+**Too wide to inform**:
+A sequence-viability interval wider than half the probability scale, under the versioned `sequence-width-v1` policy. Such an interval contains even odds, so it cannot say whether all the prompts going through is more likely than not, and the reader is told so in words: "The 10-prompt interval is too wide to say much; a shorter sequence, or more history, narrows it." It describes the estimate, never capacity or a count; a narrow interval near zero is informative and is not too wide.
+_Avoid_: Unreliable, failed, garbage, low confidence, out of range
 
 **Observed restriction**:
 An explicit provider refusal attributed to a rate limit, usage limit, or equivalent condition. Timeouts, network failures, user cancellation, and client errors are not observed restrictions.

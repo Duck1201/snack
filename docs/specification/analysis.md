@@ -112,6 +112,8 @@ For calibration, the most recent eligible prediction snapshot for a capacity per
 
 Historical rolling-origin evaluation must construct each forecast using only observations available before that prompt. Model upgrades never overwrite old snapshots.
 
+A sequence-viability answer (§9.8) is recorded too, but beside its attempt in a table of its own, never as an attempt: an attempt is scored against one prompt, and a sequence is not a forecast about one prompt.
+
 ### 9.7 Promotion of Advanced Models
 
 Regression, survival analysis, clustering, time-series methods, or ML remain experimental until they:
@@ -122,6 +124,20 @@ Regression, survival analysis, clustering, time-series methods, or ML remain exp
 - operate locally or through an explicit optional adapter;
 - preserve the simple Bayesian fallback;
 - demonstrate benefit across more than one capacity source/client regime.
+
+### 9.8 Sequence Viability
+
+From 1.4, `status --sequence <n>` also answers for a **user-supplied** number `n` of consecutive prompts: the probability that all of them complete without an observed restriction, read from the same posterior `p ~ Beta(α, β)` as the single-prompt forecast and assuming each prompt meets the pressure band and size category the next one does. It does not model pressure rising as the prompts are sent, and says so in a caveat.
+
+- **Point.** The posterior predictive probability `E[p^n] = ∏_{k=0}^{n−1} (α + k) / (α + β + k)` — the Beta-Binomial probability of `n` successes in `n` trials. The point estimate raised to a power, `(α/(α+β))^n`, is never computed: by Jensen it is always lower, because it treats the estimate as known and counts its uncertainty twice.
+- **Interval.** `p ↦ p^n` is increasing on `[0, 1]`, so the single-prompt quantiles raised to `n` are the sequence's quantiles; no new quantile is computed. For a long sequence on a weak posterior the mean can fall just above the powered upper bound (never at `n = 1`, only while the point is below 0.025), and the interval is then widened to contain it: `lower = min(lowerₚ^n, point)`, `upper = max(upperₚ^n, point)`. Widening keeps at least `coverage_target` of the posterior inside, so the coverage target remains an honest lower bound.
+- **Risk** is `classifyRisk(lower)` under the same `stage2-risk-v2` thresholds; **evidence** is the single-prompt evidence object, unchanged — the gates assess the history behind the posterior, and the sequence reads that posterior. There is no sequence-specific gate.
+- **Method.** A different estimand is a different named method: `sequence-<base method>`, version `1` (`sequence-bayesian-pressure-band@1`, `sequence-initial-generic@1`). Changing the point, the interval construction or the widening moves the version. `PREDICTION_POLICY.version` does not move.
+- **Width.** An interval wider than half the probability scale (`upper − lower > 0.5`, policy `sequence-width-v1`) is flagged `too_wide`. Such an interval necessarily contains one half, so it cannot say even whether all `n` going through is more likely than not; the panel then says "The 10-prompt interval is too wide to say much; a shorter sequence, or more history, narrows it." Width, not position: a narrow interval near zero is informative and is never flagged. The edge is exclusive. It is a statement about the estimate, never about capacity.
+- **Identity.** At `n = 1` every member — interval, risk, evidence — is the single-prompt one, bit for bit.
+- **One way only.** The relation is `(posterior, n) → probability`. Nothing computes `(posterior, probability) → n`, because that `n` would be a count of prompts a plan allows — a claim about real provider capacity. `n` is limited to 1–100: past that the answer is the prior's tail raised to a power rather than a reading of the user's history.
+- **Recording.** Each answer is stored in `prediction_sequence`, keyed on the attempt the same invocation recorded, with the posterior `α` and `β` so a later calibration can reproduce it without recalculating the past. Delivery is the parent attempt's. It is immutable, deleted only by `data purge` with its attempt, and not exported.
+- **Calibration** is for a later release and is never folded into the live stream. The outcome is definable — the next `n` eligible prompts of the same capacity period all completed — but successive invocations produce overlapping, dependent windows, which need their own primary-forecast rule before a Brier score means anything (ADR-0008's separate calibration report). Until then `stats` is identical whether or not `--sequence` was ever used.
 
 ## 10. Calibration and Quality Metrics
 

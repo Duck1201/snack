@@ -1,6 +1,6 @@
 # 1.4.0 — `status --sequence N`
 
-Status: specified, not started. Scope is `docs/history/roadmap-1.x.md:457-463`; the domain term is
+Status: built on `release/1.4.0`; the open questions of §9 are decided in §10. Scope is `docs/history/roadmap-1.x.md:457-463`; the domain term is
 **Sequence viability** in `CONTEXT.md`; PLAN.md "Product Boundaries" already carries both halves of
 the promise ("a user-supplied number of consecutive prompts" / "derive a count of prompts from a
 probability — the count is always supplied by the user").
@@ -560,3 +560,71 @@ configured one.
 3. **No sequence-specific evidence gate.** A long `N` reads the same evidence level as `N = 1`; the
    caveat carries the band/category assumption instead. Revisit only with simulation, under a new
    evidence policy version.
+
+---
+
+## 10. Decisions
+
+Decided by the product owner before the build; the builder recorded them here and built to them.
+
+**(a) Persisting the sequence — the table.** The answer is recorded in a new child table,
+`prediction_sequence`, created by migration `016`, as §5.1 recommends. It stays out of calibration
+and out of `export`, and `data purge` deletes it with its attempt (counted in `counts.predictions`).
+The row is written in the same transaction as its parent attempt, so an attempt never exists without
+the sequence the user was shown beside it.
+
+**(b) The maximum N is 100** (`SEQUENCE_MAX_LENGTH`), for the reasons in §2.1. Raising it later is
+additive; lowering it would be breaking.
+
+**(c) The evidence level is inherited** from the single-prompt forecast, verbatim. There is no
+sequence-specific gate.
+
+**(d) A too-wide interval is said plainly.** New with this decision, from the concern that a large
+`N` produces answers a reader takes for garbage. A sequence interval that cannot inform must say so
+in words, instead of leaving the reader to think the tool failed.
+
+- **The rule** — `sequence-width-v1`: the interval is *too wide to inform* when
+  `upper − lower > 0.5`, half the probability scale. Exported as `SEQUENCE_WIDTH_POLICY` in
+  `prediction.js`.
+- **Why this rule.** An interval inside `[0, 1]` that is wider than one half necessarily contains
+  one half: its lower end is below even odds and its upper end above them. It therefore cannot say
+  even whether all `N` going through is more likely than not — the least a probability has to say
+  to be worth reading. A rule on *width*, not on position, is deliberate: "lower rounds to 0%" would
+  flag `Beta(1, 1)` at `N = 50` (`0-2%`), which is a narrow and perfectly informative answer — the
+  sequence is very unlikely to go through — while leaving `33-99%` (30 successes, `N = 25`)
+  unflagged. The edge is exclusive, so an interval of exactly one half, which still sits on one side
+  of even odds at its edge, is not flagged. On the §1.5 worked examples it fires for the prior alone
+  at `N = 10` (`0-78%`), for 30 successes at `N = 25` (`33-99%`) and for 38/2 at `N = 10`
+  (`31-82%`), and not for 30 successes at `N = 5` or `10`, 38/2 at `N = 5`, or `Beta(1,1)` at
+  `N = 50`.
+- **Vocabulary.** `CONTEXT.md` gains **Too wide to inform**. The caveat, last in `caveats` after the
+  §6.3 assumption caveat: "The 10-prompt interval is too wide to say much; a shorter sequence, or
+  more history, narrows it." At `N = 1`, where a shorter sequence does not exist: "The 1-prompt
+  interval is too wide to say much; more history narrows it." The number is written `10-prompt`,
+  never `10 prompts`, so it cannot read as an allowance; it is a caveat about informativeness and
+  never about capacity or a count.
+- **`--json`.** The `sequence` object gains a sixth required member, `width`:
+  `{ "too_wide": boolean, "max_width": 0.5, "policy_version": "sequence-width-v1" }`. Additive to
+  the published contract (`sequence` is itself new and optional in 1.4); declared in
+  `status.schema.json`. `prediction_sequence` records it as `width_too_wide` and
+  `width_policy_version`, so the record holds what the user was shown.
+
+### Deviations from §1–§8, recorded
+
+- **`sequence.width` and two more `prediction_sequence` columns** (`width_too_wide`,
+  `width_policy_version`) beyond §4.3 and §5.1, from decision (d). The posterior columns are also
+  constrained `> 0`.
+- **§3.1 item 3, the metamorphic test**: the sequence caveats (§6.3, and the width caveat) name `N`,
+  so the documents differ under `caveats` as well as under `sequence`. The test removes the trailing
+  caveats that begin `The N-prompt ` and asserts that the only integer they carry is `N`; everything
+  else must equal the run without `--sequence`.
+- **§3.1 item 2, the solver scan** checks *declared* identifiers (`function`, `const`, `let`, `var`,
+  `class`) against the solver names rather than the whole source text: `beta.js` correctly says its
+  quantile "inverts" the CDF, and a prose match there is not a solver.
+- **§2.1 "`--sequence -5`"**: with a space, Commander reads `-5` as an option and answers
+  `invalid_usage` (still exit `2`, still no echo). `--sequence=-5` reaches the validator and answers
+  `sequence_length_invalid`; the argv fuzz drives that form.
+- **No active capacity period** (§2.3, §7.5): the code records nothing without a period, as before,
+  but no command test reaches that state — no fixture produces a configured source with no period.
+- **READMEs, CHANGELOGs, the changeset and the release cut** (§6.4, §8 slice 4) are left to the
+  release's docs pass.

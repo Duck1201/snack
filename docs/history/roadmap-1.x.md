@@ -460,7 +460,7 @@ that prefix; an install with the flag under both npm 11.16.0 and npm 12 loads th
 - N is always supplied by the user. SNACK never inverts the relation, because a count derived from a probability is a claim about remaining capacity;
 - an additive field in the existing envelope; no new command, no new envelope.
 
-**Exit:** the JSON envelope validates against a version-bumped schema that the `1.0` corpus still validates against; no output path can produce a count of prompts.
+**Exit:** `status --json` validates against `status.schema.json` extended with an optional `sequence` — no version moves, the envelope stays at `2` — and every frozen corpus (`0.9`, `1.2`, `1.3`) still validates against it unchanged; no output path can produce a count of prompts.
 
 ### 1.5.0 - `reported_capacity_v1` prediction method
 
