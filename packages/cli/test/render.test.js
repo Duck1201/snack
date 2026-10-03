@@ -1125,7 +1125,7 @@ test("the shadow is a verbose line that says what it would say, and that it is n
   );
   assert.equal(
     lines[shadow + 1],
-    "               reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1",
+    "               reads what Codex states about its 5h window — in the near band · reported-capacity-v1",
   );
   // After the figure it read, never above the answer it is not.
   assert.ok(shadow > lines.findIndex((line) => line.startsWith("  reported")));
@@ -1155,7 +1155,7 @@ test("each band, and the starting assumption, is worded on the shadow's second l
   );
   assert.equal(
     second({ binding: { window_minutes: 300, band: "full" } }),
-    "reads what Codex states about its 5h window — stated full until it resets · reported-capacity-v1",
+    "reads what Codex states about its 5h window — Codex stated it full · reported-capacity-v1",
   );
   assert.equal(
     second({

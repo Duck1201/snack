@@ -509,7 +509,7 @@ One `shadow` row after `reported`, before `as of` — verbatim, for a `near` win
 
 ```
   shadow       reported-capacity@1 would say 41-97% · risk high · evidence low — recorded to compare, not the answer above
-               reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1
+               reads what Codex states about its 5h window — in the near band · reported-capacity-v1
 ```
 
 The second line by band:
@@ -517,8 +517,8 @@ The second line by band:
 | Case | Text |
 | --- | --- |
 | `clear` | `reads what Codex states about its 7d window · reported-capacity-v1` |
-| `near` | `reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1` |
-| `full`, cell has outcomes | `reads what Codex states about its 5h window — stated full until it resets · reported-capacity-v1` |
+| `near` | `reads what Codex states about its 5h window — in the near band · reported-capacity-v1` |
+| `full`, cell has outcomes | `reads what Codex states about its 5h window — Codex stated it full · reported-capacity-v1` |
 | `full`, prior only (`stated_full_prior`) | `a starting assumption — Codex states its 5h window is full, and no prompt of yours has been seen in that state yet · reported-capacity-v1` |
 
 Not computed: `  shadow       reported-capacity@1 not computed — <reason>`, with the reasons worded
@@ -547,8 +547,8 @@ from the shadow.
 A Codex fixture whose statements are fresh at the fixture clock — one in `near`, one in `full` —
 polices `status`, `status --verbose`, `status --sequence 10`, `status --verbose --sequence 10`,
 `stats --verbose`, each with and without `--json`. Vacuity guards: `reads what Codex states … —
-stated nearly full`, `starting assumption`, `not the answer above`, `"reported-capacity"`, `by
-method`. New `forbidden` patterns: `/\bheadroom\b/iu`, `/\b\d+(?:\.\d+)?%\s+(?:left|remaining|free)\b/iu`.
+in the near band`, `starting assumption`, `not the answer above`, `"reported-capacity"`, `by
+method`; and the shadow never says `nearly full` or `until it resets`. New `forbidden` patterns: `/\bheadroom\b/iu`, `/\b\d+(?:\.\d+)?%\s+(?:left|remaining|free)\b/iu`.
 Targeted: the `next prompt`, `next <n>` and `shadow` lines never match `/\d+(?:\.\d+)?% of\b/u`, and no
 surface without `--verbose` shows the shadow or names `reported-capacity`.
 

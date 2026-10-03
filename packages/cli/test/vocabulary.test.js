@@ -225,11 +225,15 @@ test("the shadow never reads as capacity, as the answer, or as a stated figure i
 
   const transcript = outputs.map((output) => output.text).join("\n");
   // Vacuity guards: both bands and the starting assumption were really on the surface.
-  assert.match(transcript, /reads what Codex states about its 5h window — stated nearly full/u);
+  assert.match(transcript, /reads what Codex states about its 5h window — in the near band/u);
   assert.match(transcript, /starting assumption — Codex states its 5h window is full/u);
   assert.match(transcript, /not the answer above/u);
   assert.match(transcript, /"reported-capacity"/u);
   assert.match(transcript, /by method/u);
+  // A stated band is SNACK's grouping, not something Codex said, and a full window can end early
+  // with a plan change: the shadow neither paraphrases the threshold as Codex's words nor promises
+  // how long a window stays full.
+  assert.doesNotMatch(transcript, /nearly full|until it resets/u);
 
   for (const output of outputs) {
     const where = `\`snack ${output.argv.join(" ")}\`${output.json ? " --json" : ""}`;

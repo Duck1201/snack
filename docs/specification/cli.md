@@ -161,14 +161,16 @@ the baseline gives, whatever Codex states. The shadow is shown on one human surf
 ```text
   reported     Codex states 86% of its 5h window, resets in 1h 12m · 3m ago
   shadow       reported-capacity@1 would say 41-97% · risk high · evidence low — recorded to compare, not the answer above
-               reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1
+               reads what Codex states about its 5h window — in the near band · reported-capacity-v1
 ```
 
 The first line says what the method would say, with the method named first, and that it is not
 the answer above it. The interval is rounded outward like every other shown interval and carries no
 stated percentage: the figure it read is quoted once, on the `reported` row. The second line names
-the window it read and the stated band — no qualifier in `clear`, "stated nearly full" in `near`,
-"stated full until it resets" in `full` — and the policy version. When the band is `full` and no
+the window it read and the stated band — no qualifier in `clear`, "in the near band" in `near`,
+"Codex stated it full" in `full` — and the policy version that draws the bands. The `near` band is
+SNACK's grouping of the stated figure under that policy, not something Codex said, and nothing is
+said about how long a window stays full: a plan change can end it early. When the band is `full` and no
 prompt of the user's has been seen in that state, the second line reads instead "a starting
 assumption — Codex states its 5h window is full, and no prompt of yours has been seen in that state
 yet", because the interval is then the versioned assumption and nothing else. When the shadow was

@@ -1043,9 +1043,9 @@ function shadowRows(shadow, reported, paint) {
     shadow.contributors?.backoff_level === "stated_full_prior"
       ? `a starting assumption — Codex states its ${length} window is full, and no prompt of yours has been seen in that state yet`
       : binding.band === "full"
-        ? `reads what Codex states about its ${length} window — stated full until it resets`
+        ? `reads what Codex states about its ${length} window — Codex stated it full`
         : binding.band === "near"
-          ? `reads what Codex states about its ${length} window — stated nearly full`
+          ? `reads what Codex states about its ${length} window — in the near band`
           : `reads what Codex states about its ${length} window`;
   return [
     row(paint, "shadow", [
