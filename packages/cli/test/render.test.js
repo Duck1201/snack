@@ -778,7 +778,7 @@ test("what Codex states sits on its own row, after the estimate and before as of
   );
   assert.equal(
     lines[reported],
-    "  reported     Codex states 34% of its 5h window, resets in 2h 30m · 19% of its 7d window, resets Fri · 3m ago",
+    "  reported     Codex states 34% of its 5h window, resets in 2h 30m · 19% of its 7d window, resets Fri UTC · 3m ago",
   );
   // The estimate's own rows are untouched by it.
   assert.equal(lines[1], "  next prompt  95-100% chance it goes through · risk low");
@@ -803,7 +803,7 @@ test("a window whose reset has passed is not repeated", () => {
 
   assert.match(
     text,
-    / {2}reported {5}Codex's 5h window reset 02:30; no figure stated since · 3m ago/u,
+    / {2}reported {5}Codex's 5h window reset 02:30 UTC; no figure stated since · 3m ago/u,
   );
   assert.doesNotMatch(text, /98%/u);
 });

@@ -938,7 +938,11 @@ function windowLength(minutes) {
 function until(resetsAt, nowMs) {
   const seconds = Math.max(0, (Date.parse(resetsAt) - nowMs) / 1000);
   if (seconds >= 86400) {
-    return new Date(resetsAt).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+    const weekday = new Date(resetsAt).toLocaleDateString("en-US", {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+    return `${weekday} UTC`;
   }
   const total = Math.round(seconds / 60);
   const hours = Math.floor(total / 60);
@@ -946,9 +950,14 @@ function until(resetsAt, nowMs) {
   return hours === 0 ? `in ${minutes}m` : `in ${hours}h ${minutes}m`;
 }
 
-/** @param {string} timestamp */
+/**
+ * A time of day, in UTC and saying so. Every absolute time SNACK prints is UTC (`day()` slices the
+ * same instant), and a bare `14:30` would be read as the reader's local time.
+ *
+ * @param {string} timestamp
+ */
 function clock(timestamp) {
-  return timestamp.slice(11, 16);
+  return `${timestamp.slice(11, 16)} UTC`;
 }
 
 /**
