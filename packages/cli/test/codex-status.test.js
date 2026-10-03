@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
 
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
-import { labelStatedBands } from "../src/reported-capacity.js";
-import { readStatedBandRows, readStatedTimeline } from "../src/storage.js";
+import { resolvePlanProfile } from "../src/plan-profile.js";
+import { labelStatedBands, REPORTED_CAPACITY_POLICY } from "../src/reported-capacity.js";
 import {
+  readIngestionCursor,
+  readStatedBandFrontier,
+  readStatedBandRows,
+  readStatedTimeline,
+  storeObservations,
+} from "../src/storage.js";
+import {
+  addCodexTurns,
   cleanupRunFixtures,
   createClaudeHistory,
   createCodexHistory,
@@ -416,4 +425,202 @@ test("each prompt's stated band is projected as of its own start, and moves with
     "--yes",
   ]);
   assert.equal(compare()[0]?.stated_band, null);
+});
+
+/**
+ * The projection of a fixture's active period, against the as-of labelling of the same stored
+ * history, under the current policy.
+ *
+ * @param {string} databaseFile
+ */
+function assertProjected(databaseFile) {
+  const rows = readStatedBandRows(databaseFile, "codex");
+  const expected = labelStatedBands(
+    rows.map((row) => ({ ...row, outcome: /** @type {const} */ ("success") })),
+    readStatedTimeline(databaseFile, "codex", { from: "" }),
+    { periodStart: null },
+  );
+  assert.deepEqual(
+    rows.map((row) => [row.stated_band, row.stated_band_policy_version]),
+    expected.map((row) => [row.stated_band, REPORTED_CAPACITY_POLICY.version]),
+  );
+  return rows;
+}
+
+/** @param {string} databaseFile */
+function frontierOf(databaseFile) {
+  return readStatedBandFrontier(databaseFile, "codex", REPORTED_CAPACITY_POLICY.version);
+}
+
+test("a synchronization that brings nothing leaves no frontier, though an ended period holds prompts never computed", async () => {
+  const fixture = await makeRunFixture("snack-codex-frontier-");
+  await codexFixture(fixture);
+  const { databaseFile, configFile } = fixture.paths;
+
+  // A plan change ends the period the whole history was filed in.
+  const config = JSON.parse(await readFile(configFile, "utf8"));
+  config.sources[0].plan = "pro";
+  await writeFile(configFile, JSON.stringify(config), { mode: 0o600 });
+  fixture.options.now = new Date("2026-01-02T05:00:00.000Z");
+  await json(fixture, ["sync"]);
+
+  // What migration 018 leaves on a 1.4 database: no prompt computed, no projection recorded.
+  const database = new Database(databaseFile);
+  try {
+    database.exec(
+      "UPDATE prompt_execution SET stated_band = NULL, stated_band_policy_version = NULL",
+    );
+    if (
+      database
+        .prepare("SELECT 1 FROM sqlite_master WHERE name = 'stated_band_projection'")
+        .get() !== undefined
+    ) {
+      database.exec("DELETE FROM stated_band_projection");
+    }
+    const ended = /** @type {{prompts: number}} */ (
+      database
+        .prepare(
+          `SELECT COUNT(*) AS prompts FROM prompt_execution
+             JOIN capacity_period ON capacity_period.id = prompt_execution.capacity_period_id
+            WHERE capacity_period.ended_at IS NOT NULL`,
+        )
+        .get()
+    );
+    assert.ok(ended.prompts > 0, "vacuous: no prompt in an ended period");
+  } finally {
+    database.close();
+  }
+
+  fixture.options.now = new Date("2026-01-02T06:00:00.000Z");
+  await json(fixture, ["sync"]);
+  assert.equal(frontierOf(databaseFile), null, "the first synchronization left a frontier");
+  fixture.options.now = new Date("2026-01-02T06:01:00.000Z");
+  await json(fixture, ["sync"]);
+  assert.equal(frontierOf(databaseFile), null, "a synchronization that brought nothing");
+});
+
+test("a statement committed without the restate that follows it is projected by the next synchronization", async () => {
+  const fixture = await makeRunFixture("snack-codex-crash-");
+  await codexFixture(fixture);
+  const { databaseFile, configFile } = fixture.paths;
+  const synced = assertProjected(databaseFile);
+  const first = /** @type {{started_at: string, stated_band: string | null}} */ (synced[0]);
+  assert.equal(first.stated_band, null, "the first prompt had a statement before it");
+  assert.equal(frontierOf(databaseFile), null);
+
+  // The ingestion transaction of a synchronization that stopped right after it committed -- the
+  // process killed before the restate ran: a statement read late, made just before the first
+  // prompt, is stored and nothing is recomputed.
+  const config = JSON.parse(await readFile(configFile, "utf8"));
+  storeObservations(
+    databaseFile,
+    config.sources[0],
+    {
+      observations: [],
+      cursor: readIngestionCursor(databaseFile, "codex"),
+      reported_capacity: [
+        {
+          observation_key: "e".repeat(64),
+          observed_at: new Date(Date.parse(first.started_at) - 1000).toISOString(),
+          limit_id: "codex",
+          plan_type: "plus",
+          windows: [{ window_minutes: 300, used_percent: 100, resets_at: null }],
+          parser_version: "codex-rate-limits-v1",
+          provider: "openai",
+        },
+      ],
+    },
+    /** @type {Date} */ (fixture.options.now),
+    // What `synchronizeSource` passes, so the batch files into the same period.
+    { planProfile: resolvePlanProfile(config.sources[0]).profile },
+  );
+  assert.equal(readStatedBandRows(databaseFile, "codex")[0]?.stated_band, null);
+  assert.notEqual(frontierOf(databaseFile), null, "the commit left no durable frontier");
+
+  // An hour later, a synchronization that reads nothing new heals it.
+  fixture.options.now = new Date(Date.parse(String(fixture.options.now)) + 3_600_000);
+  await json(fixture, ["sync"]);
+  assert.equal(assertProjected(databaseFile)[0]?.stated_band, "full");
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("a prompt synchronized after the projection is current is projected by that synchronization", async () => {
+  const fixture = await makeRunFixture("snack-codex-incremental-");
+  await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  const before = assertProjected(databaseFile).length;
+  assert.equal(frontierOf(databaseFile), null);
+
+  // Three turns half an hour after the fixture's statements, read by an incremental sync.
+  await addCodexTurns(/** @type {string} */ (fixture.options.env.CODEX_HOME), {
+    from: Date.parse("2026-01-02T02:30:00.000Z"),
+    count: 3,
+    spacingMs: 60_000,
+  });
+  await json(fixture, ["sync"]);
+  const rows = assertProjected(databaseFile);
+  assert.equal(rows.length, before + 3);
+  assert.ok(
+    rows.slice(-3).every((row) => row.stated_band !== null),
+    "vacuous: no statement binds the new prompts",
+  );
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("a projection made under another policy version is recomputed whole", async () => {
+  const fixture = await makeRunFixture("snack-codex-policy-");
+  await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  assertProjected(databaseFile);
+
+  // A projection recorded by an earlier policy, its bands since tampered with: the version alone
+  // must send the next synchronization back over the whole active period.
+  const database = new Database(databaseFile);
+  try {
+    database.exec(
+      `UPDATE stated_band_projection SET policy_version = 'reported-capacity-v0';
+       UPDATE prompt_execution SET stated_band = 'full'`,
+    );
+  } finally {
+    database.close();
+  }
+  assert.equal(frontierOf(databaseFile), "");
+  await json(fixture, ["sync"]);
+  assertProjected(databaseFile);
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("a source no Codex installation feeds keeps no stated-band state on its prompts", async () => {
+  const fixture = await makeRunFixture("snack-claude-projection-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  await json(fixture, ["setup", "claude", ...flags("personal", "anthropic", "pro")]);
+  await json(fixture, ["sync", "--full"]);
+  await json(fixture, ["sync"]);
+  const database = new Database(fixture.paths.databaseFile, { readonly: true });
+  try {
+    const prompts = /** @type {{prompts: number, stated: number}} */ (
+      database
+        .prepare(
+          `SELECT COUNT(*) AS prompts,
+                  COUNT(stated_band) + COUNT(stated_band_policy_version) AS stated
+             FROM prompt_execution`,
+        )
+        .get()
+    );
+    assert.ok(prompts.prompts > 0, "vacuous: no prompt");
+    assert.equal(prompts.stated, 0);
+    // No index carries a row per prompt for the projection: a six-figure Claude Code history would
+    // pay for every one of them and never use it.
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'index' AND tbl_name = 'prompt_execution' AND sql LIKE '%stated_band%'`,
+        )
+        .all(),
+      [],
+    );
+  } finally {
+    database.close();
+  }
 });

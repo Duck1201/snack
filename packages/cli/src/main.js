@@ -585,7 +585,7 @@ export async function run(argv, options = {}) {
                   isCodexSource(entry),
               )
             ) {
-              restateSource(paths.databaseFile, candidate.alias, { seenSince: now.toISOString() });
+              restateSource(paths.databaseFile, candidate.alias);
             }
             // Each new outcome is attached to the forecast that preceded it, so live
             // calibration compares a prediction with the future it did not know about.
@@ -797,7 +797,7 @@ export async function run(argv, options = {}) {
           if (synchronization.performed) {
             recategorizeSource(paths.databaseFile, source.alias);
             if (quotesCodex) {
-              restateSource(paths.databaseFile, source.alias, { seenSince: now.toISOString() });
+              restateSource(paths.databaseFile, source.alias);
             }
             linkPrimaryEvaluations(paths.databaseFile, source.alias, "stage5-evaluation-v1");
           }
@@ -2723,22 +2723,19 @@ function recategorizeSource(databaseFile, alias) {
  * time after newer ones -- moves the prompts after it, and so does a purge. Each band is resolved
  * at its prompt's own start from statements strictly earlier.
  *
- * After a synchronization only the suffix that can have moved is recomputed: the prompts from the
- * earliest prompt never computed, or the earliest statement this invocation
- * stored, whichever came first. Nothing older than one statement-age limit before that point can
- * bind a prompt inside it, so the walk starts there. Without `seenSince` -- after a purge -- the
- * whole active period is recomputed.
+ * Only the suffix that can have moved is recomputed: the prompts from the source's frontier, which
+ * the ingestion and purge transactions lower as they commit, so a process stopped between a commit
+ * and this call leaves the frontier where the next one finds it. Nothing older than one
+ * statement-age limit before the frontier can bind a prompt after it, so the walk starts there. A
+ * source never projected, or projected under another policy version, is recomputed whole; one
+ * whose frontier is clear costs one primary-key read.
  *
  * @param {string} databaseFile
  * @param {string} alias
- * @param {{seenSince?: string}} [options] the invocation's clock, when it has just synchronized
  */
-function restateSource(databaseFile, alias, options = {}) {
+function restateSource(databaseFile, alias) {
   const version = REPORTED_CAPACITY_POLICY.version;
-  const frontier =
-    options.seenSince === undefined
-      ? ""
-      : readStatedBandFrontier(databaseFile, alias, { seenSince: options.seenSince });
+  const frontier = readStatedBandFrontier(databaseFile, alias, version);
   if (frontier === null) return;
   const lookback =
     frontier === ""
@@ -2748,10 +2745,12 @@ function restateSource(databaseFile, alias, options = {}) {
         ).toISOString();
   const floor = readSourceSummary(databaseFile, alias).active_period_floor;
   const rows = readStatedBandRows(databaseFile, alias, { from: lookback });
-  if (rows.length === 0) return;
-  const timeline = readStatedTimeline(databaseFile, alias, {
-    from: floor !== null && floor > lookback ? floor : lookback,
-  });
+  const timeline =
+    rows.length === 0
+      ? []
+      : readStatedTimeline(databaseFile, alias, {
+          from: floor !== null && floor > lookback ? floor : lookback,
+        });
   /** @type {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} */
   const moved = [];
   walkStatedHistory(
@@ -2770,7 +2769,7 @@ function restateSource(databaseFile, alias, options = {}) {
       }
     },
   );
-  writeStatedBands(databaseFile, moved);
+  writeStatedBands(databaseFile, alias, moved, version);
 }
 
 /**

@@ -497,6 +497,17 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         bindings !== null &&
         "count" in bindings &&
         Number(bindings.count) > 1;
+      // The earliest instant this batch can have moved a stated band from: the start of a prompt
+      // stored, revised or attributed, or the instant of a statement stored. It is written below,
+      // in this transaction, so the projection's frontier commits with the change that made it.
+      /** @type {string | null} */
+      let staleFrom = null;
+      /** @param {unknown} instant */
+      const stale = (instant) => {
+        if (typeof instant === "string" && (staleFrom === null || instant < staleFrom)) {
+          staleFrom = instant;
+        }
+      };
       for (const observation of batch.observations) {
         if (
           tombstones.length > 0 &&
@@ -589,7 +600,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const existing = database
           .prepare(
             `SELECT id, source_revision, observation_hash, completion, revision_domain,
-                    installation_id
+                    installation_id, started_at
               FROM prompt_execution
              WHERE source_alias = ? AND source_prompt_id = ?`,
           )
@@ -682,12 +693,14 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           // staying unknown forever. Only the gap is filled: an attribution already recorded is
           // never rewritten, so re-reading a history cannot move a prompt from one client to
           // another.
-          database
+          const attributed = database
             .prepare(
               `UPDATE prompt_execution SET installation_id = ?
                 WHERE id = ? AND installation_id IS NULL`,
             )
             .run(source.installation_id, existing.id);
+          // Whose prompt it was decides whether a later statement is superseded by it.
+          if (attributed.changes > 0) stale(storedRow?.started_at);
         }
         const existingRevisionDomain =
           typeof existing === "object" &&
@@ -901,6 +914,9 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               timestamp,
               promptId,
             );
+          // A revision can move the prompt's start: both instants bound what can have moved.
+          stale(storedRow?.started_at);
+          stale(observation.started_at);
           database
             .prepare("DELETE FROM prompt_usage_slice WHERE prompt_execution_id = ?")
             .run(promptId);
@@ -962,6 +978,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             );
           promptId = Number(inserted.lastInsertRowid);
           counts.inserted += 1;
+          stale(observation.started_at);
         }
 
         const insertSlice = database.prepare(
@@ -1025,8 +1042,10 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           tombstones,
           timestamp,
           options.providerMappingCounts,
+          stale,
         );
       }
+      if (staleFrom !== null) markStatedBandsStale(database, source.alias, staleFrom);
 
       // Records the backfill adapter could not parse are ingestion issues of the backfill path,
       // the same way an invalid spool event is one of the spool path. Counting them is what keeps
@@ -1130,6 +1149,7 @@ const REPORTED_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
  * @param {{from_at: string | null, until_at: string | null}[]} tombstones
  * @param {string} timestamp
  * @param {Map<string, number>} [providerMappingCounts]
+ * @param {(instant: string) => void} [stale] told the instant of every statement stored
  * @returns {ReportedCapacityCounts}
  */
 function storeReportedCapacity(
@@ -1139,6 +1159,7 @@ function storeReportedCapacity(
   tombstones,
   timestamp,
   providerMappingCounts,
+  stale,
 ) {
   const counts = { inserted: 0, unchanged: 0, rejected: 0, tombstoned: 0, pending_mapping: 0 };
   const insert = database.prepare(
@@ -1210,6 +1231,7 @@ function storeReportedCapacity(
         newestRow,
       );
       counts.inserted += 1;
+      stale?.(snapshot.observed_at);
     } else counts.unchanged += 1;
   }
   return counts;
@@ -1867,47 +1889,71 @@ export function readStatedBandRows(databaseFile, sourceAlias, options = {}) {
 }
 
 /**
- * The earliest instant from which a source's stated-band projection may be out of date: the start
- * of the first prompt whose band was never computed, or the instant of the first statement stored
- * at or after `seenSince`, whichever is earlier. Null when neither exists, so a synchronization
- * that brought nothing new recomputes nothing. Both are index lookups (migration 018).
+ * Lower a source's stated-band frontier to `from`, inside the caller's transaction: the ingestion
+ * that stored what moved a band, or the purge that removed it. A source never projected keeps no
+ * policy version, which already means "recompute everything", so its row records only the instant.
+ *
+ * @param {Database.Database} database
+ * @param {string} sourceAlias
+ * @param {string} from an instant, or the empty string for the whole active period
+ */
+function markStatedBandsStale(database, sourceAlias, from) {
+  database
+    .prepare(
+      `INSERT INTO stated_band_projection (source_alias, policy_version, stale_from)
+       VALUES (?, NULL, ?)
+       ON CONFLICT (source_alias) DO UPDATE
+          SET stale_from = excluded.stale_from
+        WHERE stated_band_projection.stale_from IS NULL
+           OR excluded.stale_from < stated_band_projection.stale_from`,
+    )
+    .run(sourceAlias, from);
+}
+
+/**
+ * The earliest instant from which a source's stated-band projection may be out of date, or null
+ * when it is current: one primary-key read of `stated_band_projection` (migration 018).
+ *
+ * The empty string -- recompute the whole active period -- when the source was never projected,
+ * or was projected under a policy version other than `policyVersion`: an upgraded database and a
+ * policy that moved in code are caught up by the same rule, with nothing to reset by hand.
  *
  * @param {string} databaseFile
  * @param {string} sourceAlias
- * @param {{seenSince: string}} options
+ * @param {string} policyVersion the policy the caller computes under
  * @returns {string | null}
  */
-export function readStatedBandFrontier(databaseFile, sourceAlias, options) {
+export function readStatedBandFrontier(databaseFile, sourceAlias, policyVersion) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
-    const row = /** @type {{prompt: string | null, statement: string | null}} */ (
-      database
-        .prepare(
-          `SELECT
-             (SELECT MIN(started_at) FROM prompt_execution
-               WHERE source_alias = @source AND stated_band_policy_version IS NULL) AS prompt,
-             (SELECT MIN(observed_at) FROM reported_capacity_observation
-               WHERE source_alias = @source AND first_seen_at >= @seen) AS statement`,
-        )
-        .get({ source: sourceAlias, seen: options.seenSince })
-    );
-    const candidates = [row.prompt, row.statement].filter((value) => value !== null);
-    return candidates.length === 0 ? null : /** @type {string} */ (candidates.sort()[0]);
+    const row =
+      /** @type {{policy_version: string | null, stale_from: string | null} | undefined} */ (
+        database
+          .prepare(
+            `SELECT policy_version, stale_from FROM stated_band_projection WHERE source_alias = ?`,
+          )
+          .get(sourceAlias)
+      );
+    if (row === undefined || row.policy_version !== policyVersion) return "";
+    return row.stale_from;
   } finally {
     database.close();
   }
 }
 
 /**
- * Persist recomputed stated bands in one transaction. Only rows whose band or policy moved are
- * handed in, so a synchronization that changed nothing writes nothing.
+ * Persist recomputed stated bands and mark the source's projection current under `policyVersion`,
+ * in one transaction, so a projection is never recorded as current without the bands that make it
+ * so. Only rows whose band or policy moved are handed in. Called under the storage operation lock,
+ * so no ingestion can have lowered the frontier since it was read.
  *
  * @param {string} databaseFile
+ * @param {string} sourceAlias
  * @param {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} rows
+ * @param {string} policyVersion
  * @returns {number} rows written
  */
-export function writeStatedBands(databaseFile, rows) {
-  if (rows.length === 0) return 0;
+export function writeStatedBands(databaseFile, sourceAlias, rows, policyVersion) {
   const database = new Database(databaseFile, { fileMustExist: true });
   try {
     const update = database.prepare(
@@ -1915,9 +1961,17 @@ export function writeStatedBands(databaseFile, rows) {
           SET stated_band = @stated_band, stated_band_policy_version = @stated_band_policy_version
         WHERE id = @prompt_execution_id`,
     );
-    return database.transaction((/** @type {typeof rows} */ batch) =>
-      batch.reduce((written, row) => written + update.run(row).changes, 0),
-    )(rows);
+    const current = database.prepare(
+      `INSERT INTO stated_band_projection (source_alias, policy_version, stale_from)
+       VALUES (?, ?, NULL)
+       ON CONFLICT (source_alias) DO UPDATE
+          SET policy_version = excluded.policy_version, stale_from = NULL`,
+    );
+    return database.transaction((/** @type {typeof rows} */ batch) => {
+      const written = batch.reduce((total, row) => total + update.run(row).changes, 0);
+      current.run(sourceAlias, policyVersion);
+      return written;
+    })(rows);
   } finally {
     database.close();
   }
@@ -2987,6 +3041,16 @@ function purgeScopeLocked(paths, scope, options) {
         .prepare(`DELETE FROM reported_capacity_observation WHERE ${reportedFilter}`)
         .run(parameters).changes;
       if (deletedReported > 0) recomputeReportedLatest(database, parameters.source);
+      // A purged prompt or statement no longer binds the prompts after it. The whole active period
+      // of every source in scope is recomputed, and the marker commits with the purge.
+      if (deletedPrompts > 0 || deletedReported > 0) {
+        database
+          .prepare(
+            `UPDATE stated_band_projection SET stale_from = ''
+              WHERE @source IS NULL OR source_alias = @source`,
+          )
+          .run({ source: parameters.source });
+      }
 
       if (
         deletedPrompts !== counted.prompts ||

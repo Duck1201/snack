@@ -639,6 +639,8 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   delete after.prediction_sequence;
   assert.equal(after.prediction_reported_capacity, 0);
   delete after.prediction_reported_capacity;
+  assert.equal(after.stated_band_projection, 0);
+  delete after.stated_band_projection;
   assert.equal(after.prediction_attempt, (before.prediction_attempt ?? 0) + 1);
   assert.equal(after.prediction_delivery, (before.prediction_delivery ?? 0) + 1);
   const unchanged = (/** @type {Record<string, number>} */ counts) => ({
@@ -1222,6 +1224,9 @@ test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client
   delete after.prediction_sequence;
   assert.deepEqual(after.prediction_reported_capacity, []);
   delete after.prediction_reported_capacity;
+  // No source has been projected yet: the first synchronization recomputes each one whole.
+  assert.deepEqual(after.stated_band_projection, []);
+  delete after.stated_band_projection;
   // 018 adds the stated-band projection to every prompt, empty until a synchronization computes
   // it; every other byte of every prompt is the one 1.2 wrote.
   after.prompt_execution = (after.prompt_execution ?? []).map((row) => {
@@ -1347,6 +1352,8 @@ test("each published schema level upgrades straight to the newest without losing
     }
     assert.equal(after.prediction_reported_capacity, 0, `floor ${floor}`);
     delete after.prediction_reported_capacity;
+    assert.equal(after.stated_band_projection, 0, `floor ${floor}`);
+    delete after.stated_band_projection;
     assert.deepEqual(
       { ...after, schema_migration: 0 },
       { ...before, schema_migration: 0 },

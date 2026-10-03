@@ -586,7 +586,8 @@ export function executeOpenCodeSql(databaseFile, sql) {
 
 /**
  * Write stated figures straight into the two tables a statement lives in, the way
- * `storeObservations` writes them, and nothing else. A whole ingestion batch would also move the
+ * `storeObservations` writes them, and lower the source's stated-band frontier to the earliest of
+ * them as its transaction does -- and nothing else. A whole ingestion batch would also move the
  * cursor and possibly the period, and a test comparing two histories would then be comparing two
  * different ones.
  *
@@ -616,7 +617,15 @@ export function plantStatements(databaseFile, alias, installationId, snapshots, 
            OR (excluded.observed_at = reported_capacity_latest.observed_at
                AND excluded.row_id > reported_capacity_latest.row_id)`,
     );
+    const stale = database.prepare(
+      `INSERT INTO stated_band_projection (source_alias, policy_version, stale_from)
+       VALUES (?, NULL, ?)
+       ON CONFLICT (source_alias) DO UPDATE SET stale_from = excluded.stale_from
+        WHERE stated_band_projection.stale_from IS NULL
+           OR excluded.stale_from < stated_band_projection.stale_from`,
+    );
     for (const snapshot of snapshots) {
+      stale.run(alias, snapshot.observed_at);
       let row = 0;
       for (const window of snapshot.windows) {
         row = Number(

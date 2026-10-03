@@ -5,25 +5,33 @@
 -- `status --no-sync` budget its margin on a 100,000-prompt Codex history -- the spec's named risk
 -- -- so the band is computed once per synchronization, in chronological order, from statements
 -- strictly earlier than each prompt's start, and `status` reads it with the outcome it belongs to.
--- It is derived data, never a record: the whole active period is recomputed after every
--- synchronization and every purge, so a statement read late moves the prompts after it.
+-- It is derived data, never a record: a statement read late moves the prompts after it, and so
+-- does a purge.
 --
--- `stated_band` is null where no window bound at the prompt's start. A null
--- `stated_band_policy_version` means the band was never computed, which no forecast trusts.
--- Neither column is exported. Both are added in place; nothing is rebuilt.
+-- `stated_band` is null where no window bound at the prompt's start. `stated_band_policy_version`
+-- names the policy that computed it; a null one means the band was never computed, which no
+-- forecast trusts. Only the active period of a source a Codex installation feeds is ever computed:
+-- every other prompt keeps both columns null, and a column added in place costs nothing on a row
+-- that never holds a value. Neither column is exported.
 ALTER TABLE prompt_execution ADD COLUMN stated_band TEXT
   CHECK (stated_band IS NULL OR stated_band IN ('clear', 'near', 'full'));
 
 ALTER TABLE prompt_execution ADD COLUMN stated_band_policy_version TEXT;
 
--- What a synchronization recomputes is the suffix from the earliest prompt never computed, or the
--- earliest statement it stored, whichever came first. Both are found through these two indexes
--- rather than by scanning a six-figure history on every synchronization. A later policy version
--- recomputes everything by setting `stated_band_policy_version` back to null in its own migration:
--- the column is derived data, and null is what "never computed" means.
-CREATE INDEX prompt_execution_unstated_idx
-  ON prompt_execution (source_alias, started_at)
-  WHERE stated_band_policy_version IS NULL;
-
-CREATE INDEX reported_capacity_observation_source_seen_idx
-  ON reported_capacity_observation (source_alias, first_seen_at);
+-- One row per capacity source: how far its projection is out of date. The ingestion transaction
+-- that stores a prompt, revises one, attributes one or stores a statement lowers `stale_from` to
+-- that instant, and a purge sets it to the empty string -- everything -- in its own transaction,
+-- so the marker commits with the change that made it true and survives a process that stops
+-- before the projection is recomputed. Recomputing clears it, in the transaction that writes the
+-- bands, and records the policy version it computed under.
+--
+-- No row, or a `policy_version` other than the running one, means the source was never projected
+-- under this policy, and its whole active period is recomputed: that is how an upgraded database
+-- and a later policy version are both caught up, with nothing to set back by hand. A source no
+-- Codex installation feeds keeps one row here and nothing per prompt. Content-free by shape: an
+-- alias, a version identifier and an instant. Not exported.
+CREATE TABLE stated_band_projection (
+  source_alias TEXT PRIMARY KEY,
+  policy_version TEXT,
+  stale_from TEXT
+) STRICT, WITHOUT ROWID;
