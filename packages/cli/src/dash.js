@@ -108,7 +108,7 @@ export function snapshotKey(report, capacityPeriodId) {
  * @typedef {object} StorageSession
  * @property {() => Promise<{storage: "missing" | "pending" | "ready", pendingMigrations: number}>} readiness
  * @property {(now: Date, synchronization: (alias: string) => {performed: boolean, status: string}) => Promise<import("./source-report.js").BuiltSource[]>} build
- * @property {(built: import("./source-report.js").BuiltSource, sequenceLength: number | null) => number | null} record
+ * @property {(built: import("./source-report.js").BuiltSource, sequence: import("./prediction.js").SequenceAssessment | null) => number | null} record
  *   Records the attempt and, when the `next N` row is on, the sequence for the N on screen in the
  *   same transaction, as `status --sequence` does.
  * @property {(attemptIds: number[], now: Date) => void} confirm
@@ -169,15 +169,10 @@ export function createStoragePort(input) {
       }
       return built.sources;
     },
-    record: (built, sequenceLength) =>
+    record: (built, sequence) =>
       recordAttempt(
         paths.databaseFile,
-        sequenceLength === null
-          ? built
-          : {
-              ...built,
-              answer: { ...built.answer, sequence: assessSequence(built.answer, sequenceLength) },
-            },
+        sequence === null ? built : { ...built, answer: { ...built.answer, sequence } },
       ),
     confirm: (attemptIds, now) =>
       confirmPredictionDelivery(paths.databaseFile, attemptIds, {
@@ -358,6 +353,15 @@ export async function runDash(ports) {
     }
   };
 
+  /**
+   * The one place the dash assesses a sequence: always at the person's own N, for the row on screen
+   * and for the attempt that records it alike.
+   *
+   * @param {import("./source-report.js").SourceReport | import("./source-report.js").BuiltSource["answer"]} report
+   */
+  const assessShown = (report) =>
+    state.sequenceLength === null ? null : assessSequence(report, state.sequenceLength);
+
   /** The sequence reading for the person's length, from the cached reports alone. */
   const refreshSequences = () => {
     for (const source of state.sources) {
@@ -368,7 +372,9 @@ export async function runDash(ports) {
       const report = /** @type {import("./source-report.js").SourceReport} */ (
         /** @type {unknown} */ (source.report)
       );
-      const assessment = assessSequence(report, state.sequenceLength);
+      const assessment = /** @type {import("./prediction.js").SequenceAssessment} */ (
+        assessShown(report)
+      );
       source.sequence = {
         assessment,
         caveats: describeSequenceCaveats(assessment, report.contributors.evidence_window),
@@ -415,7 +421,7 @@ export async function runDash(ports) {
           }
           if (pending.get(source.alias)?.key === key) continue;
           // The `next N` row on screen rides with the attempt; a keypress records nothing.
-          const attemptId = tx.record(source, state.sequenceLength);
+          const attemptId = tx.record(source, assessShown(source.answer));
           if (attemptId !== null) pending.set(source.alias, { key, attemptId });
         }
         for (const source of state.sources) {
