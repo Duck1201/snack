@@ -195,6 +195,7 @@ budgets, and the risks.
 | `1.1.2` | The capacity-period boundary the 1.1.1 verification found | shipped |
 | `1.1.3` | The reading: `status` and `stats` written for a person, and screen-width alignment | shipped |
 | `1.2.0` | `status --verbose` and a generated, gated `man snack` | shipped |
+| `1.2.1` | A SQLite driver that fails to load is named; `update` replaces the running copy; npm 12 installs build the driver | in review |
 | `1.3.0` | Codex CLI adapter | planned |
 | `1.4.0` | `status --sequence N` | planned |
 | `1.5.0` | `reported_capacity_v1` prediction method | planned |

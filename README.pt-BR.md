@@ -10,7 +10,7 @@ do provedor.
 In English: [README.md](./README.md).
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # compila o driver SQLite; o npm 12 pula sem isso
 snack setup opencode    # ou: snack setup claude
 snack status
 ```

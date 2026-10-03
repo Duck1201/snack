@@ -19,7 +19,7 @@ touches the network, because there is nowhere for it to send anything to. `snack
 exception, and it only installs packages.
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # builds the SQLite driver; npm 12 skips it otherwise
 snack setup opencode    # or: snack setup claude
 snack status
 ```

@@ -257,6 +257,33 @@ so content that changed takes a new number rather than reusing `1.0.2`. The spoo
 untouched at version 1, and no event that was valid before is refused now: a `1.0.2` plugin and a
 `1.2.0` CLI still interoperate in both directions.
 
+## What 1.2.1 fixes, and why it is a patch
+
+Three defects, all found on one real machine where `snack` had stopped working, and none of them
+removes, renames, or changes the meaning of anything documented.
+
+**A SQLite driver that does not load is named, instead of reported as unreadable storage.** Every
+command answered "Storage could not be read" and `doctor` called storage "invalid or inaccessible"
+and every OpenCode source "inaccessible", while the database was intact and had simply never been
+opened: the native driver had been built for another Node.js. Commands now refuse with the new reason
+`storage_driver_unavailable` under exit code `5` — a new value in the existing `errors[].code` field,
+under an exit code that already meant storage, the same shape as `storage_migrations_pending` in
+`0.9.0`. `doctor` adds a `sqlite_driver` check, reported only when it fails; check ids are an open
+set in `doctor.schema.json`.
+
+**`snack update` replaces the copy that is running.** For an npm global install it passed `--global`
+alone, which installs under the prefix of whichever `npm` is first on `PATH`. With a second copy
+elsewhere — nvm switched, a copy left under `~/.local` — the update landed beside the running CLI,
+`--finish` re-ran the old one, and the command reported success. The plan now passes `--prefix`,
+read from the running module's own path. `plan.command` and `plan.args` were always "the exact
+invocation" and stay strings; the invocation is what changed.
+
+**The install command builds the SQLite driver under npm 12.** npm 12 skips dependency install
+scripts in a global install unless they are allowed by name, and still reports success, so a plain
+`npm install -g @snack-ai/cli` left a CLI whose driver was never compiled. Every README, this
+document and `snack update`'s own plan pass `--allow-scripts=better-sqlite3`, which npm 11.16 accepts
+as well. `pnpm` and `bun` keep their own approval mechanisms and their plans are unchanged.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a
@@ -265,10 +292,11 @@ Every `0.6+` release preserves supported data and configuration, so the upgrade 
 **1. Install.**
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli
 ```
 
-If the OpenCode live-capture plugin is installed, take it too. Its behaviour has not changed since
+The flag lets npm 12 build the SQLite driver; without it the install succeeds and the driver is
+missing. If the OpenCode live-capture plugin is installed, take it too. Its behaviour has not changed since
 `0.1.2`; `0.1.3` republishes the corrected spool schema described below.
 
 ```bash

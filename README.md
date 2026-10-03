@@ -10,7 +10,7 @@ provider's real quota.
 Em português: [README.pt-BR.md](./README.pt-BR.md).
 
 ```bash
-npm install -g @snack-ai/cli
+npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # builds the SQLite driver; npm 12 skips it otherwise
 snack setup opencode    # or: snack setup claude
 snack status
 ```

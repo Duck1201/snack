@@ -28,6 +28,7 @@ import {
   summarizeUsageProfile,
 } from "./analytics.js";
 import { runDoctor } from "./doctor.js";
+import { driverUnavailable, isDriverLoadFailure, probeSqliteDriver } from "./sqlite-driver.js";
 import { ExitCode, SnackError } from "./errors.js";
 import {
   EXPORT_SCHEMA_VERSION,
@@ -106,6 +107,8 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @property {SetupPrompt | undefined} [prompt]
  * @property {string | undefined} [modulePath]
  * @property {ExecuteCommand | undefined} [execute]
+ * @property {(() => void) | undefined} [openSqliteDriver] opens and closes an in-memory database;
+ *   injected so a test can stand in for an addon built for another Node.js
  */
 
 /**
@@ -862,6 +865,7 @@ export async function run(argv, options = {}) {
         nodeVersion: options.nodeVersion,
         platform: options.platform,
         now,
+        openSqliteDriver: options.openSqliteDriver,
         ...(typeof commandOptions.source === "string" ? { source: commandOptions.source } : {}),
         opencodeConfigFile: resolveOpenCodeConfig({
           ...(options.env ? { env: options.env } : {}),
@@ -1205,15 +1209,29 @@ export async function run(argv, options = {}) {
         now,
       });
     }
-    if (error instanceof SnackError) {
+    // Whatever a command was doing when SQLite failed to load, the failure is the driver, and the
+    // command's own wording ("Storage could not be read") would send the reader after their data.
+    // The probe covers callers that classified the error without keeping it as the cause; a usage
+    // or configuration error is not about storage and keeps its own wording.
+    const couldBeDriver =
+      !(error instanceof SnackError) ||
+      error.exitCode === ExitCode.storage ||
+      error.exitCode === ExitCode.unavailable;
+    const failure =
+      (isDriverLoadFailure(error)
+        ? driverUnavailable(error)
+        : couldBeDriver
+          ? probeSqliteDriver(options.openSqliteDriver)
+          : null) ?? error;
+    if (failure instanceof SnackError) {
       return renderError({
         stdout,
         stderr,
         json: argv.includes("--json") || configuredJson,
         command: commandName(argv, program),
-        message: error.message,
-        reason: error.reason,
-        exitCode: error.exitCode,
+        message: failure.message,
+        reason: failure.reason,
+        exitCode: failure.exitCode,
         now,
       });
     }
