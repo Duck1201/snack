@@ -43,8 +43,12 @@ asserts that.
 Only a directory or rollout that does not exist is treated as absent — a rollout Codex archived
 between listing and reading, or no `archived_sessions` yet. A subdirectory or rollout that exists
 and cannot be read (permissions, or a file too large to hold) makes the whole history
-`source_unavailable` (exit `4`), as an unreadable Claude Code project directory does: a read that
-skipped it would report a smaller history as complete.
+`source_unavailable` (exit `4`): a read that skipped it would report a smaller history as complete.
+`sync` counts the source as `failed` and its warning says to run `snack doctor` for the cause, and
+`doctor` reports the source inaccessible; neither names the path. It recovers on the next `sync`
+once the rollout is readable again. For a directory this is what the Claude Code reader does too;
+for a single file it is not — Claude Code reads a session file it cannot open as empty — and the
+difference is deliberate, the fail-closed side of the same rule.
 
 Compressed rollouts (`rollout-*.jsonl.zst`) are not read in `1.3`. `doctor` counts them and warns
 that their prompts are not observed.
@@ -57,7 +61,9 @@ a thread started by `0.147` and resumed by `0.159` keeps its old turns and gains
 same file. A turn is `cx-rollout-usagerecord-v1` when its `task_started` carries `root_turn_id`
 or a `token_usage_record` names it; otherwise it is `cx-rollout-tokencount-v1`. A file reports
 every family its turns belong to, and a file holding both is a recognized, supported shape, not
-drift. The directory is supported when every file parses. Setup records the family of the most
+drift. The directory is supported when every file parses. A history with no rollout yet is
+supported and holds no family: `sync` reads nothing and succeeds, `doctor` warns that there is
+nothing to read yet, and setup refuses, because it has no family to record. Setup records the family of the most
 recently modified file (the usage-record family as soon as that file holds any such turn);
 `doctor` passes while every family present is supported — not only while the recorded one is
 present — so upgrading Codex, or deleting the old rollouts afterwards, does not fail `doctor` while
@@ -131,9 +137,13 @@ says which prompt spawned it, so it opens no prompt: it is skipped, and `doctor`
 A **forked subagent** begins with a verbatim copy of its parent's history. Records below
 `subagent_history_start_ordinal` are skipped, so a fork never re-counts its parent. In
 `cx-rollout-tokencount-v1` that boundary was written as the file's own length and the subagent's own
-turn cannot be told apart from the copy, so a forked subagent of that family is **skipped whole**
-and counted; `doctor` warns how many. Undercounting a superseded family's subagents is the bounded
-error; double-counting the parent is not.
+turn cannot be told apart from the copy, so a forked subagent of that family is **skipped** and
+counted; `doctor` warns how many. If `0.159` later resumed such a fork, the turns it added sit past
+the boundary and are read; only the old turns stay unread, and the file is still counted. A
+`0.159` fork whose parent was itself a resumed `0.147` thread is counted too, since its copied
+region holds old-family turns and no field tells the two cases apart, so the warning can overstate
+by such a file. Undercounting a superseded family's subagents is the bounded error; double-counting
+the parent is not.
 
 ## Usage
 
@@ -173,7 +183,9 @@ never by their slot: from `0.159` Codex's `primary` is a 5-hour window and the 7
 with the `limit_id` it was stated for.
 
 `status` quotes the latest figure per Codex installation and limit on its own `reported` row, and in
-`--json` as the optional `reported_capacity` array. It is never an input to the viability interval,
+`--json` as the optional `reported_capacity` array. A reset is said as a duration within a day and as
+a weekday after that, and an absolute time says `UTC`; a window whose reset has passed is not
+repeated, and each window in `--json` carries `reset_passed`. It is never an input to the viability interval,
 the risk label, the evidence level or usage pressure. `plan_type` is shown and never rotates the
 capacity period, which stays keyed on the plan label the user configured.
 
