@@ -223,7 +223,9 @@ jobs:
       # too and the version stayed on npm with no tag and no release. Every step above is still a
       # precondition (the confirmation, CI, the gate, both packages readable, the registry digests),
       # and when this run did not publish, the registry must name this commit as the one it was
-      # published from, so a release is never created for a version this commit did not cut.
+      # published from, so a release is never created for a version this commit did not cut, and
+      # the channel tag must name this version, so a release is never marked for a channel that
+      # serves another one.
       - name: Tag the published commit and create its GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -239,6 +241,14 @@ jobs:
             published_from="$(npm view "@snack-ai/cli@${version}" gitHead 2>/dev/null || true)"
             if [ "${published_from}" != "${GITHUB_SHA}" ]; then
               echo "::error::@snack-ai/cli@${version} was published from '${published_from}', not ${GITHUB_SHA}; this run will not create its release"
+              exit 1
+            fi
+            # The verify step checks the channel tag only for a package this run published, so a
+            # retry would otherwise mark the release Latest, under "npm ${DIST_TAG}", with nothing
+            # having checked that the channel names this version.
+            channel="$(npm view @snack-ai/cli "dist-tags.${DIST_TAG}" 2>/dev/null || true)"
+            if [ "${channel}" != "${version}" ]; then
+              echo "::error::@snack-ai/cli@${DIST_TAG} resolves to '${channel}', not ${version}; this run will not create its release"
               exit 1
             fi
             echo "Recording v${version}, published from ${GITHUB_SHA} by an earlier run." >> "$GITHUB_STEP_SUMMARY"

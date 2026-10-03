@@ -77,7 +77,8 @@ refusing:
    - creates the GitHub release `v<version>` on the published commit, notes taken from both
      CHANGELOGs (`scripts/release-notes.mjs`), marked Latest only on the `latest` channel — whenever
      that release does not exist yet, so a retried run that publishes nothing still records it; when
-     the run did not publish, only if the registry's `gitHead` is this commit.
+     the run did not publish, only if the registry's `gitHead` is this commit and the channel tag
+     names this version.
 
    That release **is** the record of the publication. Nothing is written back into the repository,
    so nothing needs a PR.
@@ -87,11 +88,18 @@ refusing:
    - a verify step failing **with** an `::error::registry … does not record` line is a digest
      mismatch: the published artifact is not what the gates approved, `latest` already moved, so
      restart with a new patch rather than patching in place;
-   - a verify step failing **without** that line — `::error::registry propagation`, a version not
-     yet readable, an `npm pack` error — is registry propagation, not a defect. Rerun the same
-     workflow (`gh run rerun <id>`, or dispatch again with the same confirmation). Both publishes
-     skip, the checks run again, and the GitHub release is created once they pass. 1.3.0 hit this:
-     it published, then `npm pack` failed before comparing a digest. Never cut a patch for it.
+   - `::error::… resolves to '…', not <version>` is a dist-tag mismatch, not propagation: the
+     version is on the registry but the channel names another one (moved by hand, or another publish
+     took it). Read `npm view @snack-ai/cli dist-tags`, move the tag yourself if this version should
+     hold it, then rerun; a retry that did not publish refuses to create the release until the
+     channel names this version;
+   - a verify step failing with anything else — `::error::registry propagation`, a version not yet
+     readable, an `npm pack` error — is registry propagation, not a defect. Rerun the failed jobs
+     with `gh run rerun <id> --failed`, which keeps the run's inputs; dispatching again means
+     retyping the confirmation and the channel, and a wrong channel is a different release. Both
+     publishes skip, the checks run again, and the GitHub release is created once they pass. 1.3.0
+     hit this: it published, then `npm pack` failed before comparing a digest. Never cut a patch for
+     it.
 
 ## Gotchas
 
