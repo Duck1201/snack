@@ -531,9 +531,20 @@ compatible. The interval is instead widened to contain the point (`lower = min(q
 quantiles already contain the mean, so the widening changes no double there — a property test holds
 it for every bundled prior and the `reported-capacity` full prior, and the frozen corpora replay
 unchanged. `PREDICTION_POLICY.version` therefore stays `stage5-prediction-v2`: no bundled answer
-moves, and the only numbers that move are ones no release could deliver — the answer `status` never
-gave on such a profile and `stats`' replay of it, whose intervals excluded their own points. The
-unreleased `019` carries no such CHECK, so a shadow can never take the answer's transaction down.
+moves, and no stored row moves either — the released CHECKs `CHECK (lower <= point AND point <= upper)`
+in `007` (attempts), `016` (sequences) and `017` (reported-capacity attempts) refused every interval
+that excluded its point, so no row a `1.5` database holds lies where the widening acts, and the same
+inputs give the same doubles. **One delivered number does move under the same versions: `stats`'
+backtest on such a user profile.** The replay is never stored, and `1.5`'s `stats --json` delivered
+`calibration.backtest.interval.coverage` and `interval.mean_width` computed from the intervals that
+excluded their points; they are now computed from the widened intervals. On a
+`prior_strength: 1, prior_viability: 0.99` profile replaying 110 prompts, `mean_width` moves from
+`0.008215…` (`v1.5.0`) to `0.008529…`, with `coverage` and the Brier score unchanged; a profile whose
+prior keeps the mean inside its quantiles — every bundled one — moves nothing. The policy version is
+not bumped for it: the change is confined to user profiles `status` could not answer on at all in
+`1.5`, and a bump would mark every reader's history, bundled profiles included, as computed by a
+different policy. The unreleased `019` carries no such CHECK, so a shadow can never take the answer's
+transaction down.
 
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`; each variant names its own policy. No new

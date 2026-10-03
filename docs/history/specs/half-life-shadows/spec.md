@@ -628,7 +628,18 @@ source; it is the same object as `shadow`.
   0.05; never on a bundled profile. `assembleForecast` now widens the interval to contain the point
   (`min`/`max`, the rule `assessSequence` already applied), a no-op on every posterior a bundled prior
   can reach — held by property in `prediction.test.js`, and the frozen corpora replay unchanged — so
-  `PREDICTION_POLICY.version` does not move. The schema was not tightened: rejecting a configuration
+  `PREDICTION_POLICY.version` does not move. Stored rows are immune for a reason of their own: the
+  released `CHECK (lower <= point AND point <= upper)` of `007`, `016` and `017` refused every
+  interval that excluded its point, so no attempt, sequence or reported-capacity row a `1.5` database
+  holds lies where the widening acts. **Corrected after review:** the build first wrote that the only
+  numbers that move are ones no release could deliver, and that is false. `stats --json`'s backtest
+  is recomputed on every run and never stored, and `1.5` delivered its `interval.coverage` and
+  `interval.mean_width` for such a user profile, computed from intervals that excluded their points;
+  they now score the widened interval under the same versions (a `prior_viability: 0.99`,
+  `prior_strength: 1` profile over 110 replayed prompts: `mean_width` `0.008215…` at `v1.5.0`,
+  `0.008529…` now; coverage and Brier unchanged). The version still does not move — the change is
+  confined to user profiles `status` could not answer on in `1.5` — and `compatibility.md` and
+  `analysis.md` §9.2/§10 now say so. The schema was not tightened: rejecting a configuration
   `1.5` accepted is not a minor's change. `019`, unreleased, was edited in place to drop the same
   cross-column CHECK, so a shadow row can never abort the answer's transaction; no test pinned its
   checksum. `compatibility.md` records the fix in its `1.6.0` section.
