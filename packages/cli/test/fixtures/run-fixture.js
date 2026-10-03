@@ -86,7 +86,7 @@ export async function makeRunFixture(prefix = "snack-main-") {
   temporaryRoots.push(root);
   const stdout = sink();
   const stderr = sink();
-  /** @type {{XDG_CONFIG_HOME: string, XDG_DATA_HOME: string, XDG_CACHE_HOME: string, XDG_STATE_HOME: string, OPENCODE_DB?: string, CLAUDE_CONFIG_DIR?: string}} */
+  /** @type {{XDG_CONFIG_HOME: string, XDG_DATA_HOME: string, XDG_CACHE_HOME: string, XDG_STATE_HOME: string, OPENCODE_DB?: string, CLAUDE_CONFIG_DIR?: string, CODEX_HOME?: string}} */
   const env = {
     XDG_CONFIG_HOME: join(root, "config-home"),
     XDG_DATA_HOME: join(root, "data-home"),
@@ -238,6 +238,248 @@ export async function createClaudeCanaryHistory(root, canaries) {
     { mode: 0o600 },
   );
   return configDir;
+}
+
+/**
+ * Plant a Codex CLI home holding rollouts from the synthetic fixtures.
+ *
+ * Codex keeps rollouts under `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` and honours
+ * `CODEX_HOME`, which is what lets a test point SNACK at a throwaway tree. The returned value is the
+ * `CODEX_HOME` to set.
+ *
+ * @param {string} root
+ * @param {string | string[]} [fixtureNames]
+ * @param {{archived?: string[]}} [options] fixtures to place in `archived_sessions` instead
+ */
+export async function createCodexHistory(
+  root,
+  fixtureNames = "version-0-159-3.jsonl",
+  options = {},
+) {
+  const codexHome = join(root, "codex");
+  const day = join(codexHome, "sessions", "2026", "01", "02");
+  await mkdir(day, { recursive: true, mode: 0o700 });
+  for (const name of Array.isArray(fixtureNames) ? fixtureNames : [fixtureNames]) {
+    await writeFile(
+      join(day, `rollout-2026-01-02T02-00-00-${name}`),
+      await readFile(new URL(`./codex/${name}`, import.meta.url), "utf8"),
+      { mode: 0o600 },
+    );
+  }
+  if (options.archived && options.archived.length > 0) {
+    const archived = join(codexHome, "archived_sessions");
+    await mkdir(archived, { recursive: true, mode: 0o700 });
+    for (const name of options.archived) {
+      await writeFile(
+        join(archived, `rollout-2026-01-02T02-00-00-${name}`),
+        await readFile(new URL(`./codex/${name}`, import.meta.url), "utf8"),
+        { mode: 0o600 },
+      );
+    }
+  }
+  return codexHome;
+}
+
+/**
+ * Plant a Codex CLI home whose every never-read slot holds a canary.
+ *
+ * Codex rollouts keep the user's messages, the model's answers, reasoning, tool calls and their
+ * output, the working directory, git remotes, and agent names in the same files as the usage
+ * figures. Each canary goes in the slot Codex actually uses for it. The prompt-history file Codex
+ * keeps beside `sessions/` is planted too, full of canaries, because SNACK must never open it.
+ *
+ * @param {string} root
+ * @param {Record<string, string>} canaries
+ */
+export async function createCodexCanaryHistory(root, canaries) {
+  const codexHome = join(root, "codex-canary-home");
+  const day = join(codexHome, "sessions", "2026", "01", "02");
+  await mkdir(day, { recursive: true, mode: 0o700 });
+  const everything = Object.values(canaries).join(" ");
+  await writeFile(
+    join(codexHome, "history.jsonl"),
+    `${JSON.stringify({ session_id: canaries.title, ts: 1, text: everything })}\n`,
+    { mode: 0o600 },
+  );
+  const parentId = "00000000-0000-7000-8000-0000000000c1";
+  const childId = "00000000-0000-7000-8000-0000000000c2";
+  const rootTurn = "00000000-0000-7000-8000-0000000001c1";
+  const childTurn = "00000000-0000-7000-8000-0000000001c2";
+  const usage = {
+    input_tokens: 100,
+    cached_input_tokens: 10,
+    output_tokens: 20,
+    reasoning_output_tokens: 5,
+    total_tokens: 120,
+  };
+  const rateLimits = {
+    limit_id: "codex",
+    limit_name: canaries.title,
+    primary: { used_percent: 34, window_minutes: 300, resets_at: 1767335400 },
+    secondary: { used_percent: 19, window_minutes: 10080, resets_at: 1767862800 },
+    credits: { has_credits: true, unlimited: false, balance: canaries.credential },
+    individual_limit: canaries.agent,
+    plan_type: "plus",
+    rate_limit_reached_type: null,
+    spend_control_reached: null,
+  };
+  /**
+   * @param {string} id
+   * @param {Record<string, unknown>} identity
+   * @param {[string, Record<string, unknown>][]} body
+   */
+  const rollout = (id, identity, body) =>
+    [
+      [
+        "session_meta",
+        {
+          id,
+          timestamp: canaries.title,
+          cwd: canaries.path,
+          originator: canaries.agent,
+          cli_version: "0.159.3",
+          source: canaries.agent,
+          model_provider: "openai",
+          base_instructions: { text: `${canaries.prompt} ${canaries.credential}` },
+          git: {
+            commit_hash: canaries.branch,
+            branch: canaries.branch,
+            repository_url: canaries.path,
+          },
+          runtime_workspace_roots: [canaries.path],
+          creator_account_id: canaries.credential,
+          creator_user_id: canaries.credential,
+          ...identity,
+        },
+      ],
+      ...body,
+    ]
+      .map(([type, payload], ordinal) =>
+        JSON.stringify({
+          timestamp: new Date(Date.UTC(2026, 0, 2, 2, 0, ordinal + 1)).toISOString(),
+          type,
+          payload,
+          ordinal,
+        }),
+      )
+      .join("\n");
+  /** @param {string} turnId @returns {[string, Record<string, unknown>]} */
+  const context = (turnId) => [
+    "turn_context",
+    {
+      turn_id: turnId,
+      cwd: canaries.path,
+      workspace_roots: [canaries.path],
+      current_date: canaries.title,
+      timezone: canaries.title,
+      model: "gpt-test",
+      collaboration_mode: { settings: { developer_instructions: canaries.prompt } },
+    },
+  ];
+  /** @type {[string, Record<string, unknown>][]} */
+  const work = [
+    [
+      "response_item",
+      { type: "message", role: "user", content: [{ type: "input_text", text: canaries.prompt }] },
+    ],
+    ["response_item", { type: "reasoning", summary: [{ text: canaries.response }] }],
+    [
+      "response_item",
+      { type: "function_call", name: canaries.agent, arguments: canaries.path, call_id: "c" },
+    ],
+    ["response_item", { type: "function_call_output", call_id: "c", output: canaries.toolResult }],
+    [
+      "response_item",
+      { type: "custom_tool_call", name: canaries.agent, input: canaries.credential },
+    ],
+    ["response_item", { type: "custom_tool_call_output", output: canaries.toolResult }],
+    [
+      "response_item",
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: canaries.response }],
+      },
+    ],
+    ["event_msg", { type: "item_completed", item: { text: canaries.response } }],
+    ["event_msg", { type: "thread_settings_applied", thread_settings: { cwd: canaries.path } }],
+    ["world_state", { cwd: canaries.path, entries: [canaries.toolResult] }],
+    ["inter_agent_communication_metadata", { trigger_turn: canaries.agent }],
+  ];
+  const parent = rollout(parentId, { thread_source: "user" }, [
+    context(rootTurn),
+    ["event_msg", { type: "task_started", turn_id: rootTurn, root_turn_id: rootTurn }],
+    ...work,
+    [
+      "event_msg",
+      {
+        type: "token_count",
+        info: {
+          last_token_usage: usage,
+          total_token_usage: usage,
+          model_context_window: 1,
+        },
+        rate_limits: rateLimits,
+      },
+    ],
+    [
+      "token_usage_record",
+      { turn_id: rootTurn, root_turn_id: rootTurn, response_id: "resp_canary_1", usage },
+    ],
+    ["compacted", { message: canaries.response, replacement_history: [{ text: canaries.prompt }] }],
+    [
+      "retained_context",
+      {
+        user_messages: [canaries.prompt],
+        questions: [canaries.prompt],
+        answers: [canaries.response],
+      },
+    ],
+    [
+      "event_msg",
+      {
+        type: "task_complete",
+        turn_id: rootTurn,
+        duration_ms: 1000,
+        last_agent_message: canaries.response,
+        error: { codex_error_info: "server_overloaded", message: canaries.credential },
+      },
+    ],
+  ]);
+  const child = rollout(
+    childId,
+    {
+      thread_source: "subagent",
+      parent_thread_id: parentId,
+      agent_nickname: canaries.agent,
+      agent_path: canaries.path,
+      agent_role: canaries.agent,
+    },
+    [
+      context(childTurn),
+      ["event_msg", { type: "task_started", turn_id: childTurn, root_turn_id: rootTurn }],
+      ...work,
+      [
+        "token_usage_record",
+        { turn_id: childTurn, root_turn_id: rootTurn, response_id: "resp_canary_2", usage },
+      ],
+      [
+        "event_msg",
+        {
+          type: "task_complete",
+          turn_id: childTurn,
+          last_agent_message: canaries.response,
+        },
+      ],
+    ],
+  );
+  await writeFile(join(day, `rollout-2026-01-02T02-00-00-${parentId}.jsonl`), `${parent}\n`, {
+    mode: 0o600,
+  });
+  await writeFile(join(day, `rollout-2026-01-02T02-00-00-${childId}.jsonl`), `${child}\n`, {
+    mode: 0o600,
+  });
+  return codexHome;
 }
 
 export function sink() {
