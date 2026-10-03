@@ -160,17 +160,17 @@ fails the build if a single one shows up in any byte SNACK writes.
 
 ## The commands
 
-| Command                                     | What it does                                                                                                                                                                                                                               |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                                                                                                  |
-| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method and the policy versions; `--sequence <n>` adds the chance that all of the next `<n>` go through. |
-| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored.                                                                                                                                               |
-| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                                                                                                   |
-| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                                                                                                       |
-| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                                                                                          |
-| `snack config`                              | Reads and edits local configuration.                                                                                                                                                                                                       |
-| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                                                                                               |
-| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                                                                                                    |
+| Command                                     | What it does                                                                                                                                                                                                                                                                        |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Maps a client to a capacity source. Shows every change first, backs up, writes nothing until you confirm.                                                                                                                                                                           |
+| `snack status`                              | The next-prompt assessment: range, risk, evidence, pressure and what drove it, freshness. `--verbose` adds the evidence gates, the method, the policy versions and, on a Codex source, the shadow estimate; `--sequence <n>` adds the chance that all of the next `<n>` go through. |
+| `snack stats`                               | What your usage really looks like over rolling horizons, and how well past forecasts scored — per method on a Codex source, under `--verbose`.                                                                                                                                      |
+| `snack sync`                                | Imports new history. `--full` re-reads and reconciles everything without duplicating it.                                                                                                                                                                                            |
+| `snack export`                              | Streams everything to JSON or CSV with schema and provenance. Your data stays yours.                                                                                                                                                                                                |
+| `snack data purge`                          | Deletes a scope you choose, transactionally, after showing you exactly what goes.                                                                                                                                                                                                   |
+| `snack config`                              | Reads and edits local configuration.                                                                                                                                                                                                                                                |
+| `snack doctor`                              | Diagnoses the installation without changing it: permissions, schema fingerprints, integrity.                                                                                                                                                                                        |
+| `snack update`                              | Brings the CLI and the capture plugin to versions that belong together. The only command that installs.                                                                                                                                                                             |
 
 Every command takes `--json` and answers with one versioned document, so scripting it never means
 parsing prose. Every command is also in `man snack`, which ships in the package and is generated
@@ -324,6 +324,11 @@ Every figure is reported beside its sample size, and never as zero when the samp
 `not_available` and `0.000` are very different statements, and conflating them is how a dashboard
 starts flattering itself.
 
+Methods are never averaged together either. On a Codex source, where the shadow estimate is computed
+beside the answer, `calibration.by_method` scores each named method on its own forecasts, and scores
+the shadow a second time, `paired`, on exactly the outcomes the answering method was scored on — the
+comparison the rule for ever promoting it is written in.
+
 Under simulation at 1,500 trials per rate, empirical coverage measured 0.911 / 0.880 / 0.863 / 0.864
 against true restriction rates of 0.02 / 0.05 / 0.10 / 0.25. The declared `0.8` target is therefore
 a **floor**, not an exact claim, and it is documented as one.
@@ -422,10 +427,63 @@ Windows are named by their length, never by Codex's `primary`/`secondary` slot, 
 meaning between versions. A window whose reset has passed is not repeated. The row is not part of
 the `next prompt` interval, the evidence level or the usage pressure, and nothing in the forecast
 reads it. In `--json` it is the optional `reported_capacity` array on that source's report. It stays
-local in `1.3`: `export` does not include it, and `data purge` deletes it with the rest of the
-scope. `snack doctor` warns about what a Codex history holds that SNACK deliberately does not count
-— forked subagents from Codex `0.147` or earlier, compressed `rollout-*.jsonl.zst` files, and stated
+local: `export` does not include it, and `data purge` deletes it with the rest of the scope.
+`snack doctor` warns about what a Codex history holds that SNACK deliberately does not count —
+forked subagents from Codex `0.147` or earlier, compressed `rollout-*.jsonl.zst` files, and stated
 figures that could not be quoted.
+
+### The shadow estimate
+
+From `1.5`, every `status` on a Codex source also computes a **shadow estimate** from a second named
+method, `reported-capacity@1`, and records it beside the answer. It is never the answer: the
+`next prompt` line, the risk, the evidence, `--sequence` and every `--json` member `1.4` emitted
+come from the baseline, unchanged. It shows on one `--verbose` row, worded so it cannot be taken for
+the answer:
+
+```text
+$ snack status --source codex --verbose
+codex
+  next prompt  92-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  ...
+  method       bayesian-pressure-band@1 · model stage5-prediction-v2
+  reported     Codex states 86% of its 5h window, resets in 3h 50m · 30% of its 7d window, resets Mon UTC · 4m ago
+  shadow       reported-capacity@1 would say 96-100% · risk low · evidence very_low — recorded to compare, not the answer above
+               reads what Codex states about its 5h window — in the near band · reported-capacity-v1
+  as of        3m ago · sync ok · period since 2026-10-03
+  ...
+```
+
+in `status --json` as the additive `shadow` member — the method, whether it was computed and why
+not, the binding window without its figure, and when computed its interval, risk and evidence — and
+in `stats --verbose` as a `by method` block (`calibration.by_method` in `--json`):
+
+```text
+$ snack stats --verbose
+  ...
+  by method
+    bayesian-pressure-band@1  answer · live not available yet · backtest brier 0.003, sample 333
+    reported-capacity@1       shadow · live not available yet · backtest brier 0.003, sample 333
+                              same outcomes as the baseline · live not available yet · backtest brier 0.003 against 0.003, sample 333, 1 restricted
+```
+
+The method reads the **binding window** — of Codex's latest statement, the window with the highest
+figure — and puts it in a **stated band**: `clear` below 80, `near` from 80, `full` at 100. Each
+past prompt is given the band in force when it started, and the shadow learns from your own outcomes
+in the same band instead of the same pressure band. A statement more than six hours old, one made
+before the capacity period, one whose window has reset, or a `clear` or `near` one followed by
+another client's prompt binds nothing, and the row says why: `not computed — stale, stated 7h ago`.
+`full` starts from an assumption that leans toward refusal and is labelled as one. Its evidence
+never rises above `low`. Each prompt's band is stored beside it, recomputed after each `sync` and
+`data purge`, and never exported.
+
+It does not answer because the real Codex history it was designed from could not calibrate it: one
+refusal in 65 days, no figure of 100 ever stated, and the figure in hand when the refused prompt
+started was 20%. A later minor release promotes it only if its own calibration beats the baseline's
+under `reported-capacity-promotion-v1`: on a real Codex history, at least 200 checked live
+forecasts, at least 5 restrictions both live and in the backtest, and a strictly lower Brier score
+than the baseline's on the same outcomes in both. No setting turns it on or off. A source no Codex
+installation feeds never computes it, and its output is what `1.4` printed.
 
 ## Supported clients
 

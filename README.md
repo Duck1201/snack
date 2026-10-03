@@ -117,17 +117,17 @@ treat their usage as the single pool it really is.
 
 ## Commands
 
-| Command                                     | What it does                                                                                                                                                                                                           |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                                                                                                     |
-| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                                                                                        |
-| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method and the policy versions; `--sequence <n>` adds the chance that all of the next `<n>` go through |
-| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                                                                                                                       |
-| `snack doctor`                              | Diagnose the local installation without changing it                                                                                                                                                                    |
-| `snack config`                              | Inspect or update local configuration                                                                                                                                                                                  |
-| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                                                                                                 |
-| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                                                                                        |
-| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                                                                                                  |
+| Command                                     | What it does                                                                                                                                                                                                                                                    |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                                                                                                                                                              |
+| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                                                                                                                                                                 |
+| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates, the method, the policy versions and, on a Codex source, the shadow estimate; `--sequence <n>` adds the chance that all of the next `<n>` go through |
+| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail and, on a Codex source, calibration per method                                                                                                                                 |
+| `snack doctor`                              | Diagnose the local installation without changing it                                                                                                                                                                                                             |
+| `snack config`                              | Inspect or update local configuration                                                                                                                                                                                                                           |
+| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                                                                                                                                                          |
+| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                                                                                                                                                                 |
+| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                                                                                                                                                           |
 
 Every command takes `--json` and emits one versioned document. Every command is also in `man snack`,
 generated from the CLI's own flag surface so it cannot describe a version you are not running.
@@ -194,9 +194,56 @@ codex
 The `reported` row is never part of the `next prompt` interval, the evidence level or the usage
 pressure; nothing in the forecast reads it, and a test holds the estimate identical with and without
 it ([ADR-0007](./docs/adr/0007-quote-codex-reported-capacity.md)). In `--json` it is the optional
-`reported_capacity` array on that source's report. It stays local in `1.3`: `export` does not carry
-it. The supported Codex versions and what is read are in
-[docs/codex-support.md](./docs/codex-support.md).
+`reported_capacity` array on that source's report. It stays local: `export` does not carry it. The
+supported Codex versions and what is read are in [docs/codex-support.md](./docs/codex-support.md).
+
+### A second method, in shadow
+
+From `1.5`, a Codex source also gets a **shadow estimate** from a second named method,
+`reported-capacity@1`. The baseline groups your history by usage pressure; this one groups it by
+**stated band** — `clear` below 80, `near` from 80, `full` at 100 — of the figure Codex stated, when
+each prompt started, about its **binding window**: the window of its latest statement with the
+highest figure. The bands are SNACK's way of sorting your own outcomes, not a share of capacity, and
+a statement older than six hours binds nothing.
+
+It is recorded and calibrated, and it is never the answer. The `next prompt` line, the risk, the
+evidence and `--sequence` are the baseline's, exactly as `1.4` printed them. You see the shadow in
+three places only — the `shadow` row of `status --verbose`, which says it is not the answer:
+
+```text
+$ snack status --source codex --verbose
+codex
+  next prompt  92-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  ...
+  method       bayesian-pressure-band@1 · model stage5-prediction-v2
+  reported     Codex states 86% of its 5h window, resets in 3h 50m · 30% of its 7d window, resets Mon UTC · 4m ago
+  shadow       reported-capacity@1 would say 96-100% · risk low · evidence very_low — recorded to compare, not the answer above
+               reads what Codex states about its 5h window — in the near band · reported-capacity-v1
+  as of        3m ago · sync ok · period since 2026-10-03
+  ...
+```
+
+the additive `shadow` member of that source's report in `status --json`, and the `by method` block
+of `stats --verbose` (`calibration.by_method` in `--json`), where each method is scored on its own
+and the shadow once more on exactly the outcomes the baseline was scored on:
+
+```text
+$ snack stats --verbose
+  ...
+  by method
+    bayesian-pressure-band@1  answer · live not available yet · backtest brier 0.003, sample 333
+    reported-capacity@1       shadow · live not available yet · backtest brier 0.003, sample 333
+                              same outcomes as the baseline · live not available yet · backtest brier 0.003 against 0.003, sample 333, 1 restricted
+```
+
+Why not let it answer? On the real Codex history it was designed from, 65 days held one refusal,
+Codex never stated a figure of 100, and the figure in hand when the refused prompt started was 20%.
+A method that history cannot calibrate does not get to answer on its reasoning alone. A later minor
+release promotes it only if its own calibration beats the baseline's by a rule written down now
+(`reported-capacity-promotion-v1`): on a real Codex history, at least 200 checked live forecasts, at
+least 5 restrictions both live and in the backtest, and a strictly lower Brier score than the
+baseline's on the same outcomes in both. Until then no setting turns it on, or off.
 
 ## How it got here
 
@@ -219,6 +266,7 @@ Each release had a single job. Nothing shipped until the thing before it was pro
 | `1.2.0` `1.2.1` | `status --verbose` gives the method and the evidence gates a human route, `man snack` is generated from the CLI's own flag surface and gated by the build, and a SQLite driver that fails to load is named rather than reported as damaged storage.                                                                                           |
 | `1.3.0`         | Codex CLI, the third client, read from its rollouts by field allowlist. The figure Codex states about its own windows is quoted beside the estimate, never inside it.                                                                                                                                                                         |
 | `1.4.0`         | `status --sequence <n>`: the chance that all of the next `<n>` go through, from the same posterior, with its own interval, risk label and named method, and a plain word when that interval is too wide to inform. The number is always yours; SNACK never derives one.                                                                       |
+| `1.5.0`         | A second method, `reported-capacity@1`, run in shadow on Codex sources: it groups history by the band of the figure Codex states, is recorded and calibrated beside the baseline, and never answers unless its own calibration beats the baseline's by a rule written before it shipped.                                                      |
 
 The full staged plan, with per-wave exit criteria and everything deliberately left out, is in
 [PLAN.md](./PLAN.md).
