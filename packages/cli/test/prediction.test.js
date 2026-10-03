@@ -8,12 +8,14 @@ import {
   PREDICTION_POLICY,
   SEQUENCE_MAX_LENGTH,
   SEQUENCE_WIDTH_POLICY,
+  WEIGHTING_VARIANTS,
   assembleForecast,
   assessSequence,
   buildForecast,
   buildReportedForecast,
   classifyIngestionCompleteness,
   classifyRisk,
+  decayWeight,
 } from "../src/prediction.js";
 
 const now = new Date("2026-02-01T00:00:00.000Z");
@@ -874,5 +876,190 @@ test("the baseline forecast is untouched by the reported method's existence", ()
   assert.equal(
     buildForecast({ ...input, outcomes: plain }).evidence.policy_version,
     EVIDENCE_POLICY.version,
+  );
+});
+
+// --- Weighting variants: the answer's model under longer recency half-lives, in shadow (1.6.0) ---
+
+/** Arbitrary chronological histories over two bands and three categories, every outcome kind. */
+const varietyHistory = fc
+  .array(
+    fc.record({
+      ageSeconds: fc.integer({ min: 0, max: 20 * 86400 }),
+      outcome: fc.constantFrom("success", "success", "success", "restricted", "excluded"),
+      pressure_band: fc.constantFrom("low", "moderate"),
+      size_category: fc.constantFrom("small", "typical", "large"),
+    }),
+    { maxLength: 250, size: "max" },
+  )
+  .map((rows) =>
+    rows
+      .map((row) => ({
+        started_at: at(row.ageSeconds),
+        outcome: /** @type {"success" | "restricted" | "excluded"} */ (row.outcome),
+        pressure_band: row.pressure_band,
+        size_category: row.size_category,
+      }))
+      .sort((left, right) => left.started_at.localeCompare(right.started_at)),
+  );
+
+test("the weighting variants change one knob each, and every one of them still decays", () => {
+  assert.ok(Object.isFrozen(WEIGHTING_VARIANTS));
+  assert.deepEqual(
+    WEIGHTING_VARIANTS.map((variant) => [
+      `${variant.method.id}@${variant.method.version}`,
+      variant.policy.version,
+      variant.policy.recency_half_life_prompts,
+    ]),
+    [
+      ["bayesian-pressure-band-hl50@1", "recency-hl50-v1", 50],
+      ["bayesian-pressure-band-hl100@1", "recency-hl100-v1", 100],
+    ],
+  );
+  const versions = new Set(/** @type {string[]} */ ([PREDICTION_POLICY.version]));
+  for (const variant of WEIGHTING_VARIANTS) {
+    assert.ok(Object.isFrozen(variant) && Object.isFrozen(variant.policy));
+    assert.match(variant.method.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+    assert.ok(!versions.has(variant.policy.version), variant.policy.version);
+    versions.add(variant.policy.version);
+    assert.equal(variant.policy.base_policy, PREDICTION_POLICY.version);
+    // The always-decays guard: a finite recency half-life, and the answer's time half-life.
+    assert.ok(Number.isFinite(variant.policy.recency_half_life_prompts));
+    assert.ok(variant.policy.recency_half_life_prompts > 0);
+    assert.equal(variant.policy.decay_half_life_seconds, PREDICTION_POLICY.decay_half_life_seconds);
+    // One knob: everything but the version, the recency half-life and the base policy is the
+    // answer's own.
+    const {
+      version,
+      recency_half_life_prompts: recency,
+      base_policy: base,
+      ...rest
+    } = variant.policy;
+    const {
+      version: answerVersion,
+      recency_half_life_prompts: answerRecency,
+      ...answerRest
+    } = PREDICTION_POLICY;
+    assert.deepEqual(rest, answerRest);
+    assert.notEqual(version, answerVersion);
+    assert.ok(recency > answerRecency && typeof base === "string");
+  }
+});
+
+test("old outcomes weigh strictly less, by age and by later prompts, under every weighting", () => {
+  const policies = [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)];
+  fc.assert(
+    fc.property(
+      fc.integer({ min: 1, max: 365 * 86400 }),
+      fc.integer({ min: 1, max: 365 * 86400 }),
+      fc.integer({ min: 0, max: 2000 }),
+      fc.integer({ min: 0, max: 2000 }),
+      (ageA, ageB, laterA, laterB) => {
+        for (const policy of policies) {
+          if (ageA !== ageB) {
+            const [younger, older] = ageA < ageB ? [ageA, ageB] : [ageB, ageA];
+            assert.ok(
+              decayWeight(at(older), laterA, now, policy) <
+                decayWeight(at(younger), laterA, now, policy),
+              `${policy.version}: ${older}s does not weigh less than ${younger}s`,
+            );
+          }
+          if (laterA !== laterB) {
+            const [fewer, more] = laterA < laterB ? [laterA, laterB] : [laterB, laterA];
+            assert.ok(
+              decayWeight(at(ageA), more, now, policy) < decayWeight(at(ageA), fewer, now, policy),
+              `${policy.version}: ${more} later prompts do not weigh less than ${fewer}`,
+            );
+          }
+        }
+      },
+    ),
+    { numRuns: 300 },
+  );
+  // And through the forecast: one success, older, adds less effective sample.
+  for (const policy of policies) {
+    const single = (/** @type {number} */ ageSeconds) =>
+      buildForecast({
+        now,
+        prior: PLAN_PRIOR,
+        expectedBand: "moderate",
+        expectedCategory: "typical",
+        policy,
+        outcomes: [
+          {
+            started_at: at(ageSeconds),
+            outcome: "success",
+            pressure_band: "moderate",
+            size_category: "typical",
+          },
+        ],
+      }).contributors.evidence_window.weighted_successes;
+    assert.ok(single(7 * 86400) < single(3600), policy.version);
+  }
+});
+
+test("a variant at the answer's half-life is the answer, but for its name", () => {
+  fc.assert(
+    fc.property(
+      varietyHistory,
+      fc.constantFrom("low", "moderate", "unknown"),
+      fc.constantFrom("small", "typical", "large"),
+      fc.constantFrom("complete", "partial", "unknown"),
+      (outcomes, band, category, completeness) => {
+        const input = {
+          now,
+          prior: PLAN_PRIOR,
+          expectedBand: band,
+          expectedCategory: category,
+          outcomes,
+          dataCompleteness: /** @type {"complete" | "partial" | "unknown"} */ (completeness),
+        };
+        const answer = buildForecast(input);
+        const identity = buildForecast({
+          ...input,
+          policy: Object.freeze({
+            ...PREDICTION_POLICY,
+            version: "identity-v1",
+            recency_half_life_prompts: PREDICTION_POLICY.recency_half_life_prompts,
+          }),
+          method: { id: "identity", version: "1" },
+        });
+        assert.deepEqual(identity.method, { id: "identity", version: "1" });
+        assert.equal(identity.model_policy_version, "identity-v1");
+        /** @param {Record<string, unknown>} forecast */
+        const unnamed = (forecast) => {
+          const rest = { ...forecast };
+          delete rest.method;
+          delete rest.model_policy_version;
+          return rest;
+        };
+        assert.deepEqual(unnamed(identity), unnamed(answer));
+      },
+    ),
+    { numRuns: 150 },
+  );
+});
+
+test("buildForecast without a method is the forecast it always was", () => {
+  fc.assert(
+    fc.property(varietyHistory, (outcomes) => {
+      const input = {
+        now,
+        prior: PLAN_PRIOR,
+        expectedBand: "low",
+        expectedCategory: "typical",
+        outcomes,
+      };
+      const plain = buildForecast(input);
+      assert.equal(
+        JSON.stringify(buildForecast({ ...input, policy: PREDICTION_POLICY })),
+        JSON.stringify(plain),
+      );
+      assert.ok(
+        ["bayesian-pressure-band", "initial-generic"].includes(plain.method.id),
+        plain.method.id,
+      );
+    }),
+    { numRuns: 100 },
   );
 });

@@ -53,7 +53,9 @@ export const EVIDENCE_POLICY = Object.freeze({
    * effective sample, 0.105 at two, 0.060 at six, 0.055 at ten, 0.036 at eighteen, and
    * 0.027 at twenty-six, flattening near 0.024 afterwards. `high` is set where the error
    * is within roughly a tenth of that floor. Recency decay saturates the effective sample
-   * size near 44, so a threshold above that could never be reached at all.
+   * size near 44 under the answer's 30-prompt recency half-life, so a threshold above that
+   * could never be reached by the answer at all. The weighting variants publish under these
+   * same gates: they map an effective sample to measured error, whatever weighting produced it.
    */
   sample_thresholds: Object.freeze({ low: 2, moderate: 10, high: 25 }),
   /**
@@ -106,7 +108,24 @@ export const EVIDENCE_POLICY = Object.freeze({
  * @property {string} expectedCategory Prompt-size category assumed for the next prompt.
  * @property {OutcomeRow[]} outcomes Eligible observations of the active capacity period.
  * @property {"complete" | "partial" | "unknown"} [dataCompleteness] Ingestion health.
- * @property {typeof PREDICTION_POLICY} [policy]
+ * @property {WeightingPolicy} [policy]
+ * @property {{id: string, version: string}} [method] The method a non-answering weighting
+ *   publishes under. Left out, the forecast is named by the answer's own rule.
+ */
+
+/**
+ * A model policy for the answer's Beta-Binomial: the answer's own, or a weighting variant's, which
+ * names the answer's policy it varies as `base_policy`.
+ *
+ * @typedef {object} WeightingPolicy
+ * @property {string} version
+ * @property {number} coverage_target
+ * @property {number} decay_half_life_seconds
+ * @property {number} recency_half_life_prompts
+ * @property {number} evidence_window_prompts
+ * @property {number} minimum_cell_samples
+ * @property {readonly string[]} backoff_levels
+ * @property {string} [base_policy]
  */
 
 /**
@@ -204,11 +223,14 @@ export function classifyRisk(lower) {
  *
  * @param {string} startedAt
  * @param {number} promptsAfter Observations in the same cell that started later.
+ * Exported for the guard that every weighting decays: the weight is strictly decreasing in age
+ * and in later prompts under the answer's policy and under every variant's.
+ *
  * @param {Date} now
  * @param {{decay_half_life_seconds: number, recency_half_life_prompts: number}} policy
  * @returns {number}
  */
-function decayWeight(startedAt, promptsAfter, now, policy) {
+export function decayWeight(startedAt, promptsAfter, now, policy) {
   const ageSeconds = (now.getTime() - Date.parse(startedAt)) / 1000;
   const timeWeight =
     !Number.isFinite(ageSeconds) || ageSeconds <= 0
@@ -227,7 +249,7 @@ function decayWeight(startedAt, promptsAfter, now, policy) {
  * @param {OutcomeRow[]} ordered Chronological, oldest first.
  * @param {{band: string, category: string}} expected
  * @param {Date} now
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {WeightingPolicy} policy
  * @returns {{level: string, cell: ForecastCell}[]} most specific first
  */
 function summarizeLevels(ordered, expected, now, policy) {
@@ -322,7 +344,7 @@ function emptyCell() {
  * band, then the period aggregate, then the weak prior alone.
  *
  * @param {ForecastInput} input
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {WeightingPolicy} policy
  * @returns {{level: string, cell: ForecastCell}}
  */
 function selectCell(input, policy) {
@@ -416,8 +438,37 @@ export function buildForecast(input) {
     prior: input.prior,
     policy,
     dataCompleteness: input.dataCompleteness ?? "unknown",
+    // Spread only when given, so a forecast without one is the very object it always was.
+    ...(input.method === undefined ? {} : { method: input.method }),
   });
 }
+
+/**
+ * The answer's model under longer recency half-lives, run as shadow estimates (1.6.0).
+ *
+ * One knob per variant -- `recency_half_life_prompts` -- so a difference in calibration has one
+ * cause; cells, backoff, cell minimum, evidence window, prior, coverage, risk and evidence gates are
+ * the answer's. Each keeps the answer's 7-day time half-life and a finite recency half-life, so
+ * every one decays: older outcomes always weigh less than newer ones. None of them ever answers.
+ * Recorded beside each attempt and calibrated against the same outcomes, a variant can only
+ * displace the answer's 30 by a later release meeting `recency-variant-promotion-v1`, the collapse
+ * test included (docs/history/specs/half-life-shadows/spec.md §6). Ordered by ascending half-life.
+ *
+ * @type {readonly {method: {id: string, version: string}, policy: WeightingPolicy & {base_policy: string}}[]}
+ */
+export const WEIGHTING_VARIANTS = Object.freeze(
+  [50, 100].map((halfLife) =>
+    Object.freeze({
+      method: Object.freeze({ id: `bayesian-pressure-band-hl${halfLife}`, version: "1" }),
+      policy: Object.freeze({
+        ...PREDICTION_POLICY,
+        version: `recency-hl${halfLife}-v1`,
+        recency_half_life_prompts: halfLife,
+        base_policy: PREDICTION_POLICY.version,
+      }),
+    }),
+  ),
+);
 
 /**
  * Turn one aggregated cell into the published forecast.
