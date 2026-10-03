@@ -774,3 +774,11 @@ purges.
   does not mirror `claude-adapter.js`: an empty Claude projects directory is unsupported to both
   `sync` and `doctor` (the turn-tree fingerprint needs one recognized record), which is consistent
   between the two commands but not what Codex's `sync` does.
+- **One unreadable rollout fails the whole Codex source** (clarifies R4). R4's "as
+  `claude-adapter.js` treats" holds for directories only. At file level the two adapters diverge:
+  `claude-adapter.js` reads a session file it cannot open as empty (`readRecords` catches every
+  error), so its prompts silently go unobserved, while the Codex adapter raises
+  `source_unavailable` and the source reports `failed: 1`. That is accepted: it fails closed on
+  data, and it recovers on the next `sync` once the permission returns. The `source_sync_failed`
+  warning, for every source, now ends "run `snack doctor` for the cause"; `doctor` reports the
+  Codex source inaccessible. Neither names a path.

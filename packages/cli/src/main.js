@@ -578,7 +578,9 @@ export async function run(argv, options = {}) {
         if (result.failed > 0) {
           syncWarnings.push({
             code: "source_sync_failed",
-            message: `Synchronization failed for source ${result.alias} (${result.path}).`,
+            message:
+              `Synchronization failed for source ${result.alias} (${result.path}); ` +
+              "run `snack doctor` for the cause.",
           });
         }
       }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, utimes, writeFile } from "node:fs/promises";
+import { chmod, readFile, readdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -212,3 +212,50 @@ for (const order of [
     }
   });
 }
+
+test(
+  "one unreadable rollout fails the Codex sync and points at doctor, without a path",
+  {
+    skip: process.getuid?.() === 0 ? "root reads a file whatever its mode" : false,
+  },
+  async () => {
+    const fixture = await makeRunFixture("snack-codex-unreadable-");
+    const home = await createCodexHistory(fixture.root, [
+      "version-0-159-3.jsonl",
+      "version-0-147-0.jsonl",
+    ]);
+    fixture.options.env.CODEX_HOME = home;
+    await json(fixture, ["setup", "codex", ...setupFlags("codex", "openai")]);
+    const day = join(home, "sessions", "2026", "01", "02");
+    const unreadable = join(
+      day,
+      String((await readdir(day)).find((name) => name.includes("0-147"))),
+    );
+    await chmod(unreadable, 0);
+    try {
+      // Fail closed: one rollout SNACK cannot read refuses the whole source, unlike Claude Code's
+      // adapter, which skips one unreadable session file (spec R8).
+      const sync = await json(fixture, ["sync"]);
+      assert.equal(sync.status, "degraded");
+      assert.equal(sync.data.sources[0].failed, 1);
+      const [warning] = sync.warnings;
+      assert.equal(warning.code, "source_sync_failed");
+      assert.match(warning.message, /`snack doctor`/u);
+      assert.ok(!warning.message.includes(fixture.root), warning.message);
+
+      fixture.stdout.value = "";
+      await run(["node", "snack", "doctor", "--json"], fixture.options);
+      const checks = JSON.parse(fixture.stdout.value).data.checks;
+      const fingerprint = checks.find(
+        (/** @type {{id: string}} */ check) => check.id === "source_fingerprint:codex:codex",
+      );
+      assert.equal(fingerprint?.status, "fail");
+      assert.match(String(fingerprint?.message), /inaccessible/u);
+    } finally {
+      await chmod(unreadable, 0o600);
+    }
+    // Recoverable: once the permission returns, the same source syncs again.
+    const again = await json(fixture, ["sync"]);
+    assert.equal(again.status, "ok");
+  },
+);
