@@ -87,7 +87,7 @@ const invocations = [
   {
     name: "setup-codex",
     command: "setup codex",
-    argv: ["setup", "codex", ...setupFlags("codex")],
+    argv: ["setup", "codex", ...setupFlags("codex", "openai")],
   },
   { name: "sync", command: "sync", argv: ["sync", "--full"] },
   { name: "stats", command: "stats", argv: ["stats", "--verbose"] },
@@ -115,14 +115,21 @@ const invocations = [
 const payloadSchemaFor = (/** @type {string} */ command) =>
   `${command.replaceAll(" ", "-")}.schema.json`;
 
-/** @param {string} alias */
-function setupFlags(alias) {
+/** @param {string} client */
+const providerOf = (client) => (client === "codex" ? "openai" : "anthropic");
+
+/**
+ * @param {string} alias
+ * @param {string} [provider] the provider the history names: Codex rollouts name `openai`, and a
+ *   stated figure is stored only for the source of the provider that stated it
+ */
+function setupFlags(alias, provider = "anthropic") {
   return [
     "--non-interactive",
     "--source",
     alias,
     "--provider",
-    "anthropic",
+    provider,
     "--profile",
     "default",
     "--plan",
@@ -188,14 +195,22 @@ test("an applied setup says so under the key that names the opposite", async () 
   ])) {
     fixture.stdout.value = "";
     await run(
-      ["node", "snack", "setup", client, ...setupFlags(`${alias}-preview`), "--dry-run", "--json"],
+      [
+        "node",
+        "snack",
+        "setup",
+        client,
+        ...setupFlags(`${alias}-preview`, providerOf(client)),
+        "--dry-run",
+        "--json",
+      ],
       fixture.options,
     );
     assert.equal(JSON.parse(fixture.stdout.value).data.dry_run.applied, false);
 
     fixture.stdout.value = "";
     const exitCode = await run(
-      ["node", "snack", "setup", client, ...setupFlags(alias), "--json"],
+      ["node", "snack", "setup", client, ...setupFlags(alias, providerOf(client)), "--json"],
       fixture.options,
     );
 
