@@ -132,6 +132,15 @@ test("no command calls observed usage a quota percentage or a remaining balance"
   assert.match(transcript, /"sequence"/u);
   assert.match(transcript, /interval is too wide to say much/u);
   assert.match(transcript, /--sequence <n>/u);
+  // The weighting variants (1.6.0): their verbose lines, the half-lives in words, and the JSON.
+  assert.match(transcript, /recency half-life/u);
+  assert.match(transcript, /not the answer above/u);
+  assert.match(transcript, /bayesian-pressure-band-hl50@1 would say/u);
+  assert.match(transcript, /"bayesian-pressure-band-hl100"/u);
+  for (const output of outputs.filter((entry) => entry.argv.includes("--verbose"))) {
+    // A half-life is said "50-prompt", never a number set before the word.
+    assert.doesNotMatch(output.text, countBeforePrompts, `\`snack ${output.argv.join(" ")}\``);
+  }
 
   for (const output of outputs) {
     for (const term of forbidden) {

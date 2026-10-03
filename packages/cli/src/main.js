@@ -55,9 +55,10 @@ import {
 import {
   BASELINE_METHOD_FAMILY,
   CALIBRATION_POLICY,
-  backtest,
   backtestReported,
+  backtestWeightings,
   liveByMethod,
+  scoreVariant,
   summarizeCalibration,
 } from "./calibration.js";
 import { REPORTED_CAPACITY_POLICY, walkStatedHistory } from "./reported-capacity.js";
@@ -74,14 +75,18 @@ import {
 import {
   PREDICTION_POLICY,
   SEQUENCE_MAX_LENGTH,
+  WEIGHTING_VARIANTS,
   classifyIngestionCompleteness,
 } from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
 import {
   attachShadow,
+  attachShadows,
   createShadowStatus,
   createSourceStatus,
+  createWeightingShadows,
   describeReportedCapacity,
+  prepareForecastInput,
 } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
@@ -97,6 +102,7 @@ import {
   readOutcomeRows,
   linkPrimaryEvaluations,
   readCalibrationPairs,
+  readShadowForecasts,
   readPredictionAttemptCount,
   readPredictionSnapshots,
   recordPredictionAttempt,
@@ -137,6 +143,9 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @property {ExecuteCommand | undefined} [execute]
  * @property {(() => void) | undefined} [openSqliteDriver] opens and closes an in-memory database;
  *   injected so a test can stand in for an addon built for another Node.js
+ * @property {typeof WEIGHTING_VARIANTS | undefined} [weightingVariants] the weighting variants
+ *   `status` runs in shadow, `WEIGHTING_VARIANTS` by default; injected so a test can run the answer
+ *   alone, with none beside it, and hold today's answer to it
  */
 
 /**
@@ -694,9 +703,10 @@ export async function run(argv, options = {}) {
           now,
           clients:
             commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
-          // Per-method calibration exists only where a second method runs: a source a Codex
-          // installation feeds. Every other source's document stays the one 1.4 emitted.
-          byMethod: allConfigured.some(
+          // The weighting variants run on every source, so every source has per-method
+          // calibration (1.6.0, superseding 1.5.0's Codex-only `by_method`); the
+          // `reported-capacity` entry joins it only where a Codex installation feeds the source.
+          reportedShadow: allConfigured.some(
             (entry) => entry.alias === source.alias && isCodexSource(entry),
           ),
         });
@@ -731,7 +741,7 @@ export async function run(argv, options = {}) {
         commandOptions.sequence === undefined
           ? undefined
           : parseSequenceLength(commandOptions.sequence);
-      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>, shadow?: import("./status.js").ShadowView})[]} */
+      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>, shadow?: import("./status.js").ShadowView, shadows: (import("./status.js").ShadowView | import("./status.js").WeightingShadowView)[]})[]} */
       const statuses = [];
       /** @type {number[]} */
       const attemptIds = [];
@@ -837,27 +847,37 @@ export async function run(argv, options = {}) {
           const outcomes = readOutcomeRows(paths.databaseFile, source.alias, {
             limit: PREDICTION_POLICY.evidence_window_prompts,
           });
+          const history = {
+            outcomes,
+            windowSeconds: parseHorizon(primaryHorizon(current)),
+            completeness: classifyIngestionCompleteness({
+              synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
+              issues: readSpoolIssueCount(paths.databaseFile, source.alias),
+              pendingMappings: readPendingMappingCount(paths.databaseFile, source),
+              pendingSpoolObservations: readPendingSpoolObservations(paths.databaseFile, source)
+                .length,
+            }),
+            ...(prospective
+              ? { category: prospective.category, prospective: prospective.prospective }
+              : {}),
+          };
+          // Prepared once: the answer and every weighting variant read this very input, so the
+          // outcomes are banded once and a variant can differ from the answer only by its weights.
+          const prepared = prepareForecastInput(source, summary, now, pressure, history);
           const sourceStatus = createSourceStatus(
             source,
             summary,
             now,
             synchronization,
             pressure,
-            {
-              outcomes,
-              windowSeconds: parseHorizon(primaryHorizon(current)),
-              completeness: classifyIngestionCompleteness({
-                synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
-                issues: readSpoolIssueCount(paths.databaseFile, source.alias),
-                pendingMappings: readPendingMappingCount(paths.databaseFile, source),
-                pendingSpoolObservations: readPendingSpoolObservations(paths.databaseFile, source)
-                  .length,
-              }),
-              ...(prospective
-                ? { category: prospective.category, prospective: prospective.prospective }
-                : {}),
-            },
-            sequenceLength === undefined ? {} : { sequenceLength },
+            history,
+            sequenceLength === undefined ? { prepared } : { sequenceLength, prepared },
+          );
+          // The weighting variants, in shadow on every source: computed beside the answer from the
+          // same prepared input, recorded with its attempt, and never the answer (1.6.0).
+          const weighting = createWeightingShadows(
+            prepared,
+            options.weightingVariants ?? WEIGHTING_VARIANTS,
           );
           // Attached after the forecast is built, and beside it: what Codex states about its own
           // windows is quoted, never an input to the interval, the risk, the evidence or pressure
@@ -885,10 +905,13 @@ export async function run(argv, options = {}) {
             });
             shadowRow = shadow.row;
             statuses.push(
-              attachShadow(sourceStatus, describeReportedCapacity(latest, now), shadow.view),
+              attachShadows(
+                attachShadow(sourceStatus, describeReportedCapacity(latest, now), shadow.view),
+                weighting.views,
+              ),
             );
           } else {
-            statuses.push(sourceStatus);
+            statuses.push(attachShadows(sourceStatus, weighting.views));
           }
           if (summary.active_period_id !== null) {
             attemptIds.push(
@@ -903,6 +926,7 @@ export async function run(argv, options = {}) {
                   ? undefined
                   : toPredictionSequence(sourceStatus),
                 shadowRow,
+                weighting.rows,
               ),
             );
           }
@@ -2900,7 +2924,7 @@ function summarizeWindow(rows, now) {
 /**
  * Describe observed usage for one capacity source across the requested horizons.
  *
- * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null, byMethod?: boolean}} input
+ * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null, reportedShadow?: boolean}} input
  */
 function buildSourceStats(input) {
   /** @type {{groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number} | null} */
@@ -2958,7 +2982,7 @@ function buildSourceStats(input) {
       input.databaseFile,
       input.source.alias,
       input.planProfile,
-      input.byMethod === true,
+      input.reportedShadow === true,
     ),
     ...(input.clients
       ? {
@@ -3054,54 +3078,88 @@ function buildClientComparison(input) {
  * Report predictive quality from the two streams that must never be mixed: forecasts the
  * user actually saw, and forecasts replayed from history.
  *
- * `byMethod` adds the per-method streams, for a source where the `reported-capacity` shadow runs
- * beside the baseline. The top-level `live` and `backtest` keep their meaning either way -- every
- * delivered forecast, every replayed baseline forecast -- and so their numbers.
+ * `by_method` adds the per-method streams: the answer, then the `reported-capacity` shadow where a
+ * Codex installation feeds the source (`reportedShadow`), then each weighting variant -- which runs
+ * on every source, so every source has the member (1.6.0). The top-level `live` and `backtest` keep
+ * their meaning -- every delivered forecast, every replayed answer forecast -- and so their numbers.
+ * One walk replays the answer and every variant (`backtestWeightings`); its policy 0 is the
+ * top-level backtest, the answer's entry and the baseline every shadow is paired with.
  *
  * @param {string} databaseFile
  * @param {string} alias
  * @param {import("./plan-profile.js").PlanProfile} planProfile
- * @param {boolean} [byMethod]
+ * @param {boolean} [reportedShadow]
  */
-function buildCalibrationReport(databaseFile, alias, planProfile, byMethod = false) {
+function buildCalibrationReport(databaseFile, alias, planProfile, reportedShadow = false) {
   const pairs = readCalibrationPairs(databaseFile, alias);
   const snapshots = readPredictionSnapshots(databaseFile, alias);
   const outcomes = readOutcomeRows(databaseFile, alias);
   const prior = { strength: planProfile.prior_strength, viability: planProfile.prior_viability };
-  const replay = backtest(outcomes, { now: new Date(), prior });
-  const report = {
+  const [replay, ...variantReplays] = backtestWeightings(outcomes, {
+    prior,
+    policies: [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)],
+  });
+  const answer = /** @type {NonNullable<typeof replay>} */ (replay);
+  const answerBacktest = { ...answer.calibration, forecasts: answer.forecasts };
+  const shadowRows = readShadowForecasts(databaseFile, alias);
+
+  const reportedEntries = reportedShadow
+    ? [reportedEntry(pairs, backtestReported(outcomes, { prior, baseline: answer.scored }))]
+    : [];
+  const variantEntries = WEIGHTING_VARIANTS.map((variant, index) => {
+    const replayed = scoreVariant(
+      /** @type {NonNullable<(typeof variantReplays)[number]>} */ (variantReplays[index]),
+      answer,
+    );
+    const live = liveByMethod(pairs, variant.method, shadowRows);
+    return {
+      id: variant.method.id,
+      version: variant.method.version,
+      role: "shadow",
+      includes: [`${variant.method.id}@${variant.method.version}`],
+      live: live.shadow,
+      backtest: { ...replayed.calibration, forecasts: replayed.forecasts },
+      paired: { live: live.paired, backtest: replayed.paired },
+    };
+  });
+  return {
     policy_version: CALIBRATION_POLICY.version,
     snapshots: snapshots.length,
     undelivered_attempts: readPredictionAttemptCount(databaseFile, alias) - snapshots.length,
     live: summarizeCalibration(pairs),
-    backtest: { ...replay.calibration, forecasts: replay.forecasts },
-  };
-  if (!byMethod) return report;
-
-  const shadowReplay = backtestReported(outcomes, { prior, baseline: replay.scored });
-  const method = REPORTED_CAPACITY_POLICY.method;
-  const live = liveByMethod(pairs, method);
-  return {
-    ...report,
+    backtest: answerBacktest,
     by_method: [
       {
         id: "bayesian-pressure-band",
         version: "1",
         role: "answer",
         includes: [...BASELINE_METHOD_FAMILY],
-        live: live.baseline,
-        backtest: { ...replay.calibration, forecasts: replay.forecasts },
+        live: liveByMethod(pairs, REPORTED_CAPACITY_POLICY.method).baseline,
+        backtest: answerBacktest,
       },
-      {
-        id: method.id,
-        version: method.version,
-        role: "shadow",
-        includes: [`${method.id}@${method.version}`],
-        live: live.shadow,
-        backtest: { ...shadowReplay.calibration, forecasts: shadowReplay.forecasts },
-        paired: { live: live.paired, backtest: shadowReplay.paired },
-      },
+      ...reportedEntries,
+      ...variantEntries,
     ],
+  };
+}
+
+/**
+ * The `reported-capacity` shadow's `by_method` entry, as 1.5.0 built it.
+ *
+ * @param {import("./storage.js").CalibrationPair[]} pairs
+ * @param {ReturnType<typeof backtestReported>} shadowReplay
+ */
+function reportedEntry(pairs, shadowReplay) {
+  const method = REPORTED_CAPACITY_POLICY.method;
+  const live = liveByMethod(pairs, method);
+  return {
+    id: method.id,
+    version: method.version,
+    role: "shadow",
+    includes: [`${method.id}@${method.version}`],
+    live: live.shadow,
+    backtest: { ...shadowReplay.calibration, forecasts: shadowReplay.forecasts },
+    paired: { live: live.paired, backtest: shadowReplay.paired },
   };
 }
 

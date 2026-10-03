@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { ExitCode } from "../src/errors.js";
 import { run } from "../src/main.js";
 import {
+  addCodexTurns,
   cleanupRunFixtures,
   createClaudeCanaryHistory,
   createCodexCanaryHistory,
@@ -332,6 +333,15 @@ test("no command writes or prints what a Claude history says about the user", as
 test("no command writes or prints what a Codex rollout says about the user", async () => {
   const fixture = await makeRunFixture("snack-privacy-codex-");
   const codexHome = await createCodexCanaryHistory(fixture.root, privacyCanaries);
+  // A few ordinary successes beside the canary rollout: the canary's own prompts are not evidence
+  // either way, and the weighting variants compute only from an outcome of the user's, so without
+  // these their capture path would never run here.
+  await addCodexTurns(codexHome, {
+    from: /** @type {Date} */ (fixture.options.now).getTime() - 5 * 3_600_000,
+    count: 6,
+    spacingMs: 20 * 60_000,
+    thread: 9,
+  });
   fixture.options.env.CODEX_HOME = codexHome;
 
   /** @type {string[][]} */
@@ -367,6 +377,8 @@ test("no command writes or prints what a Codex rollout says about the user", asy
   const transcript = [];
   /** @type {unknown[]} */
   let shadowRows = [];
+  /** @type {unknown[]} */
+  let weightingRows = [];
   let planted = false;
   for (const argv of invocations) {
     for (const json of [false, true]) {
@@ -418,6 +430,7 @@ test("no command writes or prints what a Codex rollout says about the user", asy
       const database = new Database(fixture.paths.databaseFile, { readonly: true });
       try {
         shadowRows = database.prepare("SELECT * FROM prediction_reported_capacity").all();
+        weightingRows = database.prepare("SELECT * FROM prediction_shadow").all();
       } finally {
         database.close();
       }
@@ -432,6 +445,15 @@ test("no command writes or prints what a Codex rollout says about the user", asy
       JSON.stringify(shadowRows),
       new RegExp(String(canary), "u"),
       `${name} reached prediction_reported_capacity`,
+    );
+  }
+  // The weighting variants are a capture path too: their rows ride with every attempt.
+  assert.ok(weightingRows.length > 0, "no weighting variant was computed and recorded");
+  for (const [name, canary] of Object.entries(privacyCanaries)) {
+    assert.doesNotMatch(
+      JSON.stringify(weightingRows),
+      new RegExp(String(canary), "u"),
+      `${name} reached prediction_shadow`,
     );
   }
 

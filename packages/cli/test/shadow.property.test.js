@@ -9,7 +9,9 @@ import { run } from "../src/main.js";
 import {
   addCodexTurns,
   cleanupRunFixtures,
+  createClaudeHistory,
   createCodexHistory,
+  createOpenCodeDatabase,
   makeRunFixture,
   plantStatements,
 } from "./fixtures/run-fixture.js";
@@ -86,8 +88,8 @@ function fixedSnapshot(usedPercent, n, ageMs = 60_000) {
 }
 
 /**
- * Everything the answer is made of. `reported_capacity` and `shadow` are the two members a stated
- * figure is allowed to add; nothing else may differ.
+ * Everything the answer is made of. `reported_capacity`, `shadow` and the `reported-capacity` entry
+ * of `shadows` are what a stated figure is allowed to add; nothing else may differ.
  *
  * @param {string} stdout
  */
@@ -95,6 +97,11 @@ function answerOf(stdout) {
   const document = JSON.parse(stdout);
   const { shadow, ...answer } = document.data;
   delete answer.reported_capacity;
+  // From 1.6.0 `shadows` repeats `shadow` as its first entry, beside the weighting variants, which
+  // read no statement: the variants alone must be what they were with no statement at all.
+  answer.shadows = answer.shadows.filter(
+    (/** @type {{method: {id: string}}} */ entry) => entry.method.id !== "reported-capacity",
+  );
   return {
     answer,
     status: document.status,
@@ -257,4 +264,241 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
   // ...and while the prompts the baseline reads carried a stated band, in both upper bands.
   assert.ok(seen.fullPrompts >= 1, "no prompt was projected into the full band");
   assert.ok(seen.nearPrompts >= 1, "no prompt was projected into the near band");
+});
+
+/**
+ * Plant prompts on a source the way ingestion stores them: each a copy of one the source already
+ * holds -- its period, installation, revision domain, parser and size-category policy -- at a new
+ * start, with its own outcome. Written straight through SQLite because the property is about what
+ * `status` reads, not about any client's on-disk shape.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ * @param {{started_at: string, outcome: "success" | "restricted" | "excluded", size_category: "small" | "typical" | "large"}[]} prompts
+ */
+function plantPrompts(databaseFile, alias, prompts) {
+  const database = new Database(databaseFile);
+  try {
+    const template = /** @type {{id: number}} */ (
+      database
+        .prepare("SELECT id FROM prompt_execution WHERE source_alias = ? ORDER BY id LIMIT 1")
+        .get(alias)
+    );
+    const insertPrompt = database.prepare(
+      `INSERT INTO prompt_execution
+         (source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+          source_revision, observation_hash, revision_domain, parser_version, started_at,
+          completed_at, duration_ms, completion, first_observed_at, last_observed_at,
+          installation_id, size_category, category_policy_version)
+       SELECT source_alias, capacity_period_id, @prompt, source_session_fingerprint,
+              source_revision, @prompt, revision_domain, parser_version, @started_at,
+              @started_at, 1000, 'completed', @started_at, @started_at,
+              installation_id, @size_category, category_policy_version
+         FROM prompt_execution WHERE id = @template`,
+    );
+    const insertOutcome = database.prepare(
+      `INSERT INTO prompt_source_outcome (prompt_execution_id, outcome, policy_version)
+       VALUES (?, ?, 'stage2-outcome-v1')`,
+    );
+    const insertSlice = database.prepare(
+      `INSERT INTO prompt_usage_slice
+         (prompt_execution_id, source_slice_id, provider, model, input_tokens, output_tokens)
+       SELECT ?, 'planted', provider, model, 100, 20 FROM prompt_usage_slice
+        WHERE prompt_execution_id = ? LIMIT 1`,
+    );
+    database.transaction(() => {
+      for (const prompt of prompts) {
+        const id = Number(
+          insertPrompt.run({
+            prompt: `planted-${prompt.started_at}-${Math.random()}`,
+            started_at: prompt.started_at,
+            size_category: prompt.size_category,
+            template: template.id,
+          }).lastInsertRowid,
+        );
+        insertOutcome.run(id, prompt.outcome);
+        insertSlice.run(id, template.id);
+      }
+    })();
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * The answer a report gives, without the shadow estimates beside it.
+ *
+ * @param {Record<string, unknown>} report
+ */
+function withoutShadows(report) {
+  const { shadows, ...answer } = report;
+  return {
+    answer,
+    shadows:
+      /** @type {{method: {id: string}, computed: boolean, viability?: {lower: number}}[]} */ (
+        shadows
+      ),
+  };
+}
+
+test("whatever the weighting variants say, every source's answer is the one the answer alone gives", async () => {
+  const fixture = await makeRunFixture("snack-weighting-isolation-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+  ]);
+  /** @param {string[]} argv */
+  const invoke = async (
+    argv,
+    variants = /** @type {typeof import("../src/prediction.js").WEIGHTING_VARIANTS | undefined} */ (
+      undefined
+    ),
+  ) => {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(["node", "snack", ...argv], {
+      ...fixture.options,
+      ...(variants === undefined ? {} : { weightingVariants: variants }),
+    });
+    assert.equal(exitCode, 0, fixture.stderr.value);
+    return fixture.stdout.value;
+  };
+  for (const [client, alias, provider, plan] of [
+    ["opencode", "work", "anthropic", "pro"],
+    ["claude", "personal", "anthropic", "pro"],
+    ["codex", "codex", "openai", "plus"],
+  ]) {
+    await invoke([
+      "setup",
+      String(client),
+      "--non-interactive",
+      "--source",
+      String(alias),
+      "--provider",
+      String(provider),
+      "--profile",
+      "default",
+      "--plan",
+      String(plan),
+    ]);
+  }
+  await invoke(["sync", "--full"]);
+  const { databaseFile } = fixture.paths;
+  // Two hundred successes per source, one every 25 minutes until an hour before the clock: enough
+  // pressure windows for the answer to key on its own band rather than the period aggregate, so
+  // its risk, its evidence and its cell are values a leaking variant could move (guarded below).
+  for (const alias of ["work", "personal", "codex"]) {
+    plantPrompts(
+      databaseFile,
+      alias,
+      Array.from({ length: 200 }, (_unused, index) => ({
+        started_at: new Date(NOW - 3_600_000 - (200 - index) * 25 * 60_000).toISOString(),
+        outcome: /** @type {const} */ ("success"),
+        size_category: /** @type {const} */ ("typical"),
+      })),
+    );
+  }
+  const pristine = `${databaseFile}.weighting-pristine`;
+  await copyFile(databaseFile, pristine);
+
+  /**
+   * The same database, read with the variants beside the answer and with none: `status`, its
+   * `--sequence 3` answer and the overview, each from its own copy so an attempt one records is
+   * never history for the other.
+   *
+   * @param {typeof import("../src/prediction.js").WEIGHTING_VARIANTS | undefined} variants
+   */
+  const read = async (variants) => {
+    await copyFile(`${databaseFile}.weighting-case`, databaseFile);
+    const single = JSON.parse(await invoke(["status", "--no-sync", "--json"], variants));
+    await copyFile(`${databaseFile}.weighting-case`, databaseFile);
+    const sequence = JSON.parse(
+      await invoke(["status", "--no-sync", "--sequence", "3", "--json"], variants),
+    );
+    await copyFile(`${databaseFile}.weighting-case`, databaseFile);
+    const overview = await invoke(["status", "--no-sync"], variants);
+    return { single, sequence, overview };
+  };
+
+  // Non-vacuity: an answer already at `high` risk, `very_low` evidence, the period aggregate or the
+  // prior could not show a variant raising the risk, lowering the evidence or moving the cell.
+  await copyFile(pristine, `${databaseFile}.weighting-case`);
+  const baseline = await read(undefined);
+  for (const report of baseline.single.data.sources) {
+    const alias = report.source.alias;
+    assert.equal(report.risk.label, "low", alias);
+    assert.notEqual(report.evidence.level, "very_low", alias);
+    assert.ok(
+      !["period", "prior"].includes(report.contributors.backoff_level),
+      `${alias} reads ${report.contributors.backoff_level}`,
+    );
+  }
+
+  const outcome = fc.constantFrom("success", "success", "restricted", "restricted", "excluded");
+  const tail = fc.array(
+    fc.record({
+      outcome,
+      size_category: fc.constantFrom("small", "typical", "large"),
+      gapMinutes: fc.integer({ min: 1, max: 90 }),
+    }),
+    { maxLength: 30, size: "max" },
+  );
+  const seen = { computed: 0, differs: 0, runs: 0 };
+  await fc.assert(
+    fc.asyncProperty(fc.tuple(tail, tail, tail), async (tails) => {
+      await copyFile(pristine, `${databaseFile}.weighting-case`);
+      for (const [index, alias] of ["work", "personal", "codex"].entries()) {
+        const rows = /** @type {(typeof tails)[0]} */ (tails[index]);
+        let at = NOW - 3_600_000;
+        plantPrompts(
+          `${databaseFile}.weighting-case`,
+          alias,
+          rows.map((row) => {
+            at += row.gapMinutes * 60_000 * (55 / 90);
+            return {
+              started_at: new Date(Math.min(at, NOW - 1000)).toISOString(),
+              outcome: /** @type {"success" | "restricted" | "excluded"} */ (row.outcome),
+              size_category: /** @type {"small" | "typical" | "large"} */ (row.size_category),
+            };
+          }),
+        );
+      }
+      const today = await read(undefined);
+      const alone = await read([]);
+      seen.runs += 1;
+      for (const [index, report] of today.single.data.sources.entries()) {
+        const { answer: reportAnswer, shadows } = withoutShadows(report);
+        const answer = /** @type {{viability: {lower: number}}} */ (reportAnswer);
+        const { answer: aloneAnswer, shadows: aloneShadows } = withoutShadows(
+          alone.single.data.sources[index],
+        );
+        assert.deepEqual(answer, aloneAnswer, report.source.alias);
+        // The answer alone carries no variant: only the `reported-capacity` entry, where it runs.
+        assert.ok(aloneShadows.every((entry) => entry.method.id === "reported-capacity"));
+        for (const entry of shadows.slice(-2)) {
+          if (!entry.computed || entry.viability === undefined) continue;
+          seen.computed += 1;
+          if (entry.viability.lower !== answer.viability.lower) seen.differs += 1;
+        }
+        const sequence = withoutShadows(today.sequence.data.sources[index]).answer;
+        const aloneSequence = withoutShadows(alone.sequence.data.sources[index]).answer;
+        assert.deepEqual(sequence, aloneSequence, `${report.source.alias} --sequence 3`);
+      }
+      assert.deepEqual(
+        [today.single.status, today.single.warnings],
+        [alone.single.status, alone.single.warnings],
+      );
+      assert.deepEqual(
+        [today.sequence.status, today.sequence.warnings],
+        [alone.sequence.status, alone.sequence.warnings],
+      );
+      assert.equal(today.overview, alone.overview);
+    }),
+    { numRuns: 25 },
+  );
+  // Non-vacuity: the variants really ran, on every source, and said something other than the
+  // answer -- so a variant that replaced the answer would have been seen.
+  assert.ok(seen.computed >= seen.runs * 3, `variants computed ${seen.computed} times only`);
+  assert.ok(seen.differs >= seen.runs, `variants differed from the answer ${seen.differs} times`);
 });

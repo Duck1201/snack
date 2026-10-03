@@ -198,25 +198,49 @@ test("every command's JSON document validates against the published envelope sch
           .every((/** @type {object} */ report) => !("shadow" in report)),
         "a source no Codex installation feeds grew a shadow",
       );
+      // Non-vacuity for the 1.6.0 addition: `shadows` on every report, the `reported-capacity`
+      // entry first where it runs and the very object `shadow` holds, then both weighting
+      // variants, computed -- so the entry schema really validated a computed forecast.
+      for (const report of reports) {
+        const ids = report.shadows.map(
+          (/** @type {{method: {id: string}}} */ entry) => entry.method.id,
+        );
+        assert.deepEqual(
+          ids,
+          [
+            ...(report.source.alias === "codex" ? ["reported-capacity"] : []),
+            "bayesian-pressure-band-hl50",
+            "bayesian-pressure-band-hl100",
+          ],
+          report.source.alias,
+        );
+        assert.equal(Object.keys(report).at(-1), "shadows", "shadows is not the last member");
+        assert.ok(
+          report.shadows.every((/** @type {{computed: boolean}} */ entry) => entry.computed),
+          `${report.source.alias}: a shadow was not computed`,
+        );
+      }
+      assert.deepEqual(codex?.shadows[0], codex?.shadow);
     }
     if (invocation.name === "stats") {
       const reports = document.data.sources ?? [document.data];
-      const withMethods = reports.filter(
-        (/** @type {{calibration: object}} */ report) => "by_method" in report.calibration,
-      );
-      assert.deepEqual(
-        withMethods.map((/** @type {{source: {alias: string}}} */ report) => report.source.alias),
-        ["codex"],
-      );
-      assert.deepEqual(
-        withMethods[0].calibration.by_method.map(
-          (/** @type {{id: string, role: string}} */ entry) => [entry.id, entry.role],
-        ),
-        [
-          ["bayesian-pressure-band", "answer"],
-          ["reported-capacity", "shadow"],
-        ],
-      );
+      // Every source from 1.6.0: the weighting variants run everywhere.
+      for (const report of reports) {
+        assert.deepEqual(
+          report.calibration.by_method.map((/** @type {{id: string, role: string}} */ entry) => [
+            entry.id,
+            entry.role,
+          ]),
+          [
+            ["bayesian-pressure-band", "answer"],
+            ...(report.source.alias === "codex" ? [["reported-capacity", "shadow"]] : []),
+            ["bayesian-pressure-band-hl50", "shadow"],
+            ["bayesian-pressure-band-hl100", "shadow"],
+          ],
+          report.source.alias,
+        );
+      }
+      assert.equal(reports.length, 3, "by_method was validated on fewer sources than it claims");
     }
     if (invocation.name === "status-sequence") {
       const reports = document.data.sources ?? [document.data];
@@ -412,6 +436,7 @@ test("the declared report keys are the report's own, not those of a nested defin
     "sequence",
     "reported_capacity",
     "shadow",
+    "shadows",
   ]) {
     assert.ok(declared.has(own), own);
   }

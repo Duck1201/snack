@@ -142,12 +142,52 @@ export function summarizeCalibration(forecasts) {
  * honest: nothing that happened later is visible to the forecast being scored, so adding
  * future history cannot change a past result.
  *
+ * The one-policy case of `backtestWeightings`, whose walk is held bit for bit to the one `1.5.0`
+ * shipped.
+ *
  * @param {import("./prediction.js").OutcomeRow[]} outcomes
- * @param {{now: Date, prior: {strength: number, viability: number}, policy?: typeof import("./prediction.js").PREDICTION_POLICY}} options
+ * @param {{now: Date, prior: {strength: number, viability: number}, policy?: import("./prediction.js").WeightingPolicy}} options
  * @returns {{forecasts: number, scored: ScoredForecast[], calibration: ReturnType<typeof summarizeCalibration>, policy_version: string}}
  */
 export function backtest(outcomes, options) {
-  const policy = options.policy ?? PREDICTION_POLICY;
+  const [result] = backtestWeightings(outcomes, {
+    prior: options.prior,
+    policies: [options.policy ?? PREDICTION_POLICY],
+  });
+  const {
+    forecasts,
+    scored,
+    calibration,
+    policy_version: version,
+  } = /** @type {WeightingReplay} */ (result);
+  return { forecasts, scored, calibration, policy_version: version };
+}
+
+/**
+ * @typedef {object} WeightingReplay
+ * @property {number} forecasts
+ * @property {ScoredForecast[]} scored One per eligible prompt from the tenth on, whatever the
+ *   policy: every weighting scores at the same prompts, so the lists align by position.
+ * @property {ReturnType<typeof summarizeCalibration>} calibration
+ * @property {string} policy_version
+ * @property {boolean[]} from_prior Whether each scored forecast's ladder ended at the plan prior.
+ */
+
+/**
+ * Replay a history once under several weightings of the answer's model (spec §5.2).
+ *
+ * One sort and one chronological walk. Each accumulator keeps the raw counts once and one pair of
+ * decayed weights per policy; re-anchoring and superseding apply each policy's own factors, in the
+ * same order the single-policy walk does, so each policy's doubles are the ones a walk of its own
+ * would produce -- the quantiles cannot be shared, the walk can. At each scored prompt each policy
+ * reads its own cells, chooses with its own policy and assembles its own forecast.
+ *
+ * @param {import("./prediction.js").OutcomeRow[]} outcomes
+ * @param {{prior: {strength: number, viability: number}, policies: readonly import("./prediction.js").WeightingPolicy[]}} options
+ * @returns {WeightingReplay[]} one per policy, in the order given
+ */
+export function backtestWeightings(outcomes, options) {
+  const { policies } = options;
   const ordered = [...outcomes].sort((left, right) =>
     left.started_at.localeCompare(right.started_at),
   );
@@ -155,56 +195,99 @@ export function backtest(outcomes, options) {
   // Each backoff level keeps its own decayed counts. Advancing the clock multiplies every
   // weight by the same factor, so the accumulators can be re-anchored in O(1) instead of
   // re-weighting the whole prefix at every step.
-  const levels = new Map([["", createAccumulator()]]);
+  const levels = new Map([["", createAccumulator(policies.length)]]);
   /** @param {string} key */
   const accumulatorFor = (key) => {
     const existing = levels.get(key);
     if (existing) return existing;
-    const created = createAccumulator();
+    const created = createAccumulator(policies.length);
     levels.set(key, created);
     return created;
   };
 
-  /** @type {ScoredForecast[]} */
-  const scored = [];
+  /** @type {ScoredForecast[][]} */
+  const scored = policies.map(() => []);
+  /** @type {boolean[][]} */
+  const fromPrior = policies.map(() => []);
   for (const [index, row] of ordered.entries()) {
     const at = Date.parse(row.started_at);
     const band = row.pressure_band ?? "unknown";
     const category = row.size_category ?? "typical";
 
     if (index >= CALIBRATION_POLICY.minimum_backtest_history && row.outcome !== "excluded") {
-      const candidates = [
-        { level: "period_band_category", key: `${band}\u0000${category}` },
-        { level: "period_band", key: band },
-        { level: "period", key: "" },
-      ].map(({ level, key }) => ({
-        level,
-        cell: readAccumulator(accumulatorFor(key), at, policy.decay_half_life_seconds),
-      }));
-      const forecast = assembleForecast({
-        ...chooseCell(candidates, policy),
-        prior: options.prior,
-        policy,
-        dataCompleteness: "unknown",
-      });
-      scored.push({
-        lower: forecast.viability.lower,
-        point: forecast.viability.point,
-        upper: forecast.viability.upper,
-        outcome: row.outcome,
-      });
+      const accumulators = [
+        { level: "period_band_category", accumulator: accumulatorFor(`${band}\u0000${category}`) },
+        { level: "period_band", accumulator: accumulatorFor(band) },
+        { level: "period", accumulator: accumulatorFor("") },
+      ];
+      // Every weighting's weights move to this prompt's start before any is read.
+      for (const { accumulator } of accumulators) reanchor(accumulator, at, policies);
+      for (const [slot, policy] of policies.entries()) {
+        const candidates = accumulators.map(({ level, accumulator }) => ({
+          level,
+          cell: readAccumulator(accumulator, slot),
+        }));
+        const chosen = chooseCell(candidates, policy);
+        const forecast = assembleForecast({
+          ...chosen,
+          prior: options.prior,
+          policy,
+          dataCompleteness: "unknown",
+        });
+        /** @type {ScoredForecast[]} */ (scored[slot]).push({
+          lower: forecast.viability.lower,
+          point: forecast.viability.point,
+          upper: forecast.viability.upper,
+          outcome: row.outcome,
+        });
+        /** @type {boolean[]} */ (fromPrior[slot]).push(chosen.level === "prior");
+      }
     }
 
     for (const key of [`${band}\u0000${category}`, band, ""]) {
-      observe(accumulatorFor(key), row.outcome, at, policy);
+      observe(accumulatorFor(key), row.outcome, at, policies);
     }
   }
 
+  return policies.map((_policy, slot) => {
+    const own = /** @type {ScoredForecast[]} */ (scored[slot]);
+    return {
+      forecasts: own.length,
+      scored: own,
+      calibration: summarizeCalibration(own),
+      policy_version: CALIBRATION_POLICY.version,
+      from_prior: /** @type {boolean[]} */ (fromPrior[slot]),
+    };
+  });
+}
+
+/**
+ * A weighting variant's backtest as its `by_method` entry reports it: scored only where its own
+ * ladder read an outcome -- a forecast at the plan prior is the answer's `initial-generic@1`, and
+ * scoring it would credit the variant with the prior's calibration, as live -- and `paired` with the
+ * answer's forecasts at exactly those prompts, taken from the answer's own replay.
+ *
+ * @param {WeightingReplay} variant
+ * @param {WeightingReplay} answer the same walk's policy 0
+ * @returns {{forecasts: number, scored: ScoredForecast[], calibration: ReturnType<typeof summarizeCalibration>, paired: PairedComparison}}
+ */
+export function scoreVariant(variant, answer) {
+  /** @type {ScoredForecast[]} */
+  const own = [];
+  /** @type {ScoredForecast[]} */
+  const baseline = [];
+  for (const [index, forecast] of variant.scored.entries()) {
+    if (variant.from_prior[index]) continue;
+    const paired = answer.scored[index];
+    if (paired === undefined) throw new Error("The answer's replay does not cover the variant's.");
+    own.push(forecast);
+    baseline.push(paired);
+  }
   return {
-    forecasts: scored.length,
-    scored,
-    calibration: summarizeCalibration(scored),
-    policy_version: CALIBRATION_POLICY.version,
+    forecasts: own.length,
+    scored: own,
+    calibration: summarizeCalibration(own),
+    paired: comparePaired(own, baseline),
   };
 }
 
@@ -241,7 +324,7 @@ export function backtestReported(outcomes, options) {
   const accumulatorFor = (key) => {
     const existing = stated.get(key);
     if (existing) return existing;
-    const created = createAccumulator();
+    const created = createAccumulator(1);
     stated.set(key, created);
     return created;
   };
@@ -264,10 +347,11 @@ export function backtestReported(outcomes, options) {
           { level: "period_stated_category", key: `${band}\u0000${category}` },
           { level: "period_stated", key: band },
           ...(full ? [] : [{ level: "period", key: "" }]),
-        ].map(({ level, key }) => ({
-          level,
-          cell: readAccumulator(accumulatorFor(key), at, policy.decay_half_life_seconds),
-        }));
+        ].map(({ level, key }) => {
+          const accumulator = accumulatorFor(key);
+          reanchor(accumulator, at, [policy]);
+          return { level, cell: readAccumulator(accumulator, 0) };
+        });
         const chosen = chooseCell(candidates, policy);
         if (chosen.level !== "prior" || full) {
           const forecast = assembleForecast({
@@ -293,7 +377,7 @@ export function backtestReported(outcomes, options) {
     // Every prompt is history for the period aggregate; only a prompt that began in a stated band
     // is history for that band's cells.
     const keys = band === null ? [""] : [`${band}\u0000${category}`, band, ""];
-    for (const key of keys) observe(accumulatorFor(key), row.outcome, at, policy);
+    for (const key of keys) observe(accumulatorFor(key), row.outcome, at, [policy]);
   }
 
   return {
@@ -379,11 +463,26 @@ export const BASELINE_METHOD_FAMILY = Object.freeze([
  * a forecast for -- the pairs a baseline version answered -- the same pairs on both sides. Each
  * entry carries its own sample sizes; nothing is pooled across methods or versions.
  *
- * @param {MethodPair[]} pairs
+ * A shadow method recorded in `prediction_shadow` -- a weighting variant -- passes its rows as
+ * `shadowRows`: its numbers are then read from them, joined to the pairs by attempt id, rather than
+ * from the pair's own `shadow_*` columns, which carry the `reported-capacity` shadow. Either way the
+ * answer's entry is every pair a baseline version answered, with the attempt's numbers.
+ *
+ * @param {(MethodPair & {prediction_attempt_id?: number})[]} pairs
  * @param {{id: string, version: string}} shadowMethod
+ * @param {import("./storage.js").ShadowForecast[]} [shadowRows]
  */
-export function liveByMethod(pairs, shadowMethod) {
+export function liveByMethod(pairs, shadowMethod, shadowRows) {
   const shadowKey = `${shadowMethod.id}@${shadowMethod.version}`;
+  /** @type {Map<number, {lower: number, point: number, upper: number}> | undefined} */
+  const recorded =
+    shadowRows === undefined
+      ? undefined
+      : new Map(
+          shadowRows
+            .filter((row) => `${row.method_id}@${row.method_version}` === shadowKey)
+            .map((row) => [row.prediction_attempt_id, row]),
+        );
   /** @type {ScoredForecast[]} */
   const baseline = [];
   /** @type {ScoredForecast[]} */
@@ -397,18 +496,9 @@ export function liveByMethod(pairs, shadowMethod) {
   for (const pair of pairs) {
     const answered = BASELINE_METHOD_FAMILY.includes(`${pair.method_id}@${pair.method_version}`);
     if (answered) baseline.push(pair);
-    if (
-      `${pair.shadow_method_id}@${pair.shadow_method_version}` === shadowKey &&
-      pair.shadow_lower !== null &&
-      pair.shadow_point !== null &&
-      pair.shadow_upper !== null
-    ) {
-      const scored = {
-        lower: pair.shadow_lower,
-        point: pair.shadow_point,
-        upper: pair.shadow_upper,
-        outcome: pair.outcome,
-      };
+    const own = shadowForecastOf(pair, shadowKey, recorded);
+    if (own !== undefined) {
+      const scored = { ...own, outcome: pair.outcome };
       shadow.push(scored);
       if (answered) {
         pairedShadow.push(scored);
@@ -424,15 +514,44 @@ export function liveByMethod(pairs, shadowMethod) {
 }
 
 /**
- * Decayed counts for one backoff level, anchored at a point in time.
+ * The shadow method's own forecast on one delivered pair, if it recorded one.
  *
- * @returns {{anchor: number, weightedSuccesses: number, weightedRestrictions: number, successes: number, restrictions: number, excluded: number}}
+ * @param {MethodPair & {prediction_attempt_id?: number}} pair
+ * @param {string} shadowKey
+ * @param {Map<number, {lower: number, point: number, upper: number}> | undefined} recorded
+ * @returns {{lower: number, point: number, upper: number} | undefined}
  */
-function createAccumulator() {
+function shadowForecastOf(pair, shadowKey, recorded) {
+  if (recorded !== undefined) {
+    const row =
+      pair.prediction_attempt_id === undefined
+        ? undefined
+        : recorded.get(pair.prediction_attempt_id);
+    return row === undefined ? undefined : { lower: row.lower, point: row.point, upper: row.upper };
+  }
+  if (
+    `${pair.shadow_method_id}@${pair.shadow_method_version}` === shadowKey &&
+    pair.shadow_lower !== null &&
+    pair.shadow_point !== null &&
+    pair.shadow_upper !== null
+  ) {
+    return { lower: pair.shadow_lower, point: pair.shadow_point, upper: pair.shadow_upper };
+  }
+  return undefined;
+}
+
+/**
+ * Decayed counts for one backoff level, anchored at a point in time: the raw counts once, and one
+ * pair of decayed weights per weighting the walk replays.
+ *
+ * @param {number} weightings
+ * @returns {{anchor: number, weightedSuccesses: number[], weightedRestrictions: number[], successes: number, restrictions: number, excluded: number}}
+ */
+function createAccumulator(weightings) {
   return {
     anchor: 0,
-    weightedSuccesses: 0,
-    weightedRestrictions: 0,
+    weightedSuccesses: Array.from({ length: weightings }, () => 0),
+    weightedRestrictions: Array.from({ length: weightings }, () => 0),
     successes: 0,
     restrictions: 0,
     excluded: 0,
@@ -440,78 +559,94 @@ function createAccumulator() {
 }
 
 /**
- * Move an accumulator's anchor to a later time, decaying its weights by the shared factor.
+ * Move an accumulator's anchor to a later time, decaying each weighting's weights by its own factor.
  *
  * @param {ReturnType<typeof createAccumulator>} accumulator
  * @param {number} at
- * @param {number} halfLifeSeconds
+ * @param {readonly {decay_half_life_seconds: number}[]} policies
  */
-function reanchor(accumulator, at, halfLifeSeconds) {
+function reanchor(accumulator, at, policies) {
   if (accumulator.anchor === 0 || at === accumulator.anchor) {
     accumulator.anchor = at;
     return;
   }
-  const factor = 2 ** (-(at - accumulator.anchor) / 1000 / halfLifeSeconds);
-  accumulator.weightedSuccesses *= factor;
-  accumulator.weightedRestrictions *= factor;
+  for (const [slot, policy] of policies.entries()) {
+    const factor = 2 ** (-(at - accumulator.anchor) / 1000 / policy.decay_half_life_seconds);
+    accumulator.weightedSuccesses[slot] =
+      /** @type {number} */ (accumulator.weightedSuccesses[slot]) * factor;
+    accumulator.weightedRestrictions[slot] =
+      /** @type {number} */ (accumulator.weightedRestrictions[slot]) * factor;
+  }
   accumulator.anchor = at;
 }
 
 /**
- * Push every stored observation one position further into the past.
+ * Push every stored observation one position further into the past, under each weighting.
  *
  * Recency decay counts prompts, not seconds, so recording an observation is what ages the
  * ones before it. Applying the factor to the running totals is exactly equivalent to
  * re-weighting each observation individually.
  *
  * @param {ReturnType<typeof createAccumulator>} accumulator
+ * @param {number} slot
  * @param {number} recencyHalfLifePrompts
  */
-function supersede(accumulator, recencyHalfLifePrompts) {
+function supersede(accumulator, slot, recencyHalfLifePrompts) {
   const factor = 2 ** (-1 / recencyHalfLifePrompts);
-  accumulator.weightedSuccesses *= factor;
-  accumulator.weightedRestrictions *= factor;
+  accumulator.weightedSuccesses[slot] =
+    /** @type {number} */ (accumulator.weightedSuccesses[slot]) * factor;
+  accumulator.weightedRestrictions[slot] =
+    /** @type {number} */ (accumulator.weightedRestrictions[slot]) * factor;
 }
 
 /**
  * @param {ReturnType<typeof createAccumulator>} accumulator
  * @param {"success" | "restricted" | "excluded"} outcome
  * @param {number} at
- * @param {{decay_half_life_seconds: number, recency_half_life_prompts: number}} policy
+ * @param {readonly {decay_half_life_seconds: number, recency_half_life_prompts: number}[]} policies
  */
-function observe(accumulator, outcome, at, policy) {
+function observe(accumulator, outcome, at, policies) {
   if (outcome === "excluded") {
     accumulator.excluded += 1;
     return;
   }
-  reanchor(accumulator, at, policy.decay_half_life_seconds);
-  supersede(accumulator, policy.recency_half_life_prompts);
-  if (outcome === "success") {
-    accumulator.successes += 1;
-    accumulator.weightedSuccesses += 1;
-  } else {
-    accumulator.restrictions += 1;
-    accumulator.weightedRestrictions += 1;
+  reanchor(accumulator, at, policies);
+  if (outcome === "success") accumulator.successes += 1;
+  else accumulator.restrictions += 1;
+  for (const [slot, policy] of policies.entries()) {
+    supersede(accumulator, slot, policy.recency_half_life_prompts);
+    if (outcome === "success") {
+      accumulator.weightedSuccesses[slot] =
+        /** @type {number} */ (accumulator.weightedSuccesses[slot]) + 1;
+    } else {
+      accumulator.weightedRestrictions[slot] =
+        /** @type {number} */ (accumulator.weightedRestrictions[slot]) + 1;
+    }
   }
 }
 
 /**
+ * One weighting's cell, read from a shared accumulator already re-anchored at the time it is read
+ * for. Re-anchoring moves every weighting's weights at once, so it is the caller's step, taken once
+ * per accumulator before any weighting reads it: a read that re-anchored would move the anchor
+ * under the weightings read after it.
+ *
  * @param {ReturnType<typeof createAccumulator>} accumulator
- * @param {number} at
- * @param {number} halfLifeSeconds
+ * @param {number} slot
  * @returns {import("./prediction.js").ForecastCell}
  */
-function readAccumulator(accumulator, at, halfLifeSeconds) {
-  reanchor(accumulator, at, halfLifeSeconds);
+function readAccumulator(accumulator, slot) {
+  const weightedSuccesses = /** @type {number} */ (accumulator.weightedSuccesses[slot]);
+  const weightedRestrictions = /** @type {number} */ (accumulator.weightedRestrictions[slot]);
   return {
     prompts_considered: accumulator.successes + accumulator.restrictions + accumulator.excluded,
     limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
     successes: accumulator.successes,
     restrictions: accumulator.restrictions,
     excluded: accumulator.excluded,
-    weighted_successes: accumulator.weightedSuccesses,
-    weighted_restrictions: accumulator.weightedRestrictions,
-    effective_samples: accumulator.weightedSuccesses + accumulator.weightedRestrictions,
+    weighted_successes: weightedSuccesses,
+    weighted_restrictions: weightedRestrictions,
+    effective_samples: weightedSuccesses + weightedRestrictions,
     alpha: 0,
     beta: 0,
   };

@@ -1,5 +1,7 @@
 import { styleText } from "node:util";
 
+import { PREDICTION_POLICY, WEIGHTING_VARIANTS } from "./prediction.js";
+
 /**
  * Human formatting. Explicitly **not** a public contract (`docs/compatibility.md`): every line here
  * is free to change while behaviour and data are preserved, which is what lets the whole 1.x
@@ -43,6 +45,22 @@ const LABEL = 13;
  * @property {ShadowStatusView} [shadow] present only when a Codex installation feeds the source
  * @property {ReportedCapacityView[]} [reported_capacity] present only when a Codex installation feeds
  *   the source
+ * @property {WeightingShadowStatusView[]} [shadows] every shadow estimate, from 1.6.0: the
+ *   `reported-capacity` one first where it runs (the same object as `shadow`), then the weighting
+ *   variants
+ */
+
+/**
+ * One entry of `shadows`, as the panel reads a weighting variant from it.
+ *
+ * @typedef {object} WeightingShadowStatusView
+ * @property {{id: string, version: string}} method
+ * @property {boolean} computed
+ * @property {string | null} reason
+ * @property {string} policy_version
+ * @property {{lower: number, upper: number}} [viability]
+ * @property {{label: string}} [risk]
+ * @property {{level: string}} [evidence]
  */
 
 /**
@@ -941,9 +959,7 @@ function renderSource(status, paint, verbose) {
       : [row(paint, "reported", [[describeReported(status.reported_capacity), undefined, 0]])]),
     // `--verbose` only, and after the stated figure it reads: the shadow is not the estimate this
     // panel answers with, and it is never on the default panel, where it could be taken for one.
-    ...(verbose && status.shadow !== undefined
-      ? shadowRows(status.shadow, status.reported_capacity ?? [], paint)
-      : []),
+    ...(verbose ? allShadowRows(status, paint) : []),
     row(paint, "as of", [
       [
         [
@@ -1058,6 +1074,114 @@ function shadowRows(shadow, reported, paint) {
     ]),
     row(paint, "", [[`${reading} · ${shadow.policy_version}`, "dim", 0]]),
   ];
+}
+
+/**
+ * Every shadow row of a panel, under one `shadow` label: the `reported-capacity` lines where a Codex
+ * installation feeds the source, then the weighting variants. "Not the answer above" is said once,
+ * on the first line that says what a shadow would say.
+ *
+ * @param {SourceStatusView} status
+ * @param {(value: string, style?: Style) => string} paint
+ * @returns {string[]}
+ */
+function allShadowRows(status, paint) {
+  const reported =
+    status.shadow === undefined
+      ? []
+      : shadowRows(status.shadow, status.reported_capacity ?? [], paint);
+  const reportedKey =
+    status.shadow === undefined
+      ? null
+      : `${status.shadow.method.id}@${status.shadow.method.version}`;
+  const variants = (status.shadows ?? []).filter(
+    (entry) => `${entry.method.id}@${entry.method.version}` !== reportedKey,
+  );
+  if (variants.length === 0) return reported;
+  const disclaimed = status.shadow?.computed === true;
+  return [...reported, ...weightingRows(variants, paint, reported.length === 0, !disclaimed)];
+}
+
+/**
+ * The weighting variants, as `--verbose` shows them: what each would say -- its interval, risk and
+ * evidence, never as the answer -- or, when it was not computed, why; then one line naming what
+ * they are, the half-lives in words and the policy versions that identify them. A count before
+ * "prompt" is always hyphenated ("50-prompt"), never a number of prompts.
+ *
+ * @param {WeightingShadowStatusView[]} variants
+ * @param {(value: string, style?: Style) => string} paint
+ * @param {boolean} labelled whether these are the panel's first shadow rows
+ * @param {boolean} disclaim whether the "not the answer above" suffix is still owed
+ * @returns {string[]}
+ */
+function weightingRows(variants, paint, labelled, disclaim) {
+  /** @type {string[]} */
+  const lines = [];
+  const label = () => (labelled && lines.length === 0 ? "shadow" : "");
+  const notComputed = variants.filter((entry) => !entry.computed || !entry.viability);
+  const sharedReason =
+    notComputed.length > 1 && notComputed.every((entry) => entry.reason === notComputed[0]?.reason);
+  let owed = disclaim;
+  let groupedDone = false;
+  for (const entry of variants) {
+    const identifier = `${entry.method.id}@${entry.method.version}`;
+    if (!entry.computed || !entry.viability || !entry.risk || !entry.evidence) {
+      if (sharedReason && groupedDone) continue;
+      const names = sharedReason
+        ? notComputed.map((other) => `${other.method.id}@${other.method.version}`).join(" and ")
+        : identifier;
+      groupedDone = true;
+      const reason = SHADOW_REASONS[entry.reason ?? ""] ?? "not computed";
+      lines.push(row(paint, label(), [[`${names} not computed — ${reason}`, "dim", 0]]));
+      continue;
+    }
+    lines.push(
+      row(paint, label(), [
+        [
+          `${identifier} would say ${interval(entry.viability)} · risk ${entry.risk.label} · evidence ${entry.evidence.level}`,
+          undefined,
+          0,
+        ],
+        ...(owed
+          ? [
+              /** @type {[string, Style, number]} */ ([
+                " — recorded to compare, not the answer above",
+                "dim",
+                0,
+              ]),
+            ]
+          : []),
+      ]),
+    );
+    owed = false;
+  }
+  const halfLives = variants
+    .map(
+      (entry) =>
+        WEIGHTING_VARIANTS.find(
+          (variant) =>
+            variant.method.id === entry.method.id &&
+            variant.method.version === entry.method.version,
+        )?.policy.recency_half_life_prompts,
+    )
+    .filter((value) => value !== undefined);
+  if (halfLives.length > 0) {
+    const named = halfLives.map((value, index) =>
+      index === halfLives.length - 1 ? `a ${value}-prompt` : `a ${value}-`,
+    );
+    const spoken =
+      named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+    lines.push(
+      row(paint, label(), [
+        [
+          `the answer's model with ${spoken} recency half-life instead of ${PREDICTION_POLICY.recency_half_life_prompts} · ${variants.map((entry) => entry.policy_version).join(" · ")}`,
+          "dim",
+          0,
+        ],
+      ]),
+    );
+  }
+  return lines;
 }
 
 /** @param {number} minutes */

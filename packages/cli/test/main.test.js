@@ -41,7 +41,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.data.value, true);
   assert.deepEqual(
     document.data.storage.applied,
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
   );
   // Every other payload SNACK publishes is snake_case. This one carried the storage layer's own
   // JavaScript names straight into the document, so a consumer had to know which command it was
@@ -547,6 +547,7 @@ test("status reports a broad initial estimate with very low evidence", async () 
       data: {
         ...document.data,
         viability: undefined,
+        shadows: undefined,
         contributors: {
           ...contributors,
           evidence_window: {
@@ -642,8 +643,25 @@ test("status reports a broad initial estimate with very low evidence", async () 
           "Real provider capacity is unknown.",
           "Usage pressure compares this window with local history; it is not a share of capacity.",
         ],
+        shadows: undefined,
       },
     },
+  );
+  // The weighting variants ride last, in shadow: computed from the one outcome there is, never
+  // the answer above.
+  assert.deepEqual(Object.keys(document.data).at(-1), "shadows");
+  assert.deepEqual(
+    document.data.shadows.map(
+      (/** @type {{method: {id: string}, computed: boolean, policy_version: string}} */ entry) => [
+        entry.method.id,
+        entry.computed,
+        entry.policy_version,
+      ],
+    ),
+    [
+      ["bayesian-pressure-band-hl50", true, "recency-hl50-v1"],
+      ["bayesian-pressure-band-hl100", true, "recency-hl100-v1"],
+    ],
   );
 });
 

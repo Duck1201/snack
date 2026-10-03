@@ -144,8 +144,46 @@
           "items": { "$ref": "#/$defs/reportedCapacity" }
         },
         "shadow": {
-          "description": "Added in 1.5.0, optional. The `reported-capacity` method in shadow: a forecast computed from the window Codex states, recorded beside the answer and calibrated against the same outcomes, and **never the answer**. `viability`, `risk`, `evidence`, `method`, `sequence` and `caveats` above are the baseline's, identical with or without it (ADR-0007, amended 1.5.0). Present exactly when `reported_capacity` is. `computed` says whether a forecast was made; `reason` says why not (`no_statement`, `before_period`, `stale`, `windows_reset`, `superseded`, `no_local_outcomes`) and is null when it was. `binding` identifies the window it read and carries no stated figure: the figure is quoted once, in `reported_capacity`. `viability`, `risk`, `evidence`, `model_policy_version` and `contributors` are present exactly when `computed` is true.",
+          "description": "Added in 1.5.0, optional. The `reported-capacity` method in shadow: a forecast computed from the window Codex states, recorded beside the answer and calibrated against the same outcomes, and **never the answer**. `viability`, `risk`, `evidence`, `method`, `sequence` and `caveats` above are the baseline's, identical with or without it (ADR-0007, amended 1.5.0). Present exactly when `reported_capacity` is, and from 1.6.0 also the `reported-capacity` entry of `shadows`, the same object. `computed` says whether a forecast was made; `reason` says why not (`no_statement`, `before_period`, `stale`, `windows_reset`, `superseded`, `no_local_outcomes`) and is null when it was. `binding` identifies the window it read and carries no stated figure: the figure is quoted once, in `reported_capacity`. `viability`, `risk`, `evidence`, `model_policy_version` and `contributors` are present exactly when `computed` is true.",
           "$ref": "#/$defs/shadow"
+        },
+        "shadows": {
+          "description": "Added in 1.6.0, optional; present on every report from 1.6.0. Every shadow estimate the invocation computed or declined to compute for this source, each a forecast a separately named method would give, recorded beside the answer and calibrated against the same outcomes, and **never the answer**: `viability`, `risk`, `evidence`, `method`, `sequence` and `caveats` above are identical with or without it. Ordered: the `reported-capacity` entry first where a Codex CLI installation feeds the source -- the very object `shadow` holds, which stays for 1.5 consumers -- then the weighting variants by ascending recency half-life: `bayesian-pressure-band-hl50@1` (`recency-hl50-v1`) and `bayesian-pressure-band-hl100@1` (`recency-hl100-v1`), the answer's model with a 50- and a 100-prompt recency half-life instead of 30, every other policy the answer's. `computed` says whether a forecast was made; `reason` is null when it was, and says why not otherwise -- a weighting variant uses only `no_local_outcomes`, when its ladder would end at the plan prior. `policy_version` names the method's model policy. `viability`, `risk`, `evidence`, `model_policy_version` and `contributors` are present exactly when `computed` is true; `binding` only on the `reported-capacity` entry. No sequence estimate is ever given for a shadow.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/shadowEntry"
+          }
+        }
+      }
+    },
+    "shadowEntry": {
+      "type": "object",
+      "required": ["method", "computed", "reason", "policy_version"],
+      "properties": {
+        "method": { "$ref": "#/$defs/method" },
+        "computed": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "binding": { "$ref": "#/$defs/shadow/properties/binding" },
+        "policy_version": { "type": "string" },
+        "viability": { "$ref": "#/$defs/shadow/properties/viability" },
+        "risk": { "$ref": "#/$defs/risk" },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "model_policy_version": { "type": "string" },
+        "contributors": { "type": "object" }
+      },
+      "if": {
+        "type": "object",
+        "properties": { "computed": { "const": true } }
+      },
+      "then": {
+        "type": "object",
+        "required": ["viability", "risk", "evidence", "model_policy_version", "contributors"],
+        "properties": {
+          "viability": {},
+          "risk": {},
+          "evidence": {},
+          "model_policy_version": {},
+          "contributors": {}
         }
       }
     },
