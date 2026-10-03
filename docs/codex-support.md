@@ -1,8 +1,11 @@
 # Codex CLI Support Matrix
 
-Status: in progress — the adapter, fixtures, privacy canaries and a first real-client read are in;
-the 100,000-prompt backfill budget and the cross-platform CI run are not yet recorded here.
-`npm run release:check` refuses to publish until this line says complete.
+Status: completed on 2026-10-03.
+
+Validated for `1.3.0`: the adapter, fixtures and privacy canaries; two independent reviews with their
+findings closed; a real-client read; the 100,000-prompt Codex backfill at 19.4 s against the 30 s
+budget ([performance.md](./release/performance.md#130)); and CI on ubuntu, macOS and WSL2/Debian 13
+([run 37111185339](https://github.com/Duck1201/snack/actions/runs/37111185339)).
 
 Real-client read (2026-10-03, the maintainer's `~/.codex`, Codex `0.145.0`–`0.159.3`, counts only):
 both families present and supported; 107 prompts, 1,832 usage slices, 1 observed restriction (the
