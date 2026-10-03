@@ -7,6 +7,7 @@ import fc from "fast-check";
 
 import { run } from "../src/main.js";
 import {
+  addCodexTurns,
   cleanupRunFixtures,
   createCodexHistory,
   makeRunFixture,
@@ -60,15 +61,16 @@ const statedSnapshot = fc.record({
 });
 
 /**
- * A window stated full or nearly full a minute before the clock.
+ * A window stated full or nearly full `ageMs` before the clock, resetting an hour after it.
  *
  * @param {number} usedPercent
  * @param {number} n
+ * @param {number} [ageMs]
  */
-function fixedSnapshot(usedPercent, n) {
+function fixedSnapshot(usedPercent, n, ageMs = 60_000) {
   return {
     observation_key: String(n).padStart(64, "a"),
-    observed_at: new Date(NOW - 60_000).toISOString(),
+    observed_at: new Date(NOW - ageMs).toISOString(),
     limit_id: /** @type {"codex" | "premium" | null} */ ("codex"),
     plan_type: /** @type {"free" | "plus" | null} */ ("plus"),
     windows: [
@@ -109,6 +111,14 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
     "restricted-usage-limit.jsonl",
     "restricted-reached-type.jsonl",
   ]);
+  // Two hundred successes, one every 25 minutes until an hour before the clock: enough pressure
+  // windows for the baseline to key on its own band rather than the period aggregate, so its risk
+  // and evidence are values a leak could move (guarded below).
+  await addCodexTurns(fixture.options.env.CODEX_HOME, {
+    from: NOW - 3_600_000 - 200 * 25 * 60_000,
+    count: 200,
+    spacingMs: 25 * 60_000,
+  });
   /** @param {string[]} argv */
   const invoke = async (...argv) => {
     fixture.stdout.value = "";
@@ -139,8 +149,10 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
   const { databaseFile } = fixture.paths;
   const database = new Database(databaseFile);
   try {
+    // With no statement, no prompt began in a stated band: the projection of an empty timeline.
     database.exec(
-      "DELETE FROM reported_capacity_latest; DELETE FROM reported_capacity_observation",
+      `DELETE FROM reported_capacity_latest; DELETE FROM reported_capacity_observation;
+       UPDATE prompt_execution SET stated_band = NULL`,
     );
   } finally {
     database.close();
@@ -154,11 +166,38 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
   const plant = (reported) =>
     plantStatements(databaseFile, "codex", installationId, reported, new Date(NOW));
 
-  /** @param {import("../src/storage.js").ReportedCapacitySnapshot[]} reported */
+  /** How many prompts the projection put in each stated band. */
+  const projected = () => {
+    const reader = new Database(databaseFile, { readonly: true });
+    try {
+      return Object.fromEntries(
+        reader
+          .prepare(
+            `SELECT stated_band, COUNT(*) AS prompts FROM prompt_execution
+              WHERE stated_band IS NOT NULL GROUP BY stated_band`,
+          )
+          .raw()
+          .all()
+          .map((row) => /** @type {[string, number]} */ (row)),
+      );
+    } finally {
+      reader.close();
+    }
+  };
+
+  /**
+   * The statements are planted the way ingestion stores them, then a synchronization -- which
+   * reads nothing new from the unchanged rollouts -- projects them onto the prompts after them, so
+   * the stated band is on the very rows the baseline reads.
+   *
+   * @param {import("../src/storage.js").ReportedCapacitySnapshot[]} reported
+   */
   const statusWith = async (reported) => {
     await copyFile(pristine, databaseFile);
     plant(reported);
+    await invoke("sync");
     return {
+      bands: projected(),
       single: answerOf(await invoke("status", "--no-sync", "--json")),
       sequence: answerOf(await invoke("status", "--no-sync", "--sequence", "3", "--json")),
       overview: await invoke("status", "--no-sync"),
@@ -167,8 +206,18 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
 
   const baseline = await statusWith([]);
   assert.equal(baseline.single.shadow?.computed, false, "a shadow computed from no statement");
+  assert.deepEqual(baseline.bands, {}, "a prompt in a stated band with no statement");
+  // Non-vacuity: a baseline already at `high` risk, `very_low` evidence or the period aggregate
+  // could not show a stated figure raising the risk, lowering the evidence or moving the cell.
+  const answer =
+    /** @type {{risk: {label: string}, evidence: {level: string}, contributors: {backoff_level: string}}} */ (
+      baseline.single.answer
+    );
+  assert.equal(answer.risk.label, "low");
+  assert.notEqual(answer.evidence.level, "very_low");
+  assert.notEqual(answer.contributors.backoff_level, "period");
 
-  const seen = { computed: 0, full: 0 };
+  const seen = { computed: 0, full: 0, fullPrompts: 0, nearPrompts: 0 };
   await fc.assert(
     fc.asyncProperty(
       fc.uniqueArray(statedSnapshot, {
@@ -180,6 +229,8 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
         const stated = await statusWith(reported);
         if (stated.single.shadow?.computed === true) seen.computed += 1;
         if (stated.single.shadow?.binding?.band === "full") seen.full += 1;
+        seen.fullPrompts += stated.bands.full ?? 0;
+        seen.nearPrompts += stated.bands.near ?? 0;
         assert.deepEqual(stated.single.answer, baseline.single.answer);
         assert.deepEqual(stated.single.status, baseline.single.status);
         assert.deepEqual(stated.single.warnings, baseline.single.warnings);
@@ -190,11 +241,20 @@ test("whatever Codex states, the status answer is the one the baseline alone giv
     {
       numRuns: 40,
       // Always run, beside the random ones: a window stated full and one nearly full, a minute
-      // before the clock, so the guards below never depend on what the generator happened to draw.
-      examples: [[[fixedSnapshot(100, 1)]], [[fixedSnapshot(90, 2)]]],
+      // before the clock and three hours before it -- early enough to bind the last prompts of the
+      // history -- so the guards below never depend on what the generator happened to draw.
+      examples: [
+        [[fixedSnapshot(100, 1)]],
+        [[fixedSnapshot(90, 2)]],
+        [[fixedSnapshot(100, 3, 3 * 3_600_000)]],
+        [[fixedSnapshot(90, 4, 3 * 3_600_000)]],
+      ],
     },
   );
   // Non-vacuity: the property held while the shadow was really computed, in the full band too.
   assert.ok(seen.computed >= 5, `the shadow was computed on ${seen.computed} runs only`);
   assert.ok(seen.full >= 1, "no run bound a window stated full");
+  // ...and while the prompts the baseline reads carried a stated band, in both upper bands.
+  assert.ok(seen.fullPrompts >= 1, "no prompt was projected into the full band");
+  assert.ok(seen.nearPrompts >= 1, "no prompt was projected into the near band");
 });

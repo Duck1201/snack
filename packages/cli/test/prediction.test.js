@@ -859,17 +859,18 @@ test("the reported method's evidence never rises above low", () => {
 });
 
 test("the baseline forecast is untouched by the reported method's existence", () => {
-  // The same outcomes, carrying stated bands or not, give the baseline the same object.
-  const plain = statedRows(30, null);
+  // The same outcomes, carrying stated bands or not, give the baseline the same object. Every row
+  // carries the pressure band the baseline keys on, so its cell selection really runs: a baseline
+  // that read the stated band instead would leave the band cell and back off to the period.
+  const plain = statedRows(30, null).map((row) => ({ ...row, pressure_band: "low" }));
   const labelled = plain.map((row, index) => ({
     ...row,
     stated_band: index % 2 === 0 ? "full" : "near",
   }));
-  const input = { now, prior: PLAN_PRIOR, expectedBand: "unknown", expectedCategory: "typical" };
-  assert.deepEqual(
-    buildForecast({ ...input, outcomes: labelled }),
-    buildForecast({ ...input, outcomes: plain }),
-  );
+  const input = { now, prior: PLAN_PRIOR, expectedBand: "low", expectedCategory: "typical" };
+  const forecast = buildForecast({ ...input, outcomes: plain });
+  assert.equal(forecast.contributors.backoff_level, "period_band_category", "vacuous: no cell");
+  assert.deepEqual(buildForecast({ ...input, outcomes: labelled }), forecast);
   assert.equal(
     buildForecast({ ...input, outcomes: plain }).evidence.policy_version,
     EVIDENCE_POLICY.version,

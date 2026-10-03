@@ -281,6 +281,88 @@ export async function createCodexHistory(
 }
 
 /**
+ * Add one Codex CLI `0.159.3` rollout of `count` successful turns, `spacingMs` apart from `from`,
+ * to a Codex home. No turn states a figure (`rate_limits` is null), so the history carries outcomes
+ * and nothing a stated band could be read from: a test plants the statements it needs.
+ *
+ * Enough of them, spread over enough pressure windows, is what gives the baseline a cell of its
+ * own -- a risk and an evidence level a test can watch move -- rather than the period aggregate a
+ * handful of fixture prompts falls back to.
+ *
+ * @param {string} codexHome
+ * @param {{from: number, count: number, spacingMs: number, thread?: number}} options
+ */
+export async function addCodexTurns(codexHome, options) {
+  const day = join(codexHome, "sessions", "2026", "01", "02");
+  await mkdir(day, { recursive: true, mode: 0o700 });
+  const id = (/** @type {number} */ n) =>
+    `00000000-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
+  const thread = id(0x7000_0000 + (options.thread ?? 0));
+  const instant = (/** @type {number} */ ms) => new Date(ms).toISOString();
+  /** @type {unknown[]} */
+  const records = [];
+  let ordinal = 0;
+  /** @param {number} ms @param {string} type @param {unknown} payload */
+  const push = (ms, type, payload) =>
+    records.push({ timestamp: instant(ms), type, payload, ordinal: ordinal++ });
+  push(options.from, "session_meta", {
+    id: thread,
+    timestamp: "",
+    cwd: "",
+    originator: "",
+    cli_version: "0.159.3",
+    source: "cli",
+    model_provider: "openai",
+    base_instructions: { text: "" },
+    git: { commit_hash: "", branch: "", repository_url: "" },
+    thread_source: "user",
+  });
+  for (let turn = 0; turn < options.count; turn += 1) {
+    const at = options.from + turn * options.spacingMs;
+    const turnId = id(0x7100_0000 + (options.thread ?? 0) * 0x10000 + turn);
+    const usage = {
+      input_tokens: 1000,
+      cached_input_tokens: 100,
+      output_tokens: 200,
+      reasoning_output_tokens: 50,
+      total_tokens: 1200,
+    };
+    push(at + 1000, "turn_context", {
+      turn_id: turnId,
+      cwd: "",
+      workspace_roots: [],
+      current_date: "",
+      timezone: "",
+      model: "gpt-test",
+      collaboration_mode: { settings: { developer_instructions: "" } },
+    });
+    push(at + 2000, "event_msg", { type: "task_started", turn_id: turnId, root_turn_id: turnId });
+    push(at + 3000, "token_usage_record", {
+      turn_id: turnId,
+      root_turn_id: turnId,
+      response_id: `resp_synthetic_${turn}`,
+      usage,
+    });
+    push(at + 4000, "event_msg", {
+      type: "token_count",
+      info: { last_token_usage: usage, total_token_usage: usage, model_context_window: 0 },
+      rate_limits: null,
+    });
+    push(at + 5000, "event_msg", {
+      type: "task_complete",
+      turn_id: turnId,
+      last_agent_message: "",
+      duration_ms: 3000,
+    });
+  }
+  await writeFile(
+    join(day, `rollout-2026-01-02T02-00-00-${thread}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    { mode: 0o600 },
+  );
+}
+
+/**
  * Plant a Codex CLI home whose every never-read slot holds a canary.
  *
  * Codex rollouts keep the user's messages, the model's answers, reasoning, tool calls and their
