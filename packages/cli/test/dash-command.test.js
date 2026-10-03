@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -265,7 +265,10 @@ test("no dash frame, row or file carries a canary, and the files it touches stay
  * @param {(child: {pid: number, write(text: string): void}) => Promise<void>} drive
  */
 async function underPty(env, drive) {
-  const script = spawn("script", ["-qec", `exec ${process.execPath} ${cli} dash`, "/dev/null"], {
+  // `script` gives the child a pty of no size; set one, or every frame is the too-small sentence
+  // and no reading is ever drawn or delivered.
+  const command = `stty cols 80 rows 24; exec ${process.execPath} ${cli} dash`;
+  const script = spawn("script", ["-qec", command, "/dev/null"], {
     env: { ...env, TERM: "xterm-256color" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -293,7 +296,14 @@ async function underPty(env, drive) {
 
 test(
   "under a real pseudo-terminal, q and SIGTERM both leave the terminal as it was found",
-  { skip: process.platform !== "linux" ? "uses util-linux script and ps --ppid" : false },
+  {
+    skip:
+      process.platform !== "linux"
+        ? "uses util-linux script and ps --ppid"
+        : spawnSync("script", ["--version"]).error !== undefined
+          ? "util-linux script is not installed"
+          : false,
+  },
   async () => {
     const fixture = await configured();
     const env = { ...process.env, ...fixture.options.env, HOME: fixture.root };
@@ -306,6 +316,19 @@ test(
       quit.output.endsWith("\u001B[0m\u001B[?25h\u001B[?1049l"),
       JSON.stringify(quit.output.slice(-40)),
     );
+    // An 80x24 pty, so the frame was a real reading and its forecast was delivered as a snapshot.
+    assert.match(quit.output, /next prompt/u);
+    const database = new Database(fixture.paths.databaseFile, { readonly: true });
+    try {
+      const delivered = /** @type {{n: number}} */ (
+        database
+          .prepare("SELECT COUNT(*) AS n FROM prediction_delivery WHERE format = 'dash'")
+          .get()
+      );
+      assert.ok(delivered.n > 0, "the dash delivered nothing under the pty");
+    } finally {
+      database.close();
+    }
 
     const terminated = await underPty(env, async (child) => {
       await delay(1_500);
