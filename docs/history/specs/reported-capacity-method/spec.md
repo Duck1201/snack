@@ -1,6 +1,7 @@
 # 1.5.0 — the `reported-capacity` prediction method
 
-Status: specified, not started. Scope is `docs/history/roadmap-1.x.md:475-481`; the governing
+Status: decided and built in **shadow mode** (decisions in §13, which override any earlier
+section they contradict; sections 2-11 are revised to match). Scope is `docs/history/roadmap-1.x.md:475-481`; the governing
 decision is [ADR-0007](../../../adr/0007-quote-codex-reported-capacity.md), which this release
 amends (§3). Branch `release/1.5.0`, cut from `main` at `v1.4.0`; `git diff --stat v1.4.0 HEAD --
 packages/ scripts/` is empty as of this writing, so the `1.4` corpus can still be captured from the
@@ -20,8 +21,9 @@ maintainer's real Codex history, measured through the real binary (§1). The pri
 were computed with the real `betaQuantile`.
 
 Contents: 1 what the real data says · 2 the model · 3 ADR and glossary amendments · 4 which window
-binds · 5 naming, selection, sequence · 6 contract · 7 calibration per method · 8 human wording ·
-9 storage and migration · 10 tests · 11 builder slices · 12 decisions for the user.
+binds · 5 naming, shadow, sequence · 6 contract · 7 calibration per method · 8 human wording ·
+9 storage and migration · 10 tests · 11 builder slices · 12 decisions for the user · 13 decisions
+taken, promotion rule, deviations.
 
 ---
 
@@ -150,8 +152,8 @@ is `full`.
 
 - **`clear` and `near`:** cells `period_stated_category` (band + size category), `period_stated`
   (band), `period` (the aggregate, identical to the baseline's), then the plan-profile prior. If the
-  ladder ends at the plan prior — no local outcome at all — **the reported method does not answer**
-  and the baseline does (`initial-generic`): a prior relabelled as a figure-informed method is the
+  ladder ends at the plan prior — no local outcome at all — **the shadow is not computed**
+  (`reason: "no_local_outcomes"`): a prior relabelled as a figure-informed method is the
   relabelling §9.1 forbids.
 - **`full`:** cells `period_stated_category`, `period_stated`, then `stated_full_prior`. It never
   backs off to `period`: the aggregate is dominated by prompts sent in `clear`, which is exactly the
@@ -201,7 +203,7 @@ history, still thin".
 
 ### 2.7 `model_policy_version`
 
-`reported-capacity-v1` when the reported method answers. `REPORTED_CAPACITY_POLICY` carries
+`reported-capacity-v1` on every shadow forecast. `REPORTED_CAPACITY_POLICY` carries
 `base_policy: PREDICTION_POLICY.version`, because decay, recency and the evidence window are
 inherited unchanged. `PREDICTION_POLICY.version` does not move: the baseline is untouched.
 
@@ -231,39 +233,24 @@ inferred; no count of prompts and no "% of" anything appears in an estimate.
 
 ### 3.2 Amendment text for ADR-0007
 
-> ## Amendment — 1.5.0 (the `reported-capacity` method)
->
-> From `1.5.0` the figure a client states may inform **one** estimate: that of the separately named
-> method `reported-capacity`, version `1`, for the capacity source the statement was stored for, and
-> only while the statement is usable — stated in the active capacity period, at most six hours old,
-> on a window whose reset has not passed, and, unless it states the window full, not superseded by a
-> prompt another client sent to the same source since. The figure selects which of the user's own
-> outcomes the estimate reads — they are grouped by the band the binding window was stated in when
-> each prompt began — and, when the client states the window full, the estimate does not fall back
-> on outcomes from other bands but starts from a versioned weak assumption that leans toward
-> refusal. The output is still a viability interval with a risk label, an evidence level capped at
-> `low`, and a named method; it is never a share of the window and never a count of prompts.
->
-> Everything else in this decision stands. The figure never enters usage pressure, the baseline
-> method (`bayesian-pressure-band`, `initial-generic`), or any other source's assessment, and it is
-> still quoted on its own row beside whichever estimate answered. The baseline is computed for every
-> source on every invocation and published beside the reported estimate, so the two can always be
-> compared on the same prompts, and `stats` reports calibration per method — a Brier score over
-> forecasts from both would have two candidate causes for any divergence, the very thing this
-> decision deferred the method to avoid.
->
-> The maintainer's history at the time held one restriction and no figure at 100 (`docs/history/
-> specs/reported-capacity-method/spec.md` §1); the method is therefore minimal and its evidence is
-> capped until its own calibration earns more. The reopen clause gains a case: if the method's
-> calibration over a meaningful sample is worse than the baseline's on the same prompts, it stops
-> answering until a new version is specified.
+**Revised for D1.** The amendment appended to ADR-0007 ("Amendment — 1.5.0 (the
+`reported-capacity` method, in shadow)") is the authoritative text. It differs from the draft this
+section first held in three ways: the method's output is a **shadow** — computed, recorded and
+calibrated beside the answer, never shown as it; the answer stays the baseline's for every source,
+Codex-fed ones included, and the shadow is visible only under `--verbose`, in `--json` (`shadow`) and
+in `stats` (`calibration.by_method`); and the reopen clause becomes a promotion clause — the method
+may answer only in a later minor, by a new amendment, once its record meets the promotion rule
+(§13.2), and is withdrawn or respecified rather than tuned in place if it does worse than the
+baseline on the same prompts. The rationale recorded there: one restriction in 65 days, no stated
+figure at or above 100, and a stated 20% at the start of the one refused prompt (§1).
 
 ### 3.3 `CONTEXT.md`
 
-- **Reported capacity usage**, replace the third sentence with: "It is quoted, never inferred, and
-  never merged into usage pressure or into the baseline estimate; from 1.5 it informs only the
-  separately named reported-capacity method, for the source whose client stated it. One source
-  reporting it does not make any other source's capacity knowable." Avoid list unchanged.
+- **Reported capacity usage**, replace the third sentence with (as built, for D1): "It is quoted,
+  never inferred, and never merged into usage pressure or into the estimate SNACK answers with; from
+  1.5 it informs only the separately named reported-capacity method, which runs as a shadow estimate
+  for the source whose client stated it. One source reporting it does not make any other source's
+  capacity knowable." Avoid list unchanged.
 - New term **Binding window**: "The one window of a client's latest usable statement that the
   reported-capacity method reads: the window with the highest stated figure. A window whose reset has
   passed, or a statement too old or superseded, binds nothing. _Avoid_: quota window, active quota,
@@ -272,8 +259,16 @@ inferred; no count of prompts and no "% of" anything appears in an estimate.
   versioned policy, used to select which of the user's own outcomes the reported-capacity method
   reads. It is a grouping of history, not a share of capacity. _Avoid_: usage level, quota state,
   remaining capacity."
+- New term **Shadow estimate** (D1): "A forecast a separately named method computes, records and
+  calibrates beside the estimate SNACK answers with, and never shows as the answer. ... only
+  `--verbose` and `--json` show it, always saying it is not the answer. _Avoid_: second opinion,
+  alternative answer, backup prediction."
 
 ### 3.4 `PLAN.md`
+
+**Deferred.** `PLAN.md` was out of scope for the build branch by the user's instruction; the edits
+below are for the release PR, reworded for D1 ("inform a separately named, separately calibrated
+shadow method"; the release table row).
 
 - "SNACK will": add "inform a separately named and separately calibrated method with the figure a
   client states for that same source ([ADR-0007](…), amended for `1.5.0`)".
@@ -296,7 +291,10 @@ other than the stating one. Output: a band with the binding window's identity, o
 reason.
 
 1. **Period.** Statements made before the active capacity period started do not bind (`reason:
-   "before_period"`).
+   "before_period"`). As built: the period's start is a floor only for a period that is not the
+   source's first, because the first period absorbs all earlier history — `storeObservations` files
+   backfilled prompts into it whatever their start — and the statements are filed the same way.
+   Without that, every statement of a backfilled history would be `before_period` (§13.3).
 2. **Age.** A statement older than `max_age_seconds` = 21,600 (6 hours) does not bind (`"stale"`).
    Six hours is one 5-hour window plus slack; the measured cut is insensitive between 2 h and 24 h
    (99 of 106 prompts either way, §1.3). A `full` statement is not exempt: the plan switch in §1.2
@@ -333,51 +331,48 @@ a reset. Both are v2 candidates.
 
 ---
 
-## 5. Naming, selection, sequence
+## 5. Naming, shadow, sequence
 
 ### 5.1 Names
 
 | Thing | Value |
 | --- | --- |
 | Method in the envelope | `{"id": "reported-capacity", "version": "1"}`, shown `reported-capacity@1` |
-| Sequence method | `{"id": "sequence-reported-capacity", "version": "1"}` — the existing `sequence-<base method>` rule, unchanged |
+| Sequence method | none — `--sequence` stays baseline-only (§5.3) |
 | `model_policy_version` | `reported-capacity-v1` |
 | `evidence.policy_version` | `reported-capacity-evidence-v1` |
 | `contributors.backoff_level` | `period_stated_category`, `period_stated`, `period`, `stated_full_prior` |
 
 The roadmap's `reported_capacity_v1` is the release's working name; in the envelope it splits into
 id and version exactly as every other method does (`bayesian-pressure-band` + `1`). Putting the
-version inside the id would give `sequence-reported_capacity_v1@1`, two versions in one name, and
-break the kebab-case every method id uses. Decision D4.
+version inside the id would break the kebab-case every method id uses. Decision D4.
 
-### 5.2 Selection — exactly when each answers
+### 5.2 Shadow — exactly when it is computed
 
-For each source on each `status` invocation, after the baseline forecast is built (it always is):
+The baseline forecast is built for every source on every `status` invocation, and it **is the
+answer**: its interval, risk, evidence, method, contributors, policy versions, sequence and caveats
+are the report's, and the attempt recorded is the baseline's. For a source a Codex installation
+feeds, the shadow is then computed beside it:
 
-1. Read the latest statements for the source (`readReportedCapacity` — already done today for any
-   source a Codex installation feeds). No statement → **baseline answers**; nothing else in this
-   section runs, and the report is byte-identical to `1.4`'s.
-2. `resolveStatedState` at `now`. `none` → baseline answers, and `reported_basis` (§6.2) says why.
-3. `buildReportedForecast`. `clear`/`near` whose ladder ended at the plan prior → baseline answers
-   (`reason: "no_local_outcomes"`).
-4. Otherwise the **reported method answers**: its interval, risk, evidence, method, contributors and
-   policy version are the report's top-level ones, and the baseline's travel beside it in
-   `baseline` (§6.2).
+1. Read the latest statements for the source (`readReportedCapacity`). None usable at `now` under
+   §4 → `shadow.computed: false` with the `reason`.
+2. `buildReportedForecast` with the outcomes' projected bands (§9.3). `clear`/`near` whose ladder
+   ended at the plan prior → `computed: false`, `reason: "no_local_outcomes"`.
+3. Otherwise `computed: true`: the shadow's interval, risk, evidence, model policy and contributors
+   go into `shadow` (§6.2), and its row into `prediction_reported_capacity` (§9.1) in the attempt's
+   transaction.
 
-A source no Codex installation feeds never reaches step 2. That is the proof the baseline is
-unchanged for sources that report nothing: the code path is the `1.4` one, not a recomputation that
-happens to agree.
+The shadow never replaces a member of the report. `attachShadow` is the single place it meets the
+report, and it only adds `reported_capacity` and `shadow`. A source no Codex installation feeds never
+reaches step 1: its code path is the `1.4` one, and its report is byte-identical to `1.4`'s.
 
 ### 5.3 `--sequence`
 
-`assessSequence(forecast, n)` reads `contributors.evidence_window.{alpha, beta}`, which
-`assembleForecast` fills for the reported forecast too, so it needs no change: the sequence of the
-answering method is `sequence-reported-capacity@1`, identical at `n = 1` bit for bit, and is stored in
-`prediction_sequence` as today. One caveat line is added when the reported method answered and
-`n ≥ 2`: "The 10-prompt estimate assumes Codex's stated window stays in the band it is in now; it
-does not model the stated figure rising as the prompts are sent." (No percentage; `N-prompt`, never
-`N prompts`.) A `sequence` for the `baseline` member is not computed: one invocation answers one
-sequence (`prediction_sequence` is keyed on the attempt).
+**Baseline-only.** `--sequence` reads the answering method's posterior, and the shadow never answers,
+so there is no `sequence-reported-capacity@1`: the sequence is always `sequence-<baseline method>@1`,
+and no caveat about stated windows is added. A sequence for the shadow would be a second estimate of
+the same user-chosen `n` that is not the answer — something to calibrate when it is, in the release
+that promotes the method (§13.2).
 
 ---
 
@@ -398,47 +393,51 @@ writing. Capture into `packages/cli/test/fixtures/contracts/1.4/` the same twelv
 Envelope stays `schema_version` 2, export 2, configuration 1, spool 1. Every field below is
 optional and absent — never `null` — when it does not apply.
 
-**`status.schema.json`, `$defs/report`:**
+**`status.schema.json`, `$defs/report`** — one member, `shadow` (`$defs/shadow`), present exactly
+when `reported_capacity` is (a Codex installation feeds the source). It replaces the draft's
+`baseline` and `reported_basis`, which existed only because the reported method could answer:
 
-- `baseline` — present only when `method.id` is `reported-capacity`. `{viability, risk, evidence,
-  method, model_policy_version}`, the baseline's forecast for the same prompt, reusing `$defs/risk`,
-  `$defs/evidence`, `$defs/method`; `viability` with the same four numbers.
-- `reported_basis` — present exactly when `reported_capacity` is (a Codex installation feeds the
-  source). `{used: boolean, reason: string | null, band: "clear" | "near" | "full" | null,
-  installation_id, limit_id, window_minutes, stated_at, resets_at, policy_version}`; identity fields
-  null when no statement was usable. `reason` is one of `no_statement`, `before_period`, `stale`,
-  `windows_reset`, `superseded`, `no_local_outcomes`, and `null` when `used`. **It carries no
-  `used_percent`**: the stated figure is quoted once, in `reported_capacity`, and never inside the
-  estimate's own object — in JSON as on the panel.
-- No new required field. New *values* in open strings: `method.id` `reported-capacity`,
-  `sequence.method.id` `sequence-reported-capacity`, `model_policy_version`, `evidence.policy_version`,
-  `contributors.backoff_level`, and one more `caveats` string. `contributors` is an open object.
-- `reported_capacity.description` loses "never an input to it"; it now reads "quoted beside the
-  estimate; it informs only the `reported-capacity` method, and never pressure (ADR-0007, amended
-  1.5.0)".
+- `method` — `{"id": "reported-capacity", "version": "1"}`;
+- `computed` — whether a shadow forecast was made;
+- `reason` — `null` when computed, else `no_statement`, `before_period`, `stale`, `windows_reset`,
+  `superseded`, `no_local_outcomes`;
+- `binding` — `{installation_id, limit_id, window_minutes, resets_at, stated_at, band}`, or `null`
+  when no window bound. **It carries no `used_percent`**: the stated figure is quoted once, in
+  `reported_capacity`, never inside an estimate's own object — in JSON as on the panel;
+- `policy_version` — `reported-capacity-v1`;
+- exactly when `computed` is true: `viability`, `risk`, `evidence`, `model_policy_version`,
+  `contributors`.
+
+No new required field; no new value in any answering member. `reported_capacity.description` keeps
+"never an input to it" — still true of the answer — and adds that from 1.5.0 it informs only the
+`reported-capacity` method, which runs in `shadow` and never answers.
 
 **`stats.schema.json`, `calibration`:**
 
 - `by_method` — present exactly when a Codex installation feeds the source (Decision D5). An array
-  of `{id, version, includes, live, backtest}`: `includes` lists the method identifiers folded into
-  the entry (`initial-generic@1` is folded into `bayesian-pressure-band@1`, because §9.1 defines it as
-  that model's last rung, not a model); `live` is `summarizeCalibration`'s shape; `backtest` the same
-  plus `forecasts`. Ordered baseline first. `live` and `backtest` at the top level keep their
-  meaning — every delivered forecast, every replayed baseline forecast — and their numbers.
+  of `{id, version, role, includes, live, backtest, paired?}`, answering method first: `role` is
+  `answer` or `shadow`; `includes` lists the identifiers folded into the entry (`initial-generic@1`
+  into `bayesian-pressure-band@1`); `live` is `summarizeCalibration`'s shape; `backtest` the same plus
+  `forecasts`. The shadow entry adds `paired: {live, backtest}`, each `{sample_size, restrictions,
+  brier, baseline_brier}` over exactly the same outcomes. `live` and `backtest` at the top level keep
+  their meaning — every delivered forecast, every replayed baseline forecast — and their numbers.
 
-**Export:** unchanged document and columns. `predictions.method_id`, `model_policy_version`,
-`evidence_policy_version` and `backoff_level` gain values; those columns were never constrained. The
-new table (§9) is **not exported**: a new table fails every version-2 validator, which is a major.
+**Export:** unchanged document and columns. The new table and the two new `prompt_execution`
+columns (§9) are **not exported**: a new table or column fails every version-2 validator.
 
-**Flags, exit codes, configuration:** unchanged. No switch to turn the method off (Decision D6).
+**Flags, exit codes, configuration:** unchanged. No switch to turn the shadow off (Decision D6).
 
 ### 6.3 Byte-identity, asserted
 
-- `status --json` and `stats --json` for every report whose source no Codex installation feeds are
-  byte-identical to the `1.4` corpus under the corpus fixture and clock.
-- With a Codex source whose statements are stale at the fixture clock (the corpus case: fixture
-  statements are far older than six hours), the Codex report differs from `1.4` only by the added
-  `reported_basis` and, in `stats`, `by_method`.
+- `compatibility.test.js` replays the `1.4` capture on today's tree under the corpus fixture and
+  clock: `setup-*` and `sync` are byte-identical whole; in `status`, `status-sequence` and `stats`
+  every report of a source no Codex installation feeds is byte-identical, and the Codex report differs
+  only by `shadow` (`status`) or `calibration.by_method` (`stats`). The corpus statements are fresh at
+  the corpus clock, so the shadow is computed there — the answer beside it is still `1.4`'s.
+- `shadow.property.test.js`: for arbitrary fresh Codex statements, the `status` answer, the
+  `--sequence 3` answer, the envelope status and warnings, and the human overview equal those the
+  baseline alone gives. Mutation-checked: letting a computed shadow replace the answer in
+  `attachShadow` fails it on the first run, and fails the byte-identity test too.
 
 ---
 
@@ -447,134 +446,111 @@ new table (§9) is **not exported**: a new table fails every version-2 validator
 ### 7.1 Live stream
 
 Linking is unchanged: one primary evaluation per prompt, to the last delivered attempt of the
-period (`linkPrimaryEvaluations`), whichever method it carries. What changes is what the pair knows.
+period (`linkPrimaryEvaluations`). Every attempt is the baseline's (D1).
 
-`readCalibrationPairs` adds `prediction_attempt.method_id`, `method_version`, and a `LEFT JOIN` on the
-new `prediction_reported_capacity` row (§9) for the baseline's shadow `lower`, `point`, `upper`.
-`CalibrationPair` gains those fields; `summarizeCalibration` reads only `lower/point/upper/outcome`,
-so feeding it the same rows yields the same numbers.
+`readCalibrationPairs` adds `prediction_attempt.method_id`, `method_version`, and a `LEFT JOIN` on
+`prediction_reported_capacity` (§9) for the shadow's `method_id`, `method_version`, `lower`, `point`,
+`upper`. `summarizeCalibration` reads only `lower/point/upper/outcome`, so feeding it the same rows
+yields the same numbers.
 
-`by_method` entries:
+`by_method` entries (`liveByMethod`):
 
 | Entry | Pairs | Numbers taken from |
 | --- | --- | --- |
-| `bayesian-pressure-band@1` (`includes` `initial-generic@1`) | every pair | the attempt when a baseline method answered; the shadow when the reported method did |
-| `reported-capacity@1` | pairs whose attempt method is `reported-capacity@1` | the attempt |
+| `bayesian-pressure-band@1` (`role: answer`, `includes` `initial-generic@1`) | every pair whose attempt a baseline method answered — in 1.5, every pair | the attempt |
+| `reported-capacity@1` (`role: shadow`) | pairs with a recorded `reported-capacity@1` shadow | the shadow row |
 
-So the baseline has a complete live stream for a Codex source too — the forecast it would have
-delivered on every prompt — and the reported method's stream is the subset where it answered: the
-two are compared on the same outcomes. Each carries its own `brier.sample_size` and
-`interval.sample_size`. A future `reported-capacity@2` is its own entry; versions are never pooled.
+The shadow entry's `paired.live` scores the shadow and the answering baseline over exactly the pairs
+it was computed for. Each entry carries its own `brier.sample_size` and `interval.sample_size`. A
+future `reported-capacity@2` is its own entry; versions are never pooled.
 
 ### 7.2 Backtest
 
-`backtest()` is unchanged and still produces the top-level `backtest`. A second replay,
-`backtestReported(outcomes, timeline, options)` in `calibration.js`, walks the same chronological
-outcomes with the stated timeline (§9.3) merged in: at each prompt it evaluates §4 at that prompt's
-start from statements strictly earlier, and scores a reported forecast only when §5.2 would have
-let it answer. Accumulators are keyed by `band\0category` and `band`, as the baseline's are by pressure
-band. It reuses `assembleForecast`. Its sample size is therefore smaller than the baseline's —
-on the real history at most 99 of 107 prompts had a statement under six hours old at their start,
-before rules 1, 4 and 7 and the `minimum_backtest_history` of 10 — and is reported as such.
+`backtest()` is unchanged and still produces the top-level `backtest` and the baseline entry's.
+`backtestReported(outcomes, {prior, baseline})` in `calibration.js` walks the same chronological
+outcomes, keyed on the stated band each prompt began in (the projection, §9.3, resolved at its
+start from statements strictly earlier), and scores a shadow forecast only where §5.2 would have
+computed one. Accumulators are keyed by `band\0category`, `band` and the period. `baseline` is
+`backtest()`'s own scored list: at every prompt the shadow scores, the baseline's forecast for that
+prompt is taken from it rather than replayed a second time, so `paired.backtest` compares the two on
+the same outcomes at the cost of one replay. On the synthetic 100,000-prompt history `stats` went from
+4.8 s (`1.4.0`) to 7.4 s; with the baseline replayed twice it had been 11.7 s.
 
 ### 7.3 The proof the baseline's numbers are unchanged
 
-For a source that reports nothing:
+For a source that reports nothing: no statement is stored for it (storage routes statements by
+provider and installation kind), so §5.2 never runs, every attempt it records has no shadow row,
+`by_method` is absent, and `live`/`backtest` are computed exactly as in `1.4`.
 
-- no statement is stored for it (storage routes statements by provider), so §5.2 stops at step 1
-  and every attempt it records is a baseline attempt with no `prediction_reported_capacity` row;
-- `readCalibrationPairs` returns the same rows with two extra columns that `summarizeCalibration`
-  never reads, so `live` is the same; `backtest()` is untouched, so `backtest` is the same;
-- `by_method` is absent, so the document is the same.
-
-**Tests that assert it:** (i) `stats --json` and `status --json` for OpenCode and Claude Code
-sources, byte-compared with the `1.4` corpus (§6.3); (ii) for a Codex source, `by_method[0].live`
-deep-equals `summarizeCalibration` of the pairs rebuilt with baseline numbers, and on a database
-with no reported attempt it deep-equals the top-level `live`; (iii) a property test: for any outcome
-history and no statement timeline, `backtestReported` scores nothing and `backtest` is unchanged;
-(iv) `prediction.test.js`: with an empty timeline the selection returns the `buildForecast` result
-object deep-equal.
+**Tests that assert it:** `compatibility.test.js` (§6.3); `calibration.test.js` — `liveByMethod`'s
+baseline entry deep-equals `summarizeCalibration` of every pair, sample sizes are independent,
+versions are not pooled, and with no stated timeline `backtestReported` scores nothing while
+`backtest` is unchanged (property); `prediction.test.js` — `buildForecast` returns the same object
+whether or not the outcomes carry stated bands.
 
 ---
 
 ## 8. Human wording
 
-Terms: CONTEXT's **reported capacity usage**, **binding window**, **stated band**, **evidence
-level**, **risk label**; Codex "states" a figure for a "window"; never "quota", "remaining", "left",
-"balance", "utilization", "percentage used", "capacity percentage" (vocabulary.test.js `forbidden`),
-never a number directly before "prompts".
+Terms: CONTEXT's **reported capacity usage**, **binding window**, **stated band**, **shadow
+estimate**, **evidence level**, **risk label**; Codex "states" a figure for a "window"; never
+"quota", "remaining", "left", "balance", "utilization", "percentage used", "capacity percentage"
+(vocabulary.test.js `forbidden`), never a number directly before "prompts".
 
-### 8.1 Default panel
+### 8.1 Default panel and overview
 
-The `next prompt` line is unchanged in shape: an interval and a risk label. **It never carries a
-stated percentage**; the figure stays on the `reported` row, which is unchanged. Which method
-answered is said on the `method` row, which today appears only for the initial heuristic and now also
-whenever the reported method answers, because the reader is owed the fact that the estimate leans on
-what the client states:
-
-```
-codex
-  next prompt  41-97% chance it goes through · risk high
-  evidence     low — a little history, still thin
-  pressure     …
-  drivers      …
-  method       reads what Codex states about its 5h window — stated nearly full
-  reported     Codex states 86% of its 5h window, resets in 1h 12m · 31% of its 7d window, resets Thu UTC · 3m ago
-  as of        …
-  ! This estimate reads the figure Codex states for its own window; it applies to this source only and is not a share of capacity SNACK observed.
-```
-
-`method` row by band:
-
-| Case | Text |
-| --- | --- |
-| `clear` | `reads what Codex states about its 7d window` |
-| `near` | `reads what Codex states about its 5h window — stated nearly full` |
-| `full`, cell has outcomes | `reads what Codex states about its 5h window — stated full until it resets` |
-| `full`, prior only (`stated_full_prior`) | yellow `starting assumption` + dim ` — Codex states its 5h window is full, and no prompt of yours has been seen in that state yet` |
-
-The last is the §9.1 rule applied to the new prior: a starting assumption is labelled as one, in
-the colour and position the initial heuristic already uses. Window lengths use `windowLength()` (5h,
-7d, 30d). When the baseline answers for a Codex source no row is added; under `--verbose` the
-`stated` row says why.
+**Unchanged for every source (D1).** The `next prompt` line, the `method` row, the caveats and the
+overview are the baseline's; the `reported` row is unchanged. The shadow is not on the default panel,
+where it could be taken for the answer, and the overview gains no column and no footer.
 
 ### 8.2 `--verbose`
 
+One `shadow` row after `reported`, before `as of` — verbatim, for a `near` window:
+
 ```
-  method       reported-capacity@1 · model reported-capacity-v1
-               sequence-reported-capacity@1 · next 10          (with --sequence)
-  stated       limit codex · 5h window · near · stated 3m ago · reported-capacity-v1
-  baseline     bayesian-pressure-band@1 · 93-100% · risk low · evidence very_low
+  shadow       reported-capacity@1 would say 41-97% · risk high · evidence low — recorded to compare, not the answer above
+               reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1
 ```
 
-When the baseline answers for a Codex source: `stated  not used — stale, stated 7h ago` (reasons
-worded: `no figure stated yet`, `stated before this period`, `stale`, `every window has reset`,
-`another client sent a prompt since`, `no outcome of yours to read yet`). The `baseline` row is an
-estimate row and so carries no stated percentage either. The overview table gains no column; a
-source the reported method answered for gets a footer line, as the initial heuristic does:
-`codex: the estimate reads what Codex states; snack status --source codex`.
+The second line by band:
+
+| Case | Text |
+| --- | --- |
+| `clear` | `reads what Codex states about its 7d window · reported-capacity-v1` |
+| `near` | `reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1` |
+| `full`, cell has outcomes | `reads what Codex states about its 5h window — stated full until it resets · reported-capacity-v1` |
+| `full`, prior only (`stated_full_prior`) | `a starting assumption — Codex states its 5h window is full, and no prompt of yours has been seen in that state yet · reported-capacity-v1` |
+
+Not computed: `  shadow       reported-capacity@1 not computed — <reason>`, with the reasons worded
+`no figure stated yet`, `stated before this period`, `stale, stated 7h ago`, `every window has
+reset`, `another client sent a prompt since`, `no outcome of yours to read yet`. The row carries no
+stated percentage. The `method` row keeps naming the answering method; `--sequence` adds no shadow
+line.
 
 ### 8.3 `stats`
 
-Default: the headline is unchanged; when `by_method` has a reported entry with live pairs, one line
-follows: `  12 of them from the reported-capacity method`. `--verbose` adds, after `backtest`:
+Default: unchanged. `--verbose` adds, after `policy`:
 
 ```
   by method
-    bayesian-pressure-band@1  live brier 0.010, sample 40 · backtest brier 0.017, sample 84
-    reported-capacity@1       live not available yet · backtest brier 0.019, sample 71
+    bayesian-pressure-band@1  answer · live brier 0.010, sample 40 · backtest brier 0.017, sample 84
+    reported-capacity@1       shadow · live not available yet · backtest brier 0.019, sample 71
+                              same outcomes as the baseline · live not available yet · backtest brier 0.019 against 0.017, sample 71, 1 restricted
 ```
 
-Every figure with its sample size; "not available yet", never zero; never "accuracy".
+Every figure with its sample size; "not available yet", never zero; never "accuracy". The draft's
+default line ("12 of them from the reported-capacity method") is dropped: no delivered forecast comes
+from the shadow.
 
 ### 8.4 Vocabulary test
 
-Add a Codex fixture whose statements are fresh at the fixture clock — one in `near`, one in `full` —
-and police `status`, `status --verbose`, `status --sequence 10`, `status --verbose --sequence 10`,
-`stats --verbose`, each with and without `--json`. New vacuity guards: `reads what Codex states`,
-`starting assumption`, `"reported-capacity"`, `by method`. New `forbidden` patterns:
-`/\bheadroom\b/iu`, `/\b\d+(?:\.\d+)?%\s+(?:left|remaining|free)\b/iu`. And a targeted assertion:
-the `next prompt` line and the `baseline` row never match `/\d+(?:\.\d+)?% of\b/u`.
+A Codex fixture whose statements are fresh at the fixture clock — one in `near`, one in `full` —
+polices `status`, `status --verbose`, `status --sequence 10`, `status --verbose --sequence 10`,
+`stats --verbose`, each with and without `--json`. Vacuity guards: `reads what Codex states … —
+stated nearly full`, `starting assumption`, `not the answer above`, `"reported-capacity"`, `by
+method`. New `forbidden` patterns: `/\bheadroom\b/iu`, `/\b\d+(?:\.\d+)?%\s+(?:left|remaining|free)\b/iu`.
+Targeted: the `next prompt`, `next <n>` and `shadow` lines never match `/\d+(?:\.\d+)?% of\b/u`, and no
+surface without `--verbose` shows the shadow or names `reported-capacity`.
 
 ---
 
@@ -582,9 +558,25 @@ the `next prompt` line and the `baseline` row never match `/\d+(?:\.\d+)?% of\b/
 
 ### 9.1 Migration `017_prediction_reported_capacity.sql` (append-only)
 
+Revised for D1: the attempt carries the baseline (the answer), so the row carries the **shadow's**
+forecast and the window it read, rather than a baseline copy.
+
 ```sql
 CREATE TABLE prediction_reported_capacity (
   prediction_attempt_id INTEGER PRIMARY KEY REFERENCES prediction_attempt (id),
+  method_id TEXT NOT NULL,
+  method_version TEXT NOT NULL,
+  model_policy_version TEXT NOT NULL,
+  evidence_policy_version TEXT NOT NULL,
+  lower REAL NOT NULL CHECK (lower >= 0.0 AND lower <= 1.0),
+  point REAL NOT NULL CHECK (point >= 0.0 AND point <= 1.0),
+  upper REAL NOT NULL CHECK (upper >= 0.0 AND upper <= 1.0),
+  coverage_target REAL NOT NULL CHECK (coverage_target > 0.0 AND coverage_target < 1.0),
+  risk_label TEXT NOT NULL CHECK (risk_label IN ('low', 'elevated', 'high')),
+  evidence_level TEXT NOT NULL CHECK (evidence_level IN ('very_low', 'low', 'moderate', 'high')),
+  backoff_level TEXT NOT NULL,
+  posterior_alpha REAL NOT NULL CHECK (posterior_alpha > 0.0),
+  posterior_beta REAL NOT NULL CHECK (posterior_beta > 0.0),
   installation_id TEXT NOT NULL,
   limit_id TEXT,
   window_minutes INTEGER NOT NULL CHECK (window_minutes > 0),
@@ -593,102 +585,103 @@ CREATE TABLE prediction_reported_capacity (
   stated_at TEXT NOT NULL,
   band TEXT NOT NULL CHECK (band IN ('clear', 'near', 'full')),
   policy_version TEXT NOT NULL,
-  baseline_method_id TEXT NOT NULL,
-  baseline_method_version TEXT NOT NULL,
-  baseline_model_policy_version TEXT NOT NULL,
-  baseline_lower REAL NOT NULL CHECK (baseline_lower >= 0.0 AND baseline_lower <= 1.0),
-  baseline_point REAL NOT NULL CHECK (baseline_point >= 0.0 AND baseline_point <= 1.0),
-  baseline_upper REAL NOT NULL CHECK (baseline_upper >= 0.0 AND baseline_upper <= 1.0),
-  baseline_risk_label TEXT NOT NULL CHECK (baseline_risk_label IN ('low', 'elevated', 'high')),
-  baseline_evidence_level TEXT NOT NULL
-    CHECK (baseline_evidence_level IN ('very_low', 'low', 'moderate', 'high')),
-  CHECK (baseline_lower <= baseline_point AND baseline_point <= baseline_upper)
+  CHECK (lower <= point AND point <= upper)
 ) STRICT;
 ```
 
 plus the two immutability triggers with the `snack_purge` exception, copied from `016`. One row per
-attempt the reported method answered, written by `recordPredictionAttempt` in the same transaction as
-the attempt (a third optional argument). It records the figure the forecast read, so a later
-calibration reproduces it without recalculating the past (§9.6 of the analysis spec), and the
-baseline the user was shown beside it. `used_percent` here is stored, never printed with the
-estimate. Content-free by shape. `used_percent` has no upper bound, matching "a figure above 100 is
-possible" — the observation table's `<= 100` CHECK means none above 100 reaches storage today, so
-`>= 0.0` alone is the honest constraint for a copy.
-
-No other table changes. No rebuild. Pre-migration backup as for every migration.
+attempt whose invocation computed the shadow, written by `recordPredictionAttempt` in the same
+transaction as the attempt (a fourth optional argument, after the sequence). The posterior is kept so
+a later calibration reproduces the forecast without recalculating the past. `used_percent` is stored,
+never printed with an estimate, and has no upper bound. Content-free by shape.
 
 ### 9.2 Purge and export
 
 `data purge` deletes these rows before their attempts (FK), counted under `counts.predictions` as
-`prediction_sequence` rows are; `data-purge.schema.json` does not move. Not exported (§6.2).
+`prediction_sequence` rows are; `data-purge.schema.json` does not move. After a purge the stated-band
+projection (§9.3) is recomputed for every Codex-fed source in scope. Nothing new is exported (§6.2).
 
-### 9.3 New reads
+### 9.3 Reads, and the projection (plan B, taken)
 
-- `readOutcomeRows` adds `prompt_execution.installation_id` (the baseline ignores it).
-- `readStatedTimeline(databaseFile, alias, {from})`: every `reported_capacity_observation` row of the
-  source's Codex installations with `observed_at >= from`, ordered by `observed_at, id`, grouped into
-  statements by `(installation_id, observation_key)` in one streamed pass. `status` passes `from` =
-  the oldest outcome start in its 2,000-prompt window minus `max_age_seconds`; `stats` passes the
-  period start. Uses `reported_capacity_observation_source_observed_idx`.
-- `readLatestForeignPromptStart(databaseFile, alias, installationId)`: `MAX(started_at)` of the
-  source's prompts from other installations — for rule 7 at `now`. The historical replay derives the
-  same from the outcome rows it already holds.
+- `readOutcomeRows` adds `prompt_execution.installation_id` and the projected `stated_band` (null
+  unless computed under the current policy). The baseline ignores both.
+- **Migration `018_prompt_stated_band.sql`**: `prompt_execution.stated_band` (`clear`/`near`/`full`
+  or null) and `stated_band_policy_version`, added in place, plus a partial index on the prompts
+  never computed and an index on `reported_capacity_observation (source_alias, first_seen_at)`. A
+  rebuildable projection like `size_category`: after each synchronization `restateSource` finds the
+  frontier — the earliest prompt never computed, or the earliest statement this invocation stored —
+  and recomputes, in chronological order, every prompt from there, walking the stated timeline
+  (`readStatedTimeline`) from one age limit earlier; after a purge it recomputes the whole active
+  period. Each band is resolved at its prompt's start from statements strictly earlier
+  (`walkStatedHistory`), and only rows that moved are written. A later policy version recomputes
+  everything by setting the version column back to null in its own migration.
+- `hasForeignPromptSince(databaseFile, alias, installationId, since)`: rule 7 at `now`, a range read
+  on `prompt_execution_source_started_idx`.
 
 ### 9.4 Budget
 
-On the real history, 12 window rows per prompt; 2,000 outcome rows means about 24,000 statement rows
-read per `status`. That must fit the 250 ms `status --no-sync` p95 at 100,000 prompts. The builder
-measures it in `performance.test.js` with a Codex-shaped history before wiring; if it does not fit,
-the fallback is a rebuildable `stated_band` projection column on `prompt_execution` (an `ADD COLUMN`,
-recomputed after sync the way `recategorizeSource` recomputes size categories), which would be
-migration `018` in the same release.
+Measured, not estimated, on a synthetic 100,000-prompt Codex history in the `0.159.3` shape (1,000
+rollouts × 100 turns, one two-window statement per turn: 200,000 reported rows), anchored so the last
+statement is a minute old and the shadow is computed; spawned `node packages/cli/src/cli.js status
+--no-sync`, 20 samples a batch, batches interleaved with the published `1.4.0` on its own copy of the
+same history, 94-99% idle.
+
+| | `1.4.0` | replaying the timeline in `status` | plan B (as built) |
+| --- | --- | --- | --- |
+| spawned p50 | 214-220 ms | 234-236 ms | 220-227 ms |
+| spawned p95 | 219-232 ms (two batches 266-268) | 242-260 ms | 223-239 ms |
+| spawned p95, `--sequence 100` | 226-236 ms | 246-251 ms | 235-242 ms (one disturbed batch 315) |
+| in-process p50 / p95 | 65 / 67-68 ms | 72 / 78 ms | 69-70 / 73-76 ms |
+| incremental `sync`, nothing new | 893-905 ms | — | 945-979 ms (whole-period recompute: 1.65 s) |
+
+Replaying the timeline put `status --no-sync` p95 over 250 ms in one batch in four and within 10 ms
+of it in the rest, so plan B was taken: migration `018` in the same release. The first `sync` after
+upgrading a `1.4.0` database of that size — backup, `017`, `018` and the whole projection — took
+3.1 s, and the file grew from 156.7 to 173.0 MB.
 
 ---
 
-## 10. Test plan
+## 10. Test plan (as built)
 
 | File | What it asserts |
 | --- | --- |
-| `reported-capacity.test.js` (new) | §4 rule by rule: each `reason`; band edges 79.99/80/99.99/100/100.5; `resets_at == at` is passed; age exactly 21,600 s binds, one more second does not; tie-breaks; window absent from the latest statement never binds; rule 7 for another installation only, and `full` survives it; statements before the period never bind |
-| `prediction.test.js` | `buildReportedForecast`: `full` with an empty cell gives `Beta(0.2, 0.8)` bounds, risk `high`, evidence `very_low` with `relevance` limiting, backoff `stated_full_prior`; `full` never backs off to `period` even with a rich `clear` history; `clear` with no outcome returns no forecast; evidence never above `low`; empty timeline ⇒ selection returns the `buildForecast` object deep-equal |
-| `sequence.property.test.js` | `sequence-reported-capacity@1`; bit-for-bit identity at `n = 1` for the reported posterior |
-| `reported-capacity.property.test.js` | fast-check: bounds in `[0, 1]`, `lower ≤ point ≤ upper`; pressure deep-equal with and without statements; a statement never changes another source's report |
-| `calibration.test.js` | `backtestReported` never reads a statement at or after the scored prompt's start (append future statements, past scores unchanged); scores nothing on an empty timeline; `by_method` grouping folds `initial-generic` into the baseline and never pools versions |
-| `prediction-storage.test.js` / `storage.test.js` | `017` applies from every published level (`1.4.0`'s included); immutability triggers; attempt and basis row commit or roll back together; `readCalibrationPairs` returns method and shadow columns; purge deletes basis rows with their attempts |
-| `codex-status.test.js` | fresh statements at the injected clock ⇒ `method.id` `reported-capacity`, `baseline` present, `reported_basis.used`; clock + 7 h ⇒ baseline answers, `reason: "stale"`; another client's prompt after a `near` statement ⇒ `superseded`; `--sequence 10` ⇒ `sequence-reported-capacity`; the stored attempt and basis row match the document |
-| `main.test.js` | `stats --json` `by_method` for the Codex source, absent for the others; byte-identity with the `1.4` corpus (§6.3) |
-| `contracts.test.js` | `1.4` in `FROZEN_VERSIONS`; new documents validate; `status-sequence.json` in the corpus |
-| `render.test.js` | the four `method` rows; `--verbose` `stated`/`baseline`/`by method`; no `\d+% of` in `next prompt` or `baseline`; the overview footer |
+| `reported-capacity.test.js` | §4 rule by rule: each `reason`; band edges 79.99/80/99.99/100/100.5; `resets_at == at` is passed; age exactly 21,600 s binds, one more second does not; tie-breaks; a window absent from the latest statement never binds; rule 7 for another installation only, and `full` survives it; statements before the period never bind; the as-of labelling reads statements strictly earlier |
+| `prediction.test.js` | `buildReportedForecast`: `full` with an empty cell gives `Beta(0.2, 0.8)` (0-0.70), risk `high`, evidence `very_low` with `relevance` limiting, backoff `stated_full_prior`; `full` never backs off to `period`; one success in `full` is `Beta(1.2, 0.8)`; `clear`/`near` with no outcome returns null; evidence never above `low` (property); `buildForecast` unchanged by stated bands |
+| `shadow.property.test.js` | shadow-mode isolation through `run()` (§6.3), mutation-checked |
+| `compatibility.test.js` | byte-identity with the `1.4` corpus (§6.3) |
+| `calibration.test.js` | `backtestReported` never reads a statement at or after the scored prompt's start (mutation-checked); scores nothing on an empty timeline while `backtest` is unchanged (property); the paired baseline is `backtest`'s at the same prompts; `liveByMethod` sample sizes are independent, `initial-generic` folds into the baseline, versions never pool |
+| `prediction-storage.test.js` / `storage.test.js` | attempt and shadow row commit or roll back together; a figure above 100 is stored; `readCalibrationPairs` returns method and shadow columns; `017`+`018` apply from every published level, `1.4.0`'s included |
+| `purge.test.js` | purge deletes shadow rows with their attempts, counted as predictions; shadow rows are immutable outside a purge |
+| `codex-status.test.js` | fresh statements ⇒ `shadow.computed`, the attempt is the baseline's and the shadow row matches the document; exactly six hours binds, one second more is `stale` and records no shadow row; at a window's reset instant the next live window binds; another client's prompt ⇒ `superseded`; `--sequence` stays baseline; a Claude Code source never gets a figure, a shadow or `by_method`; the projection equals the as-of labelling and moves with a late statement and with a purge |
+| `contracts.test.js` | `1.4` in `FROZEN_VERSIONS`; the computed `shadow` and `by_method` validated on the Codex source only |
+| `render.test.js` | the verbose shadow rows verbatim, each band, the reasons; never on the default panel or the overview; the `by method` block |
 | `vocabulary.test.js` | §8.4 |
-| `privacy.test.js` | canaries through a status run where the reported method answers; the new table holds none |
-| `prediction.simulation.test.js` | a simulated source whose viability depends on the stated band: stated cells cover their target, and the `low` ceiling is never exceeded — the evidence for raising it in a later version |
-| `performance.test.js` | §9.4 |
+| `privacy.test.js` | canaries through a Codex run where the shadow is computed; `prediction_reported_capacity` holds none |
 
-Manual, recorded by the tester: the real Codex history through the real binary (counts only, as §1),
-confirming the method answers during active use and stands aside on stale statements; `npm run
-upgrade:smoke` from `1.4.0`.
+Not built: `prediction.simulation.test.js` for stated bands — the evidence for ever raising the
+`low` ceiling belongs to the release that proposes raising it. `performance.test.js` has no Codex
+row; §9.4 was measured with the spawned binary, as `1.3.0` measured its Codex rows.
 
 ---
 
 ## 11. Builder slices
 
-| Slice | Content | Depends on |
-| --- | --- | --- |
-| **S0** Corpus | Capture `1.4` (§6.1) on the untouched tree; `FROZEN_VERSIONS`; `FLOORS` + `1.4.0`; compatibility table row. **Must land before any other slice touches `packages/`.** | — |
-| **S1** Domain | `reported-capacity.js` (`REPORTED_CAPACITY_POLICY`, `resolveStatedState`, timeline merge); `buildReportedForecast` and the reported evidence policy in `prediction.js` without changing any baseline output; unit + property tests | S0 |
-| **S2** Storage | migration `017`; `recordPredictionAttempt` third argument; `readCalibrationPairs`, `readOutcomeRows`, `readStatedTimeline`, `readLatestForeignPromptStart`; purge; perf measurement (§9.4) | S0 |
-| **S3** Wiring | selection in `status.js`/`main.js`; `baseline`, `reported_basis`, caveat; attempt + basis recording; `by_method` and `backtestReported`; schemas | S1, S2 |
-| **S4** Surface | render (§8), vocabulary test, overview footer, stats verbose | S3 |
-| **S5** Docs | ADR-0007 amendment; CONTEXT; PLAN; `analysis.md` new §9.9 and §10 "per method"; `specification.md` item 5; `compatibility.md` "What 1.5.0 adds"; `codex-support.md` "Reported capacity usage"; both READMEs in both languages (principle 11); roadmap exit record | S1 shapes |
-| **S6** Test | real-data read, upgrade smoke, performance record | S4 |
+As built: S0 corpus (`1.4` captured at `v1.4.0` before any change, `FROZEN_VERSIONS`, `FLOORS`);
+S1 domain (`reported-capacity.js`, `buildReportedForecast`); S2 storage (`017`); S3 wiring (shadow in
+`status`, `by_method`, `backtestReported`, schemas); S4 surface (verbose row, `by method`,
+vocabulary); plan B (`018`, the projection); S5 docs (ADR-0007, CONTEXT, `analysis.md` §9.9 and §10,
+`cli.md`, `compatibility.md` "What 1.5.0 adds", `codex-support.md`). READMEs, CHANGELOGs, `PLAN.md`,
+`docs/release/` and the changeset are left to the release PR.
 
-Reviewer focus: no path from a statement into `pressure`, into the baseline, or into another source;
+Reviewer focus: no path from a statement into `pressure`, into the answer, or into another source;
 no stated percentage in an estimate object or line; the `1.4` byte-identity; immutability of the new
-table.
+table; the projection's as-of discipline.
 
 ---
 
 ## 12. Decisions for the user
+
+The questions as they were put; the answers are in §13.1 and take precedence.
 
 **D1. Ship a method the data cannot yet calibrate?** The real history has one restriction and no
 figure at 100 (§1). Options: (a) the reported method answers for Codex sources from `1.5.0`, minimal
@@ -723,3 +716,82 @@ consumer cannot rely on the field's presence.
 **D6. A configuration switch to turn the method off.** **Recommendation: none in `1.5.0`.** The
 baseline is always in `--json` and `--verbose`; a switch is configuration surface frozen forever for
 a method whose evidence is already capped. Adding one later is additive.
+
+---
+
+## 13. Decisions
+
+Taken by the user before the build; they override any earlier section they contradict, and
+sections 2-11 have been revised to match.
+
+### 13.1 The decisions
+
+**D1 — Shadow mode, not "answer now".** In `1.5.0`, `reported-capacity@1` is computed, recorded
+and calibrated beside the baseline, and never answers. The `status` answer — the `next prompt` line,
+`--sequence`, the risk, the evidence, `--json`'s primary viability and the method that answered —
+stays the baseline's and is byte-identical to `1.4` for every source, Codex-fed ones included. The
+shadow is visible only in `status --verbose` (a `shadow` row whose wording says it is not the
+answer), in `--json` as the additive `shadow` member, and in `stats` as `calibration.by_method`.
+Promoting it to the answer is a future minor, once its calibration beats the baseline's under the
+rule in §13.2; this release implements no promotion. Rationale: the maintainer's history held **one**
+observed restriction in 65 days, **no** stated figure at or above 100, and the figure in hand at the
+start of the one refused prompt was **20%** (§1.2) — a method that history cannot calibrate does not
+get to answer on the strength of its reasoning alone. Because the shadow never answers,
+`sequence-reported-capacity@1` is not needed: `--sequence` reads the answering method's posterior
+and stays baseline-only (§5.3).
+
+**D2 — The `full` prior is `Beta(0.2, 0.8)`** (mean 0.2, strength 1), recorded in
+`REPORTED_CAPACITY_POLICY.full_prior` with the note that no observation stands behind it.
+
+**D3 — The most recent statement wins** when two limits are stated (§4 rule 3); two limits are never
+combined.
+
+**D4 — The method is `reported-capacity@1`**; the roadmap's `reported_capacity_v1` is the policy
+version `reported-capacity-v1`.
+
+**D5 — `calibration.by_method` appears only on Codex-fed sources**, so every other source's `stats`
+document stays byte-identical to `1.4`.
+
+**D6 — No configuration key.** There is no switch to turn the shadow off.
+
+### 13.2 Promotion rule — `reported-capacity-promotion-v1`
+
+`reported-capacity@1` may become the answer for a Codex-fed source only in a later minor, by a new
+ADR-0007 amendment, and only when `stats --json` for that source, read through the real binary on
+the maintainer's real Codex history at the time, shows on the shadow entry of
+`calibration.by_method`:
+
+1. `paired.live.sample_size ≥ 200` — at least 200 delivered-attempt outcomes the shadow was computed
+   for;
+2. `paired.live.restrictions ≥ 5` among them;
+3. `paired.live.brier < paired.live.baseline_brier` — a strictly lower Brier score than the
+   answering baseline over exactly those outcomes;
+4. the same on the replayed history: `paired.backtest.restrictions ≥ 5` and
+   `paired.backtest.brier < paired.backtest.baseline_brier`.
+
+All four, measured, in the release that promotes it; a simulation or a fixture is not enough. Meeting
+the rule permits promotion; it does not raise the `low` evidence ceiling, which needs its own
+evidence (§2.6). Failing condition 3 or 4 once the sample conditions hold withdraws or respecifies the
+method rather than tuning it in place.
+
+### 13.3 Where the build departs from sections 2-11 as first written
+
+- **`shadow` replaces `baseline` and `reported_basis`.** Both existed because the reported method
+  could answer. One additive member now carries the shadow's identity, its reason, the binding window
+  (without the stated figure) and, when computed, its forecast (§6.2).
+- **`prediction_reported_capacity` stores the shadow**, not a copy of the baseline: the attempt is the
+  baseline (§9.1). `recordPredictionAttempt` takes it as a fourth argument, after the sequence.
+- **`by_method` entries carry `role` and, on the shadow, `paired`** — the measurable form of the
+  promotion rule. `backtestReported` reuses `backtest()`'s scored forecasts for the paired baseline.
+- **Rule 1 follows the period filing rule.** A source's first period absorbs earlier history for
+  statements exactly as `storeObservations` does for prompts; otherwise every statement of a
+  backfilled history read `before_period`, which the corpus capture showed at once (§4).
+- **Plan B was taken** (§9.4): migration `018`, a rebuildable `stated_band` projection on
+  `prompt_execution` recomputed from a frontier after each sync and wholly after each purge;
+  `status` replays nothing. `readLatestForeignPromptStart` became `hasForeignPromptSince`, a boolean
+  range read.
+- **Wording.** No `method` row change, no overview footer, no default `stats` line, no sequence
+  caveat: none is owed when the shadow does not answer (§8).
+- **Not built:** the stated-band simulation and a `performance.test.js` Codex row (§10). `PLAN.md`
+  edits are deferred to the release PR (§3.4).
+
