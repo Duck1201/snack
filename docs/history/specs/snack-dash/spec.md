@@ -406,6 +406,11 @@ session, initially none) and `pending` (`{key, attemptId}` recorded but not yet 
    (under the lock, §3.3) and set `deliveredKey = pending.key`.
 3. A `pending` that is superseded before it was ever drawn stays an attempt without delivery — the
    operational diagnostic `CONTEXT.md` defines, never counted as a forecast the user received.
+4. **Added after review of `06340e7`.** A `pending` also carries the `next N` row it was recorded
+   with (`N`, or off). A frame whose row differs — the person stepped `N`, or showed or hid the row,
+   while the terminal was too small — confirms nothing for it: the `pending` is dropped and stays an
+   attempt without delivery, as in 3, and the next recompute records the reading again with the row
+   then on screen. Delivering it would claim a sequence the screen never showed.
 
 **Every source's list row is always drawn** in a normal frame: the list does not scroll (§5.7 sets a
 minimum height that fits every source), and the help pane replaces only the detail pane. So a forecast

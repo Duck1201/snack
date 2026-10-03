@@ -357,6 +357,84 @@ test("rendered means drawn: too small records the attempt and delivers it at the
   assert.equal(await dash.done, 0);
 });
 
+test("a frame delivers a snapshot only with the next N row it was recorded with", async () => {
+  // Recorded while the terminal was too small, then the person moved N or hid the row: the first
+  // full frame shows a sequence the attempt does not carry, so it is not delivered -- as when the
+  // key changes. Same row, it is.
+  const { source, start } = await scripted();
+  const clock = makeFakeClock(start);
+  /** @type {{at: Date, restricted?: boolean}[]} */
+  let next = [];
+  const sync = makeFakeSync(async () => {
+    source.plant(next);
+    next = [];
+    return SYNC_OK;
+  });
+  const terminal = makeFakeTerminal({ columns: 80, rows: 24 });
+  const dash = await startDash(
+    { env: source.env, home: source.root, now: start },
+    { terminal, clock, sync, signals: makeFakeSignals() },
+  );
+  const attempts = () =>
+    rows(
+      source.paths.databaseFile,
+      `SELECT a.id, d.format, s.length FROM prediction_attempt a
+         LEFT JOIN prediction_delivery d ON d.prediction_attempt_id = a.id
+         LEFT JOIN prediction_sequence s ON s.prediction_attempt_id = a.id ORDER BY a.id`,
+    ).map((row) => [row.format, row.length]);
+  /** Record one new reading while the terminal is too small. */
+  const recordSmall = async () => {
+    terminal.resize(40, 10);
+    next = [{ at: new Date(clock.now().getTime() + SYNC_DELAY_MS - 30_000), restricted: true }];
+    await clock.advance(SYNC_DELAY_MS);
+  };
+  const grow = async () => {
+    terminal.resize(80, 24);
+    await dash.settle();
+  };
+  assert.deepEqual(attempts(), [["dash", null]]);
+
+  // Recorded with N = 7, shown with N = 9.
+  terminal.press("s");
+  for (let step = 0; step < 3; step += 1) terminal.press("-");
+  await recordSmall();
+  assert.deepEqual(attempts().at(-1), [null, 7]);
+  terminal.press("+");
+  terminal.press("+");
+  await grow();
+  assert.deepEqual(attempts().at(-1), [null, 7], "delivered with a sequence never shown");
+  // The same reading is recorded again at the next recompute, now with the row on screen.
+  await clock.advance(SYNC_DELAY_MS);
+  assert.deepEqual(attempts().slice(-2), [
+    [null, 7],
+    ["dash", 9],
+  ]);
+
+  // Recorded with N = 9, shown with the row off.
+  await recordSmall();
+  assert.deepEqual(attempts().at(-1), [null, 9]);
+  terminal.press("s");
+  await grow();
+  assert.deepEqual(attempts().at(-1), [null, 9], "delivered with a row that was hidden");
+
+  // Recorded with the row off, shown with it on.
+  await clock.advance(SYNC_DELAY_MS);
+  assert.deepEqual(attempts().at(-1), ["dash", null]);
+  await recordSmall();
+  assert.deepEqual(attempts().at(-1), [null, null]);
+  terminal.press("s");
+  await grow();
+  assert.deepEqual(attempts().at(-1), [null, null], "delivered without the row on screen");
+
+  // Unchanged while small: delivered at the first full frame, with the row it carries.
+  await recordSmall();
+  assert.deepEqual(attempts().at(-1), [null, 9]);
+  await grow();
+  assert.deepEqual(attempts().at(-1), ["dash", 9]);
+  terminal.press("q");
+  assert.equal(await dash.done, 0);
+});
+
 test("the dash prints the interval status --no-sync prints at the same instant", async () => {
   const { source, start } = await scripted();
   const clock = makeFakeClock(start);

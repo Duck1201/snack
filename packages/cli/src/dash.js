@@ -225,7 +225,12 @@ export async function runDash(ports) {
   /** The snapshot ledger (spec §4.3). */
   /** @type {Map<string, string>} */
   const delivered = new Map();
-  /** @type {Map<string, {key: string, attemptId: number}>} */
+  /**
+   * Recorded, not yet drawn: each attempt with the `next N` row's length it carries, `null` for the
+   * row off, so a frame showing another delivers nothing.
+   *
+   * @type {Map<string, {key: string, attemptId: number, sequenceLength: number | null}>}
+   */
   const pending = new Map();
   let lastLength = DEFAULT_SEQUENCE_LENGTH;
 
@@ -334,13 +339,23 @@ export async function runDash(ports) {
   };
 
   /**
+   * Confirm the pending attempts this frame drew. One whose recorded `next N` row is not the row on
+   * screen -- the person stepped N or hid or showed the row while the terminal was too small -- was
+   * never shown as recorded: it is dropped, undelivered, as when the key changes, and the next
+   * recompute records the reading again with the row now on screen.
+   *
    * @param {StorageSession} tx
    * @param {string[]} drawn
    */
   const confirmDrawn = (tx, drawn) => {
     const confirmed = drawn.flatMap((alias) => {
       const entry = pending.get(alias);
-      return entry === undefined ? [] : [[alias, entry]];
+      if (entry === undefined) return [];
+      if (entry.sequenceLength !== state.sequenceLength) {
+        pending.delete(alias);
+        return [];
+      }
+      return [[alias, entry]];
     });
     if (confirmed.length === 0) return;
     tx.confirm(
@@ -422,7 +437,9 @@ export async function runDash(ports) {
           if (pending.get(source.alias)?.key === key) continue;
           // The `next N` row on screen rides with the attempt; a keypress records nothing.
           const attemptId = tx.record(source, assessShown(source.answer));
-          if (attemptId !== null) pending.set(source.alias, { key, attemptId });
+          if (attemptId !== null) {
+            pending.set(source.alias, { key, attemptId, sequenceLength: state.sequenceLength });
+          }
         }
         for (const source of state.sources) {
           const built = cache.get(source.alias);
