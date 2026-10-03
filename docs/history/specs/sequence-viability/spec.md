@@ -64,8 +64,14 @@ never with `point < lower`**. The largest gap is 0.0145 (`Beta(1,1)`, `N = 50`: 
 90th-percentile 0.0052). Every one of those cases is already `risk high`. *Corrected in review:*
 this section first said "never once `point ≥ 0.025`", a bound read off the eight lengths of that
 grid. Over every `N` from 1 to 100 (`α, β ∈ 0.5 + [0, 45.5]`) the widening reaches a point of
-0.02857 (`Beta(1,1)`, `N = 34`), so the measured bound is: it fires only where the interval already
-renders `0-3%`. `prediction.test.js` pins it. Publishing `point > upper` would break
+0.02857 (`Beta(1,1)`, `N = 34`). *Corrected again:* that grid stepped whole counts, but decay makes
+the weighted counts real, so `α` and `β` are any reals `≥ 0.5` under the bundled `Beta(0.5, 0.5)`
+prior — `Beta(0.54, 0.54)` at `N = 98` already widens to a point of 0.0490. A grid over
+`α, β ∈ [0.5, 100]` refined by bisection along the edge where the widening starts puts the largest
+point at 0.0501 (`Beta(0.5, 0.52287)`, `N = 100`), so the measured bound is: it fires only where the
+interval renders at most `0-6%` (rounded outward, see *Deviations*). `prediction.test.js` pins the
+edge and samples the continuous domain. A custom plan profile with a prior weaker than one
+equivalent sample reaches further (about 0.09 near `Beta(0.01, 0.07)`). Publishing `point > upper` would break
 the ordering every consumer, and `prediction_attempt`'s own `CHECK (lower <= point AND point <=
 upper)`, assumes. Widening the interval to include its point keeps at least `coverage_target` of
 posterior mass inside it — the interval contains the equal-tailed one — so `coverage_target` stays
@@ -129,7 +135,7 @@ Script: `scratchpad/seq/verify.mjs` and `order.mjs`, importing the real `beta.js
 | `N = 1` equals `assembleForecast`'s `viability` and `risk`, compared with `Object.is`, 20 posteriors incl. prior-only | 0 mismatches (bit-identical: `1·x = x`, `x**1 = x`) |
 | `lower`, `point`, `upper` non-increasing in `N`, 4,900 cases `N = 1..100` | 0 violations |
 | `E[p^N] ≥ (α/(α+β))^N` | 0 violations |
-| `point` outside the unclamped interval | 18,419 / 66,248; never at `N = 1`; only above `upper`; only where the interval renders `0-3%` (largest point 0.02857, `Beta(1,1)`, `N = 34`, over every `N ≤ 100`) |
+| `point` outside the unclamped interval | 18,419 / 66,248; never at `N = 1`; only above `upper`; only where the interval renders at most `0-6%` (largest point 0.0501, `Beta(0.5, 0.52287)`, `N = 100`, over real `α, β ≥ 0.5` and every `N ≤ 100`; §1.2) |
 
 Worked examples (prior `Beta(0.5, 0.5)` from `generic.json`, rounded):
 

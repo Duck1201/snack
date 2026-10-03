@@ -535,32 +535,92 @@ test("the sequence interval is widened to contain its point when the powered upp
   assert.equal(sequence.viability.point.toFixed(5), "0.01961");
 });
 
-test("the widening fires only where the interval already renders 0-3%", () => {
-  // Beta(1, 1), N = 34 is the largest point the widening ever reaches on the grid: 0.02857, above
-  // the 0.025 a coarser grid of lengths suggested as the bound.
-  const edge = assessSequence(posterior({ strength: 2 }), 34);
-  assert.ok(posterior({ strength: 2 }).viability.upper ** 34 < edge.viability.point);
-  assert.equal(edge.viability.point.toFixed(5), "0.02857");
+/**
+ * A forecast on the bundled prior, Beta(0.5, 0.5), with real-valued weighted evidence: decay makes
+ * every weighted count a real number, so the posterior is any `Beta(α, β)` with `α, β ≥ 0.5`.
+ *
+ * @param {number} alpha at least 0.5
+ * @param {number} beta at least 0.5
+ */
+function weighted(alpha, beta) {
+  return assembleForecast({
+    cell: {
+      prompts_considered: 0,
+      limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
+      successes: 0,
+      restrictions: 0,
+      excluded: 0,
+      weighted_successes: alpha - 0.5,
+      weighted_restrictions: beta - 0.5,
+      effective_samples: alpha + beta - 1,
+      alpha: 0,
+      beta: 0,
+    },
+    level: "period_band_category",
+    prior: { strength: 1, viability: 0.5 },
+    policy: PREDICTION_POLICY,
+    dataCompleteness: "complete",
+  });
+}
 
+/**
+ * The largest point the widening reaches over every posterior the bundled prior admits and every
+ * length up to the cap: Beta(0.5, 0.52287), N = 100, point 0.050065, found by a grid over
+ * `α, β ∈ [0.5, 100]` refined by bisection along the edge where the widening starts to fire.
+ */
+const WIDENING_BOUND = 0.0501;
+
+test("the widening fires only where the interval renders at most 0-6%", () => {
+  // The edge. A grid of whole weighted counts put the largest point at Beta(1, 1), N = 34 (0.02857);
+  // weighted counts are real numbers, and near the prior itself the point reaches 0.05.
+  const edge = weighted(0.5, 0.5228737523269374);
+  const sequence = assessSequence(edge, SEQUENCE_MAX_LENGTH);
+  assert.ok(edge.viability.upper ** SEQUENCE_MAX_LENGTH < sequence.viability.point);
+  assert.equal(sequence.viability.upper, sequence.viability.point);
+  assert.equal(sequence.viability.point.toFixed(4), "0.0501");
+  assert.ok(sequence.viability.point > 0.03, "beyond the bound a grid of whole counts suggested");
+
+  /** @param {import("../src/prediction.js").Forecast} base @param {number} length */
+  const holds = (base, length) => {
+    const answer = assessSequence(base, length);
+    if (base.viability.upper ** length >= answer.viability.point) return false;
+    const { alpha, beta } = base.contributors.evidence_window;
+    const at = `Beta(${alpha}, ${beta}), N = ${length}`;
+    assert.ok(length > 1, `never at N = 1: ${at}`);
+    assert.ok(answer.viability.upper <= WIDENING_BOUND, `${at}: ${answer.viability.upper}`);
+    // Both ends render inside 0-6% when rounded outward.
+    assert.ok(answer.viability.lower < 0.01, `${at}: lower ${answer.viability.lower}`);
+    return true;
+  };
+
+  // A fine grid where the point is largest, near the prior, at every length.
   let widened = 0;
-  for (const strength of [1, 2]) {
-    for (let successes = 0; successes <= 45; successes += 1) {
-      for (let restrictions = 0; restrictions <= 45; restrictions += 1) {
-        const base = posterior({ strength, successes, restrictions });
-        for (let length = 1; length <= SEQUENCE_MAX_LENGTH; length += 1) {
-          const sequence = assessSequence(base, length);
-          if (base.viability.upper ** length >= sequence.viability.point) continue;
-          widened += 1;
-          assert.ok(length > 1, "never at N = 1");
-          assert.ok(
-            sequence.viability.upper < 0.03,
-            `Beta(${base.contributors.evidence_window.alpha}, ${base.contributors.evidence_window.beta}), N = ${length}: ${sequence.viability.upper}`,
-          );
-        }
+  for (let alpha = 0.5; alpha <= 3.5; alpha += 0.05) {
+    for (let beta = 0.5; beta <= 3.5; beta += 0.05) {
+      const base = weighted(alpha, beta);
+      for (let length = 1; length <= SEQUENCE_MAX_LENGTH; length += 1) {
+        if (holds(base, length)) widened += 1;
       }
     }
   }
   assert.ok(widened > 0);
+
+  // And anywhere the bundled prior can reach, weighted toward the edge near 0.5.
+  const excess = fc.oneof(
+    fc.double({ min: 0, max: 0.1, noNaN: true }),
+    fc.double({ min: 0, max: 100, noNaN: true }),
+  );
+  fc.assert(
+    fc.property(
+      excess,
+      excess,
+      fc.integer({ min: 1, max: SEQUENCE_MAX_LENGTH }),
+      (a, b, length) => {
+        holds(weighted(0.5 + a, 0.5 + b), length);
+      },
+    ),
+    { numRuns: 20000 },
+  );
 });
 
 test("the sequence risk label reads the sequence lower bound under the single-prompt policy", () => {
