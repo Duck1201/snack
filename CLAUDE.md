@@ -29,8 +29,8 @@ npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs 
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
 npm run release:prepare  # changeset version + plugin pin + man page + release evidence, one PR
 npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
-                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0; argv narrows to one) with
-                       # the candidate. Needs the network; not part of `check`.
+                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1; argv narrows to one)
+                       # with the candidate. Needs the network; not part of `check`.
 ```
 
 Node 24 only (`engines: >=24 <25`), npm 11.16.0, ESM everywhere, JavaScript with JSDoc types — no
