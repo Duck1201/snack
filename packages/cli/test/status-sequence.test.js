@@ -398,12 +398,12 @@ function priorOnlyCaveats(sequenceLength) {
   return { status, own: status.caveats.slice(plain.caveats.length) };
 }
 
-test("the too-wide caveat states the rule, the same for every length, and recommends nothing", () => {
+test("the too-wide caveat states the rule, the same for every length above one, and recommends nothing", () => {
   // Width `upper^N - lower^N` is not monotone in N, and one more success can widen it: neither a
   // shorter sequence nor more history is a remedy that always holds. Advising either would also
   // have the reader sweep N by hand until a probability looks right -- the inversion SNACK never
   // performs.
-  for (const length of [1, 2, 10]) {
+  for (const length of [2, 10]) {
     const { status, own } = priorOnlyCaveats(length);
     assert.equal(status.sequence?.width.too_wide, true, String(length));
     const caveat = own.at(-1) ?? "";
@@ -413,6 +413,15 @@ test("the too-wide caveat states the rule, the same for every length, and recomm
     );
     assert.doesNotMatch(caveat, /shorter|more history|narrow/iu);
   }
+  // One prompt is not "all of them", as it is not "all 1": at one the caveat says what the `next
+  // prompt` row says, about the next prompt.
+  const single = priorOnlyCaveats(1);
+  assert.equal(single.status.sequence?.width.too_wide, true);
+  assert.equal(
+    single.own.at(-1),
+    "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not.",
+  );
+  assert.doesNotMatch(single.own.join(" "), /all of them|all 1\b|shorter|more history|narrow/iu);
   const { status, own } = priorOnlyCaveats(100);
   assert.equal(status.sequence?.width.too_wide, false);
   assert.ok(!own.some((caveat) => caveat.includes("too wide")), JSON.stringify(own));

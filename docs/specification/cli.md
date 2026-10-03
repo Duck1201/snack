@@ -184,7 +184,10 @@ usage pressure rising as they are sent." At `n = 1` there is no next prompt to a
 caveat is omitted. When the sequence interval is wider than half the probability scale
 (`sequence-width-v1`), a further caveat says so plainly — "The 10-prompt interval is too wide to say
 much; it cannot tell whether all of them going through is more likely than not." — so that a
-`0-79%` reads as an honest "not enough to say" rather than as a broken tool. It names no remedy:
+`0-79%` reads as an honest "not enough to say" rather than as a broken tool. At `n = 1`, where "all
+of them" is as wrong as "all 1", it speaks of the next prompt as the `next prompt` row does: "The
+1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to
+go through than not." It names no remedy:
 neither a shorter sequence nor more history always narrows the interval. Each is shared beneath the
 panels when every source carries it, by the rule above. In `--json` each report gains the
 optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without

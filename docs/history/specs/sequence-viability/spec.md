@@ -664,5 +664,10 @@ in words, instead of leaving the reader to think the tool failed.
   carries an end across 50. So a shown interval always contains the estimated one, and a too-wide
   one always shows 50 strictly inside it; `render.test.js` holds both as properties. The §6.1
   example reads `63-100%` for a lower end of 0.6394. `--json` is unchanged.
+- **The width caveat at `N = 1`** (decision (d) said "the same sentence for every `N`"). "All of
+  them going through" has the defect §6.1 rejected in "all 1 go through": one prompt is not "all of
+  them". At `N = 1` the caveat reads "The 1-prompt interval is too wide to say much; it cannot tell
+  whether the next prompt is more likely to go through than not." — the `next prompt` row's own
+  subject, and still remedy-free. Every `N ≥ 2` keeps the sentence of decision (d).
 - **READMEs, CHANGELOGs, the changeset and the release cut** (§6.4, §8 slice 4) are left to the
   release's docs pass.

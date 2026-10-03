@@ -112,12 +112,13 @@ export function createSourceStatus(
  * The first caveat is the assumption the evidence gates cannot see: every prompt is taken to meet
  * the band and category the next one does. A sequence of one has no next prompt to assume about,
  * so it is omitted there. The second is owed only when the interval is too wide to inform
- * (`SEQUENCE_WIDTH_POLICY`), so that a `0-78%` reads as an honest "not enough to say" rather than
+ * (`SEQUENCE_WIDTH_POLICY`), so that a `0-79%` reads as an honest "not enough to say" rather than
  * as a broken tool. It states the rule and nothing more: the width `upper^N - lower^N` is not
  * monotone in `N`, and one more success can widen it, so no remedy holds in general -- and advice
  * to try another length would have the reader search `N` for a probability, the inversion SNACK
  * never performs. The length is written `N-prompt`, never `N prompts`, so no phrase here can be
- * read as a number of prompts a plan allows.
+ * read as a number of prompts a plan allows. At one, "all of them" is as wrong as "all 1", so the
+ * width caveat speaks of the next prompt, as the `next prompt` row does.
  *
  * @param {import("./prediction.js").SequenceAssessment} sequence
  * @returns {string[]}
@@ -132,7 +133,9 @@ function sequenceCaveats(sequence) {
         ]),
     ...(sequence.width.too_wide
       ? [
-          `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
+          length === 1
+            ? "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not."
+            : `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
         ]
       : []),
   ];
