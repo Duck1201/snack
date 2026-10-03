@@ -40,6 +40,7 @@ const LABEL = 13;
  * @property {{age_seconds: number | null}} freshness
  * @property {{status: string}} synchronization
  * @property {string[]} caveats
+ * @property {ShadowStatusView} [shadow] present only when a Codex installation feeds the source
  * @property {ReportedCapacityView[]} [reported_capacity] present only when a Codex installation feeds
  *   the source
  */
@@ -53,6 +54,21 @@ const LABEL = 13;
  * @property {{lower: number, upper: number}} viability
  * @property {{label: string}} risk
  * @property {{id: string, version: string}} method
+ */
+
+/**
+ * The `reported-capacity` shadow, as the status payload carries it.
+ *
+ * @typedef {object} ShadowStatusView
+ * @property {{id: string, version: string}} method
+ * @property {boolean} computed
+ * @property {string | null} reason
+ * @property {{window_minutes: number, band: string} | null} binding
+ * @property {string} policy_version
+ * @property {{lower: number, upper: number}} [viability]
+ * @property {{label: string}} [risk]
+ * @property {{level: string}} [evidence]
+ * @property {{backoff_level: string}} [contributors]
  */
 
 /**
@@ -97,7 +113,7 @@ const LABEL = 13;
  * @typedef {object} StatsReportView
  * @property {{alias: string, provider: string, plan: string, plan_profile: {id: string, version: string, provenance: string, as_of: string | null}}} source
  * @property {{band: string, baseline_kind: string, policy_version: string, trend?: {status: string, direction?: string | null, reason?: string | null}}} pressure
- * @property {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string}} calibration
+ * @property {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string, by_method?: MethodCalibrationView[]}} calibration
  * @property {HorizonView[]} horizons
  * @property {ClientComparisonView} [by_client]
  */
@@ -108,6 +124,11 @@ const LABEL = 13;
  * score with a zero sample rather than a zero score.
  *
  * @typedef {{status?: string, excluded?: number, brier: {value: number | null, sample_size: number}, interval: {coverage: number | null, mean_width?: number | null, sample_size: number}, forecasts?: number}} CalibrationStream
+ */
+
+/**
+ * @typedef {{sample_size: number, restrictions: number, brier: number | null, baseline_brier: number | null}} PairedView
+ * @typedef {{id: string, version: string, role: string, live: CalibrationStream, backtest: CalibrationStream, paired?: {live: PairedView, backtest: PairedView}}} MethodCalibrationView
  */
 
 /** One model's usage inside one horizon, carried with the horizon it belongs to. */
@@ -486,7 +507,46 @@ function describeCalibration(calibration, verbose) {
     `  live      ${describeStream(calibration.live)}`,
     `  backtest  ${describeStream(calibration.backtest)}`,
     `  policy    ${calibration.policy_version}, ${calibration.undelivered_attempts} undelivered`,
+    ...(calibration.by_method ? describeByMethod(calibration.by_method) : []),
   ];
+}
+
+/**
+ * Each method's own calibration, one line each, and for a shadow the comparison that decides
+ * whether it may ever answer: its Brier score and the baseline's over exactly the same outcomes.
+ * Every figure travels with its sample size, and a stream with nothing scored yet says so rather
+ * than printing a zero.
+ *
+ * @param {MethodCalibrationView[]} methods
+ * @returns {string[]}
+ */
+function describeByMethod(methods) {
+  const names = methods.map((method) => `${method.id}@${method.version}`);
+  const width = Math.max(...names.map((name) => name.length));
+  return [
+    "  by method",
+    ...methods.flatMap((method, index) => {
+      const name = String(names[index]).padEnd(width);
+      const line = `    ${name}  ${method.role} · live ${describeBrier(method.live)} · backtest ${describeBrier(method.backtest)}`;
+      if (!method.paired) return [line];
+      return [
+        line,
+        `    ${" ".repeat(width)}  same outcomes as the baseline · live ${describePaired(method.paired.live)} · backtest ${describePaired(method.paired.backtest)}`,
+      ];
+    }),
+  ];
+}
+
+/** @param {CalibrationStream} stream */
+function describeBrier(stream) {
+  if (stream.brier.value === null) return "not available yet";
+  return `brier ${stream.brier.value.toFixed(3)}, sample ${stream.brier.sample_size}`;
+}
+
+/** @param {PairedView} paired */
+function describePaired(paired) {
+  if (paired.brier === null || paired.baseline_brier === null) return "not available yet";
+  return `brier ${paired.brier.toFixed(3)} against ${paired.baseline_brier.toFixed(3)}, sample ${paired.sample_size}, ${paired.restrictions} restricted`;
 }
 
 /**
@@ -879,6 +939,11 @@ function renderSource(status, paint, verbose) {
     ...(status.reported_capacity === undefined
       ? []
       : [row(paint, "reported", [[describeReported(status.reported_capacity), undefined, 0]])]),
+    // `--verbose` only, and after the stated figure it reads: the shadow is not the estimate this
+    // panel answers with, and it is never on the default panel, where it could be taken for one.
+    ...(verbose && status.shadow !== undefined
+      ? shadowRows(status.shadow, status.reported_capacity ?? [], paint)
+      : []),
     row(paint, "as of", [
       [
         [
@@ -935,6 +1000,64 @@ function describeReported(reported) {
       return parts.join(" · ");
     })
     .join(" · ");
+}
+
+/**
+ * Why the shadow was not computed, in words.
+ *
+ * @type {Record<string, string>}
+ */
+const SHADOW_REASONS = {
+  no_statement: "no figure stated yet",
+  before_period: "stated before this period",
+  stale: "stale",
+  windows_reset: "every window has reset",
+  superseded: "another client sent a prompt since",
+  no_local_outcomes: "no outcome of yours to read yet",
+};
+
+/**
+ * The `reported-capacity` shadow, as `--verbose` shows it.
+ *
+ * Its interval is printed -- a shadow nobody can see could not be judged -- but as what the method
+ * would say, and as not the answer: the `next prompt` row above is the baseline's, whatever this
+ * row reads. It carries no stated percentage; the figure it read is quoted once, on the `reported`
+ * row.
+ *
+ * @param {ShadowStatusView} shadow
+ * @param {ReportedCapacityView[]} reported
+ * @param {(value: string, style?: Style) => string} paint
+ */
+function shadowRows(shadow, reported, paint) {
+  const identifier = `${shadow.method.id}@${shadow.method.version}`;
+  if (!shadow.computed || !shadow.viability || !shadow.risk || !shadow.evidence) {
+    const reason = SHADOW_REASONS[shadow.reason ?? ""] ?? "not computed";
+    const newest = Math.min(...reported.map((entry) => entry.age_seconds));
+    const stated =
+      shadow.reason === "stale" && Number.isFinite(newest) ? `, stated ${age(newest)} ago` : "";
+    return [row(paint, "shadow", [[`${identifier} not computed — ${reason}${stated}`, "dim", 0]])];
+  }
+  const binding = /** @type {{window_minutes: number, band: string}} */ (shadow.binding);
+  const length = windowLength(binding.window_minutes);
+  const reading =
+    shadow.contributors?.backoff_level === "stated_full_prior"
+      ? `a starting assumption — Codex states its ${length} window is full, and no prompt of yours has been seen in that state yet`
+      : binding.band === "full"
+        ? `reads what Codex states about its ${length} window — stated full until it resets`
+        : binding.band === "near"
+          ? `reads what Codex states about its ${length} window — stated nearly full`
+          : `reads what Codex states about its ${length} window`;
+  return [
+    row(paint, "shadow", [
+      [
+        `${identifier} would say ${interval(shadow.viability)} · risk ${shadow.risk.label} · evidence ${shadow.evidence.level}`,
+        undefined,
+        0,
+      ],
+      [" — recorded to compare, not the answer above", "dim", 0],
+    ]),
+    row(paint, "", [[`${reading} · ${shadow.policy_version}`, "dim", 0]]),
+  ];
 }
 
 /** @param {number} minutes */
