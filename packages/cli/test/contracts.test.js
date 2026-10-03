@@ -331,9 +331,11 @@ async function capturedDocuments(version) {
 }
 
 /**
- * Every top-level property name a payload schema declares, gathered across the `oneOf` branches and
- * `$defs` it is written with. The union rather than one branch: `status` and `stats` answer with a
- * single report or with one per source, and both spellings are the same contract.
+ * Every top-level property name a payload schema declares, gathered across its own `properties` and
+ * its `oneOf` branches, following a branch's `$ref` into `$defs`. The union rather than one branch:
+ * `status` and `stats` answer with a single report or with one per source, and both spellings are
+ * the same contract. Only what the top level reaches is walked: `$defs` also holds nested shapes
+ * (`evidence`, `risk`, ...), and their keys -- `level`, `label`, `gates` -- are not report keys.
  *
  * @param {Record<string, unknown>} schema
  * @returns {Set<string>}
@@ -341,21 +343,32 @@ async function capturedDocuments(version) {
 function declaredProperties(schema) {
   /** @type {Set<string>} */
   const names = new Set();
+  const definitions = /** @type {Record<string, unknown>} */ (schema.$defs ?? {});
   /** @param {unknown} node */
   const walk = (node) => {
     if (typeof node !== "object" || node === null) return;
-    const { properties, oneOf, $defs } = /** @type {Record<string, unknown>} */ (node);
+    const { properties, oneOf, $ref } = /** @type {Record<string, unknown>} */ (node);
+    if (typeof $ref === "string") {
+      const name = $ref.startsWith("#/$defs/") ? $ref.slice("#/$defs/".length) : undefined;
+      assert.ok(name !== undefined && Object.hasOwn(definitions, name), `unresolved ${$ref}`);
+      walk(definitions[name]);
+    }
     if (typeof properties === "object" && properties !== null) {
       for (const name of Object.keys(properties)) names.add(name);
     }
     if (Array.isArray(oneOf)) for (const branch of oneOf) walk(branch);
-    if (typeof $defs === "object" && $defs !== null) {
-      for (const definition of Object.values($defs)) walk(definition);
-    }
   };
   walk(schema);
   return names;
 }
+
+test("the declared report keys are the report's own, not those of a nested definition", async () => {
+  const declared = declaredProperties(await readSchema("commands/status.schema.json"));
+  for (const nested of ["level", "label", "gates"]) assert.ok(!declared.has(nested), nested);
+  for (const own of ["source", "viability", "risk", "evidence", "method", "caveats", "sequence"]) {
+    assert.ok(declared.has(own), own);
+  }
+});
 
 test("every payload declares each field it emits", async () => {
   // The other half of the freeze, and the half a validator cannot give. The published schemas stay
