@@ -893,10 +893,17 @@ export async function run(argv, options = {}) {
       }
       // Under the lock, as every other command recovers: a journal another process is still writing
       // belongs to a setup in flight, and rolling it back would rewrite its configuration and, with
-      // no backup named, delete the database.
+      // no backup named, delete the database. A busy lock does not end the session (spec §1.3): the
+      // dash opens on the configuration as it reads now, recovers nothing, and its screen says
+      // storage is busy. Any journal is then the sync child's to recover, under its own lock.
       const current = await withStorageOperationLock(paths, async () => {
         await recoverSetupJournal(paths);
         return readConfig(paths.configFile);
+      }).catch((/** @type {unknown} */ error) => {
+        if (error instanceof SnackError && error.reason === "storage_locked") {
+          return readConfig(paths.configFile);
+        }
+        throw error;
       });
       const inScope = Array.isArray(current.sources)
         ? current.sources.filter(isConfiguredSource)

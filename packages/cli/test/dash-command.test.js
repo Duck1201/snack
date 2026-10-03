@@ -18,7 +18,6 @@ import {
   makeFakeSync,
   makeFakeTerminal,
   realSync,
-  SYNC_OK,
   startDash,
 } from "./fixtures/fake-tty.js";
 import {
@@ -343,10 +342,12 @@ test(
   },
 );
 
-test("dash never recovers a setup journal another command is still writing under the lock", async () => {
-  // A `snack setup` in flight holds the storage lock and has written its journal. Recovering that
-  // journal from outside the lock would roll back a setup that has not failed -- rewriting the
-  // configuration and, with no backup named, deleting the database.
+test("dash opens while another command holds the lock, and never recovers its journal", async () => {
+  // A `snack setup` in flight -- or a long `sync --full`, a migration with its backup, a purge --
+  // holds the storage lock, and setup has written its journal. A busy lock does not end the
+  // session (spec §1.3): the dash opens on the configuration as it reads now, says storage is busy,
+  // and leaves the journal alone. Recovering it from outside the lock would roll back a setup that
+  // has not failed -- rewriting the configuration and, with no backup named, deleting the database.
   const fixture = await configured();
   const configBefore = await readFile(fixture.paths.configFile, "utf8");
   const journal = setupJournalFile(fixture.paths);
@@ -367,20 +368,27 @@ test("dash never recovers a setup journal another command is still writing under
       { mode: 0o600 },
     );
     const terminal = makeFakeTerminal();
-    const outcome = await startDash(fixture.options, {
+    // The child meets the same lock and says so, as the real one would.
+    const locked = {
+      exitCode: 5,
+      envelope: { status: "error", data: null, errors: [{ code: "storage_locked" }] },
+    };
+    const dash = await startDash(fixture.options, {
       terminal,
       clock: makeFakeClock(fixture.options.now),
-      sync: makeFakeSync(async () => SYNC_OK),
-      signals: makeFakeSignals(),
-    }).then(
-      () => {
-        terminal.press("q");
-        return "started";
-      },
-      (/** @type {Error} */ error) => error.message,
+      sync: makeFakeSync(async () => locked),
+    });
+    const state = dash.controller.state();
+    assert.deepEqual(
+      state.sources.map((source) => source.alias),
+      ["work"],
     );
-    // Refused as `status` refuses while the lock is held, and nothing was rolled back.
-    assert.match(outcome, /exit 5/u);
+    assert.equal(state.reading.computedAt, null, "no reading was taken past the lock");
+    assert.ok(state.sources.every((source) => source.sync === "busy"));
+    assert.match(terminal.text(), /another snack command is using storage/u);
+    terminal.press("q");
+    assert.equal(await dash.done, 0);
+    // Nothing was rolled back.
     assert.ok(await stat(fixture.paths.databaseFile).then(() => true));
     assert.equal(await readFile(fixture.paths.configFile, "utf8"), configBefore);
     assert.ok(await stat(journal).then(() => true));
