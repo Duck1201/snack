@@ -84,10 +84,10 @@ export const defaultConfig = Object.freeze({
  * The schema already refuses a malformed source on read; this is the runtime narrowing the command
  * and diagnostic layers share, so they cannot disagree about what counts as configured. Where a
  * client keeps its history is the client's own business — a database file for OpenCode, a projects
- * directory for Claude Code — so either satisfies the check.
+ * directory for Claude Code, a sessions directory for Codex CLI — so any of them satisfies the check.
  *
  * @param {unknown} value
- * @returns {value is {alias: string, installation_id: string, adapter: "opencode" | "claude", database?: string, projects?: string, provider: string, profile: string, plan: string, fingerprint: string}}
+ * @returns {value is {alias: string, installation_id: string, adapter: "opencode" | "claude" | "codex", database?: string, projects?: string, sessions?: string, provider: string, profile: string, plan: string, fingerprint: string}}
  */
 export function isConfiguredSource(value) {
   return (
@@ -98,7 +98,7 @@ export function isConfiguredSource(value) {
     "installation_id" in value &&
     typeof value.installation_id === "string" &&
     "adapter" in value &&
-    (value.adapter === "opencode" || value.adapter === "claude") &&
+    (value.adapter === "opencode" || value.adapter === "claude" || value.adapter === "codex") &&
     "provider" in value &&
     typeof value.provider === "string" &&
     "profile" in value &&
@@ -106,7 +106,8 @@ export function isConfiguredSource(value) {
     "plan" in value &&
     typeof value.plan === "string" &&
     (("database" in value && typeof value.database === "string") ||
-      ("projects" in value && typeof value.projects === "string")) &&
+      ("projects" in value && typeof value.projects === "string") ||
+      ("sessions" in value && typeof value.sessions === "string")) &&
     "fingerprint" in value &&
     typeof value.fingerprint === "string"
   );

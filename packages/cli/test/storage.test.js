@@ -15,6 +15,7 @@ import {
   inspectDatabase,
   migrationDirectory,
   readIngestionCursor,
+  readReportedCapacity,
   readSpoolIssueCount,
   restoreSetupDatabaseBackup,
   storeObservations,
@@ -430,7 +431,13 @@ test("a 0.6 database reaches 1.1.1 one release at a time, without a reset", asyn
     applicationVersion: "0.8.0",
     now,
   });
-  const toOneOneOne = await initializeDatabase(paths, { applicationVersion: "1.1.1", now });
+  // Pinned to the migrations 1.1.1 shipped, for the same reason the earlier legs are: the 1.3 legs
+  // are covered by their own tests, and this one would otherwise stop meaning its name.
+  const toOneOneOne = await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(13),
+    applicationVersion: "1.1.1",
+    now,
+  });
 
   assert.deepEqual(toZeroSeven.applied, [10, 11]);
   assert.deepEqual(toZeroEight.applied, [12]);
@@ -569,7 +576,7 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // follows is measuring the upgrade rather than an upgrade plus an ingestion.
   const upgrade = await document("config", "set", "analysis.horizons", '["PT1H"]');
   assert.equal(upgrade.exitCode, 0, JSON.stringify(upgrade.document.errors));
-  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12, 13]);
+  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12, 13, 14, 15]);
   assert.equal(upgrade.document.data.storage.backup_created, true);
 
   const status = await document("status", "--no-sync");
@@ -595,7 +602,10 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // two prediction tables grow by exactly that one -- growing is the command working, and any other
   // table moving at all would be the upgrade losing or inventing history.
   const after = tableCounts(fixture.paths.databaseFile);
-  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 4);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 6);
+  // The one table the upgrade adds arrives empty: a 0.6 install stated no figures to quote.
+  assert.equal(after.reported_capacity_observation, 0);
+  delete after.reported_capacity_observation;
   assert.equal(after.prediction_attempt, (before.prediction_attempt ?? 0) + 1);
   assert.equal(after.prediction_delivery, (before.prediction_delivery ?? 0) + 1);
   const unchanged = (/** @type {Record<string, number>} */ counts) => ({
@@ -1045,3 +1055,482 @@ function observation(id, startedAt) {
     restrictions: [],
   };
 }
+
+const CODEX_INSTALLATION = "33333333-4444-4555-8666-777777777777";
+const CLAUDE_INSTALLATION = "99999999-2222-4333-8444-555555555555";
+const OPENCODE_INSTALLATION = "11111111-2222-4333-8444-555555555555";
+
+/**
+ * Every row of every table, as text, so an upgrade can be compared byte for byte rather than by
+ * count. Rows are sorted because a rebuild is free to hand them back in another physical order;
+ * what it may not do is change one.
+ *
+ * @param {string} databaseFile
+ * @param {string[]} [skip] tables an upgrade is expected to change
+ */
+function tableContents(databaseFile, skip = ["schema_migration", "app_metadata"]) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const tables = /** @type {{name: string}[]} */ (
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all()
+    );
+    return Object.fromEntries(
+      tables
+        .filter((table) => !skip.includes(table.name))
+        .map((table) => [
+          table.name,
+          database
+            .prepare(`SELECT * FROM "${table.name}"`)
+            .all()
+            .map((row) => JSON.stringify(row))
+            .sort(),
+        ]),
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile @param {string} table */
+function tableSql(databaseFile, table) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return String(
+      /** @type {{sql: string}} */ (
+        database
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get(table)
+      ).sql,
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Prompts attributed to two different installations, and one the 012 upgrade left unattributed, so
+ * the rebuild has every shape of `prompt_execution.installation_id` to carry across.
+ *
+ * @param {string} databaseFile
+ */
+function seedAttributedPrompts(databaseFile) {
+  const database = new Database(databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    database.exec(`
+      UPDATE prompt_execution SET installation_id = '${CLAUDE_INSTALLATION}'
+        WHERE source_prompt_id = 'prompt-2';
+      INSERT INTO prompt_execution
+          (id, source_alias, capacity_period_id, source_prompt_id, source_session_fingerprint,
+           source_revision, observation_hash, revision_domain, parser_version, started_at,
+           completed_at, duration_ms, completion, first_observed_at, last_observed_at,
+           installation_id)
+        VALUES (3, 'work', 1, 'prompt-3', 'session-hash-3', '1', 'hash-3', 'opencode-message-v1',
+                'opencode-session-v1', '2026-01-02T03:00:00.000Z', '2026-01-02T03:00:01.000Z',
+                1000, 'completed', '${now.toISOString()}', '${now.toISOString()}',
+                '${OPENCODE_INSTALLATION}');
+      INSERT INTO prompt_usage_slice
+          (prompt_execution_id, source_slice_id, provider, model, input_tokens, output_tokens,
+           reasoning_tokens, cache_read_tokens, cache_write_tokens, cost_decimal, currency)
+        VALUES (3, 'slice-3', 'anthropic', 'claude-sonnet', 1, 2, 3, 4, 5, NULL, NULL);
+    `);
+  } finally {
+    database.close();
+  }
+}
+
+test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client, byte for byte", async () => {
+  // Migration 014 widens two CHECK constraints on `client_installation` and `source_binding`.
+  // Since 012, `prompt_execution` references `client_installation`, so the parent cannot be dropped
+  // while any prompt names it -- and rebuilding `prompt_execution` would copy the whole history out
+  // and back. The migration nulls that one reference, rebuilds the parent, and restores it. The
+  // restore is the step that can lose a user's attribution, so it is what this test is about.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, {
+    migrationsDir: await copyMigrationsThrough(13),
+    applicationVersion: "1.2.1",
+    now,
+  });
+  seedZeroSixDatabase(paths.databaseFile);
+  seedSecondClientOnSharedSource(paths.databaseFile);
+  seedAttributedPrompts(paths.databaseFile);
+  const before = tableContents(paths.databaseFile);
+  const ddlBefore = Object.fromEntries(
+    [
+      "client_installation",
+      "source_binding",
+      "ambiguous_profile_mapping",
+      "pending_spool_observation",
+      "prompt_execution",
+    ].map((table) => [table, tableSql(paths.databaseFile, table)]),
+  );
+  // The premise, checked rather than assumed: one prompt per attribution shape.
+  assert.deepEqual(readAttributions(paths.databaseFile), [
+    { source_prompt_id: "prompt-1", installation_id: null },
+    { source_prompt_id: "prompt-2", installation_id: CLAUDE_INSTALLATION },
+    { source_prompt_id: "prompt-3", installation_id: OPENCODE_INSTALLATION },
+  ]);
+
+  const upgrade = await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+
+  assert.deepEqual(upgrade.applied, [14, 15]);
+  assert.equal(upgrade.backupCreated, true);
+  const after = tableContents(paths.databaseFile);
+  // The new table arrives empty; every other table holds exactly the bytes it held.
+  assert.deepEqual(after.reported_capacity_observation, []);
+  delete after.reported_capacity_observation;
+  assert.deepEqual(after, before);
+  // No stash survives the migration.
+  assert.equal(
+    Object.keys(tableContents(paths.databaseFile)).some((name) => name.endsWith("_stash")),
+    false,
+  );
+  // The rebuilt tables differ from their 1.2 definition in the widened constraint and nothing else,
+  // and the table the migration only borrowed a column of is not redefined at all.
+  for (const [table, sql] of Object.entries(ddlBefore)) {
+    assert.equal(
+      tableSql(paths.databaseFile, table),
+      sql.replace("IN ('opencode', 'claude')", "IN ('opencode', 'claude', 'codex')"),
+      table,
+    );
+  }
+  const database = new Database(paths.databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("quick_check", { simple: true }), "ok");
+    // The reference was restored as a reference, not as a bare column: a prompt naming an
+    // installation that does not exist is still refused.
+    assert.throws(
+      () =>
+        database
+          .prepare("UPDATE prompt_execution SET installation_id = 'nobody' WHERE id = 1")
+          .run(),
+      /FOREIGN KEY constraint failed/u,
+    );
+  } finally {
+    database.close();
+  }
+  assert.deepEqual(await inspectDatabase(paths.databaseFile), {
+    exists: true,
+    integrity: "ok",
+    migrations: "current",
+  });
+});
+
+test("after 1.3 a Codex installation can be bound, and a client SNACK does not ship still cannot", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  const database = new Database(paths.databaseFile);
+  try {
+    database.pragma("foreign_keys = ON");
+    database.exec(`
+      INSERT INTO capacity_source (alias, created_at) VALUES ('codex', '${now.toISOString()}');
+      INSERT INTO client_installation (id, client_kind, local_fingerprint, created_at, last_seen_at)
+        VALUES ('${CODEX_INSTALLATION}', 'codex', 'fingerprint-codex',
+                '${now.toISOString()}', '${now.toISOString()}');
+      INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+        VALUES ('codex', '${CODEX_INSTALLATION}', 'codex', 'openai', 'default');
+    `);
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO client_installation
+               (id, client_kind, local_fingerprint, created_at, last_seen_at)
+             VALUES ('other', 'nothing-we-ship', 'fingerprint-other', ?, ?)`,
+          )
+          .run(now.toISOString(), now.toISOString()),
+      /CHECK constraint failed/u,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO source_binding (source_alias, installation_id, adapter, provider, profile)
+             VALUES ('codex', ?, 'nothing-we-ship', 'openai', 'second')`,
+          )
+          .run(CODEX_INSTALLATION),
+      /CHECK constraint failed/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("each published schema level upgrades straight to 1.3 without losing a row", async () => {
+  // An install can skip releases. Every floor the upgrade smoke covers has to reach the newest
+  // schema in one step, not only from the release immediately before it.
+  for (const floor of [9, 11, 12, 13]) {
+    const { paths } = await makeStorage();
+    await initializeDatabase(paths, {
+      migrationsDir: await copyMigrationsThrough(floor),
+      applicationVersion: `floor-${floor}`,
+      now,
+    });
+    seedZeroSixDatabase(paths.databaseFile);
+    const before = tableCounts(paths.databaseFile);
+
+    const upgrade = await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+
+    assert.equal(upgrade.applied.at(-1), 15, `floor ${floor}`);
+    const after = tableCounts(paths.databaseFile);
+    assert.equal(after.reported_capacity_observation, 0, `floor ${floor}`);
+    delete after.reported_capacity_observation;
+    assert.deepEqual(
+      { ...after, schema_migration: 0 },
+      { ...before, schema_migration: 0 },
+      `floor ${floor}`,
+    );
+    assert.deepEqual(readIngestionCursor(paths.databaseFile, "work"), cursorAt(2000));
+  }
+});
+
+/** @returns {import("../src/storage.js").ConfiguredSource} */
+function codexSource() {
+  return {
+    alias: "codex",
+    installation_id: CODEX_INSTALLATION,
+    adapter: "codex",
+    provider: "openai",
+    profile: "default",
+    plan: "plus",
+    fingerprint: "cx-rollout-usagerecord-v1",
+  };
+}
+
+/**
+ * @param {number} n
+ * @param {string} observedAt
+ * @param {Partial<import("../src/storage.js").ReportedCapacitySnapshot>} [overrides]
+ * @returns {import("../src/storage.js").ReportedCapacitySnapshot}
+ */
+function snapshot(n, observedAt, overrides = {}) {
+  return {
+    observation_key: n.toString(16).padStart(64, "0"),
+    observed_at: observedAt,
+    limit_id: "codex",
+    plan_type: "plus",
+    windows: [
+      { window_minutes: 300, used_percent: 34, resets_at: "2026-01-02T14:30:00.000Z" },
+      { window_minutes: 10080, used_percent: 19, resets_at: null },
+    ],
+    parser_version: "codex-rate-limits-v1",
+    ...overrides,
+  };
+}
+
+/**
+ * @param {string} databaseFile
+ * @param {import("../src/storage.js").ReportedCapacitySnapshot[]} reported
+ * @param {Date} [at]
+ */
+function storeReported(databaseFile, reported, at = now) {
+  return storeObservations(
+    databaseFile,
+    codexSource(),
+    { observations: [], cursor: { files: {} }, reported_capacity: reported },
+    at,
+  );
+}
+
+test("a stated figure is stored once per window, and storing it again changes nothing", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  const batch = [snapshot(1, "2026-01-02T01:00:00.000Z"), snapshot(2, "2026-01-02T02:00:00.000Z")];
+
+  const first = storeReported(paths.databaseFile, batch);
+  const second = storeReported(paths.databaseFile, batch);
+
+  assert.deepEqual(first.reported_capacity, {
+    inserted: 2,
+    unchanged: 0,
+    rejected: 0,
+    tombstoned: 0,
+  });
+  assert.deepEqual(second.reported_capacity, {
+    inserted: 0,
+    unchanged: 2,
+    rejected: 0,
+    tombstoned: 0,
+  });
+  assert.equal(tableCounts(paths.databaseFile).reported_capacity_observation, 4);
+  // Written in the transaction that advances the cursor, so the two cannot disagree.
+  assert.deepEqual(readIngestionCursor(paths.databaseFile, "codex"), { files: {} });
+});
+
+test("a batch without stated figures reports exactly what it reported before 1.3", async () => {
+  // The sync payload is frozen; the new count travels only with a batch that carried figures.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  seedSource(paths.databaseFile);
+  const counts = storeObservations(
+    paths.databaseFile,
+    configuredSource(paths.databaseFile),
+    { observations: [observation(1, "2026-01-02T01:00:00.000Z")], cursor: cursorAt(1000) },
+    now,
+  );
+  assert.equal("reported_capacity" in counts, false);
+});
+
+test("a stated figure that is not a figure is counted and refused, never stored or thrown", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  const at = "2026-01-02T01:00:00.000Z";
+  const window = { window_minutes: 300, used_percent: 34, resets_at: null };
+  const invalid = [
+    snapshot(1, at, { windows: [{ ...window, used_percent: 100.5 }] }),
+    snapshot(2, at, { windows: [{ ...window, used_percent: -1 }] }),
+    snapshot(3, at, { windows: [{ ...window, used_percent: Number.NaN }] }),
+    snapshot(4, at, { windows: [{ ...window, window_minutes: 0 }] }),
+    snapshot(5, at, { windows: [{ ...window, window_minutes: 2.5 }] }),
+    snapshot(6, at, { windows: [] }),
+    snapshot(7, at, { windows: [window, window] }),
+    snapshot(8, at, {
+      windows: [window, { ...window, window_minutes: 600 }, { ...window, window_minutes: 900 }],
+    }),
+    snapshot(9, at, { windows: [{ ...window, resets_at: "tomorrow" }] }),
+    snapshot(10, "2026-01-02 01:00", {}),
+    { ...snapshot(11, at), observation_key: "not-a-key" },
+    snapshot(12, at, { limit_id: "a limit that reads like a sentence" }),
+    snapshot(13, at, { parser_version: "" }),
+    /** @type {import("../src/storage.js").ReportedCapacitySnapshot} */ (
+      /** @type {unknown} */ ({ ...snapshot(14, at), windows: "300" })
+    ),
+    /** @type {import("../src/storage.js").ReportedCapacitySnapshot} */ (
+      /** @type {unknown} */ (null)
+    ),
+    // One bad window refuses the whole snapshot: half a statement is not what Codex stated.
+    snapshot(15, at, {
+      windows: [window, { ...window, window_minutes: 10080, used_percent: 101 }],
+    }),
+  ];
+
+  const counts = storeReported(paths.databaseFile, [...invalid, snapshot(16, at)]);
+
+  assert.deepEqual(counts.reported_capacity, {
+    inserted: 1,
+    unchanged: 0,
+    rejected: invalid.length,
+    tombstoned: 0,
+  });
+  assert.equal(tableCounts(paths.databaseFile).reported_capacity_observation, 2);
+});
+
+test("a failing batch stores no stated figure, as it stores no prompt and moves no cursor", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  assert.throws(() =>
+    storeObservations(
+      paths.databaseFile,
+      codexSource(),
+      {
+        observations: [
+          /** @type {import("../src/storage.js").Observation} */ ({
+            ...observation(1, "2026-01-02T01:00:00.000Z"),
+            provider: "openai",
+            completion: "not-a-completion",
+          }),
+        ],
+        cursor: { files: { a: 1 } },
+        reported_capacity: [snapshot(1, "2026-01-02T01:00:00.000Z")],
+      },
+      now,
+    ),
+  );
+  assert.equal(tableCounts(paths.databaseFile).reported_capacity_observation, 0);
+  assert.equal(readIngestionCursor(paths.databaseFile, "codex"), null);
+});
+
+test("the latest stated figure is read per installation and per limit, with its windows", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  storeReported(paths.databaseFile, [
+    snapshot(1, "2026-01-02T01:00:00.000Z"),
+    snapshot(2, "2026-01-02T03:00:00.000Z", {
+      windows: [
+        { window_minutes: 10080, used_percent: 21, resets_at: null },
+        { window_minutes: 300, used_percent: 40.5, resets_at: "2026-01-02T05:00:00.000Z" },
+      ],
+    }),
+    snapshot(3, "2026-01-02T02:00:00.000Z"),
+    // A different limit is a different figure and is never folded into the first.
+    snapshot(4, "2026-01-02T00:30:00.000Z", {
+      limit_id: "premium",
+      windows: [{ window_minutes: 10080, used_percent: 98, resets_at: null }],
+    }),
+    snapshot(5, "2026-01-02T00:40:00.000Z", {
+      limit_id: null,
+      plan_type: null,
+      windows: [{ window_minutes: 43200, used_percent: 0, resets_at: null }],
+    }),
+  ]);
+
+  assert.deepEqual(readReportedCapacity(paths.databaseFile, "codex"), [
+    {
+      installation_id: CODEX_INSTALLATION,
+      client_kind: "codex",
+      limit_id: null,
+      plan_type: null,
+      observed_at: "2026-01-02T00:40:00.000Z",
+      windows: [{ window_minutes: 43200, used_percent: 0, resets_at: null }],
+      parser_version: "codex-rate-limits-v1",
+    },
+    {
+      installation_id: CODEX_INSTALLATION,
+      client_kind: "codex",
+      limit_id: "codex",
+      plan_type: "plus",
+      observed_at: "2026-01-02T03:00:00.000Z",
+      windows: [
+        { window_minutes: 300, used_percent: 40.5, resets_at: "2026-01-02T05:00:00.000Z" },
+        { window_minutes: 10080, used_percent: 21, resets_at: null },
+      ],
+      parser_version: "codex-rate-limits-v1",
+    },
+    {
+      installation_id: CODEX_INSTALLATION,
+      client_kind: "codex",
+      limit_id: "premium",
+      plan_type: "plus",
+      observed_at: "2026-01-02T00:30:00.000Z",
+      windows: [{ window_minutes: 10080, used_percent: 98, resets_at: null }],
+      parser_version: "codex-rate-limits-v1",
+    },
+  ]);
+  // A source nothing stated a figure for answers with nothing, not with an error.
+  assert.deepEqual(readReportedCapacity(paths.databaseFile, "elsewhere"), []);
+});
+
+test("a stated figure holds no content: every column is a key, a time, a number or a version", async () => {
+  // The table is new capture surface, so the content-free invariant is asserted on its shape: there
+  // is nowhere in it a prompt, a path, a title or a credential could be written.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  const database = new Database(paths.databaseFile, { readonly: true });
+  try {
+    const columns = /** @type {{name: string}[]} */ (
+      database.prepare("PRAGMA table_info(reported_capacity_observation)").all()
+    ).map((column) => column.name);
+    assert.deepEqual(columns, [
+      "id",
+      "source_alias",
+      "installation_id",
+      "observation_key",
+      "observed_at",
+      "limit_id",
+      "plan_type",
+      "window_minutes",
+      "used_percent",
+      "resets_at",
+      "parser_version",
+      "first_seen_at",
+    ]);
+  } finally {
+    database.close();
+  }
+});
