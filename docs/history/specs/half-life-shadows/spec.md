@@ -1,10 +1,10 @@
-# 1.5.1 — alternative recency half-lives, in shadow
+# 1.6.0 — alternative recency half-lives, in shadow
 
-Status: **investigated, not built.** Decisions for the user in §11; nothing below is final until
-they are taken. Scope is `docs/history/roadmap-1.x.md` § "1.5.1 - alternative recency half-lives, in
-shadow". Cut from `main` at `ea11c8d` (the `1.5.0` merge). The `v1.5.0` tag does not exist yet: the
-`Publish release` run `37135818559` was `waiting` on the npm environment approval when this was
-written, and npm `latest` was still `1.4.0` (§7.1).
+Status: **decided; ships in the minor `1.6.0`, beside `snack dash`.** The user's decisions are in
+§12 and take precedence over anything earlier they contradict; sections 1-11 have been revised to
+match. There is no patch release for this: the roadmap's entry for alternative recency half-lives,
+planned there as a patch, is this work, moved into the minor so its JSON can ship with it. Cut from `main` at `ea11c8d` (the
+`1.5.0` merge), now tagged `v1.5.0`; npm `latest` is `1.5.0` (§7.1).
 
 Evidence: `packages/cli/src/prediction.js` (`PREDICTION_POLICY`, `EVIDENCE_POLICY`, `decayWeight`,
 `summarizeLevels`, `chooseCell`, `buildForecast`, `assembleForecast`, `assessSequence`),
@@ -77,7 +77,14 @@ lower bound above 0.9 twenty prompts in. The same simulation, same seed, per hal
 | 100 | **18/25** · 26 · 43 | 3/25 · 14 · 20 | 0/25 · 2 · 12 |
 
 Both variants **fail the test the answer's own half-life was chosen by**, at the intense cadence;
-H 100 fails it at two hours too. This is the measurable form of "old data must weigh much less than
+H 100 fails it at two hours too.
+
+The table is the throwaway script's. The committed harness (§6.1, condition 5) — the simulation
+exactly as `prediction.simulation.test.js` runs it — reads, still at 25 runs and an 8% limit (2 of
+25): H 30 **1/25** at six minutes and **1/25** at two hours (passes), H 50 **3/25** and 1/25
+(fails), H 100 **11/25** and **3/25** (fails both). The two disagree on the counts, which depend on
+how each script consumed the PRNG, and agree on every verdict. The harness is authoritative from
+here on. This is the measurable form of "old data must weigh much less than
 new", and it is the price of the wider horizon in §1.2. It is why §6 makes the simulation a
 promotion condition, and why this release is a measurement, not a candidate pipeline: the shadows
 exist to find out whether real histories reward the longer memory enough to reopen that trade.
@@ -183,8 +190,9 @@ need nothing but the outcomes the answer already read, so they run for **every**
 ### 3.3 Where they meet the report
 
 Never in an answering member. `attachShadow` stays as it is for `reported-capacity@1`. The variants
-reach the user only through `--verbose` (§8) and, in the minor that publishes them (§7, D1), the
-additive `shadows` member. The attempt row is the answer's, as in 1.5.0.
+reach the user only through `status --verbose` (§8), the additive `shadows` member of every
+`status --json` report and the variant entries of `stats`' `calibration.by_method` (§7.3, D1). The
+attempt row is the answer's, as in 1.5.0.
 
 ### 3.4 Cost on `status`
 
@@ -298,8 +306,8 @@ is `performance.test.js`'s 10 s and 150 MB heap for `stats --verbose --json` on 
 measured Codex `stats` at 3.3 s, so about 5.3 s with both variants. Scored arrays add about 5 MB per
 variant at that size, inside the heap cap.
 
-Under D1 (a), the variant backtests run only when `stats --verbose` renders them, so plain `stats`
-and `stats --json` keep their 1.5.0 time.
+Under D1 the variant entries are part of `stats --json` on every source, so `stats` pays for them
+whatever its flags: the one walk of §5.2 is what keeps that at about a second per variant.
 
 ---
 
@@ -314,9 +322,22 @@ The 1.5.0 rule (`reported-capacity-promotion-v1`, conditions 1-4), applied to a 
 2. `paired.live.restrictions ≥ 5`;
 3. `paired.live.brier < paired.live.baseline_brier`;
 4. `paired.backtest.restrictions ≥ 5` and `paired.backtest.brier < paired.backtest.baseline_brier`;
-5. **(D3)** the variant's policy passes the collapse simulation in `prediction.simulation.test.js`
-   as it stands — at most 8% of runs still claiming a lower bound above 0.9 twenty prompts into a
-   collapse, at a 6-minute and a 2-hour cadence. Today neither variant passes (§1.3).
+5. **(D3, mandatory)** the variant's policy passes the **collapse test** — the simulation the
+   answer's 30-prompt half-life was chosen by, unchanged — at every cadence it gates. Defined
+   exactly, so anyone can reproduce it:
+   - per cadence in {6 minutes, 2 hours}: a PRNG `mulberry32(20260809)` seeded afresh; 25 runs; each
+     run draws 200 prompts one cadence apart from `2026-01-01T00:00:00.000Z`, succeeding with
+     probability 0.99, then prompts succeeding with probability 0.70; one cell (band `moderate`,
+     category `typical`), prior `{strength: 1, viability: 0.5}`, completeness `complete`;
+   - the forecast built by `buildForecast` with the variant's policy at the start of the 21st
+     collapsed prompt (twenty collapsed outcomes seen) **still claims safety** when its lower bound
+     is above 0.9;
+   - **passes** when at most 8% of the runs (2 of 25) still claim safety, at both cadences.
+
+   Computed by `runCollapseTest` in `packages/cli/test/fixtures/collapse-simulation.js`, the same
+   function `prediction.simulation.test.js` gates the answer with; `npm run collapse:check` prints
+   the counts and the verdict for the answer and every variant and changes nothing — it promotes
+   nothing and writes no file. Today neither variant passes (§1.3).
 
 All measured on the maintainer's real histories through the real binary, in the minor that promotes,
 by a new ADR. Meeting them permits promotion; it decides nothing by itself.
@@ -349,37 +370,27 @@ criterion; the sequence horizon of §1.2 is not.
 
 ### 7.1 Capture the `1.5` corpus first
 
-Before any code, per the `snack-public-contract-schemas` skill. On this writing: no `v1.5.0` tag,
-`Publish release` run `37135818559` waiting for approval, `main` at `ea11c8d` with `package.json`
-at `1.5.0`, and `git diff --stat ea11c8d HEAD -- packages/ scripts/` empty. So:
+Before any code, per the `snack-public-contract-schemas` skill. As built: `v1.5.0` is tagged at
+`ea11c8d`, npm serves `1.5.0`, and `git diff --stat v1.5.0 HEAD -- packages/ scripts/` was empty
+when the capture ran. So:
 
-1. Capture from a clean checkout of `ea11c8d` — the commit the workflow publishes and tags — into
-   `packages/cli/test/fixtures/contracts/1.5/`: the thirteen documents of `1.4` (with the Codex
-   source, so `shadow` and `by_method` are exercised). Redact the root, check `grep -rl /tmp/`.
-2. Once the tag exists, confirm `git rev-parse 'v1.5.0^{commit}'` is `ea11c8d`; if not, recapture
-   from the tag.
-3. `FROZEN_VERSIONS` gains `"1.5"`; `compatibility.test.js` replays the `1.5` capture (§9).
-4. `FLOORS` in `scripts/upgrade-smoke.mjs` gains `"1.5.0"` **only after** npm serves it.
+1. Captured on that tree into `packages/cli/test/fixtures/contracts/1.5/`: the thirteen documents
+   of `1.4`, with the Codex source, so a computed `shadow` (`status.json`, `status-sequence.json`)
+   and `by_method` (`stats.json`) are exercised. `status.json` is the verbose-free `--json` answer.
+   The root is redacted; `grep -rl /tmp/` prints nothing.
+2. `FROZEN_VERSIONS` gains `"1.5"`; `compatibility.test.js` replays the `1.5` capture (§9).
+3. `FLOORS` in `scripts/upgrade-smoke.mjs` gains `"1.5.0"`, and CLAUDE.md's floor list with it.
 
-### 7.2 Patch or minor (D1)
+### 7.2 A minor (D1)
 
 `PLAN.md` "Stable 1.x" and `compatibility.md`'s deprecation policy: "additive public fields/options
 may enter a minor release; compatible defect fixes enter patch releases." Every JSON change below is
 additive — no required field, no version moves, every frozen corpus still validates — and therefore
-**belongs in a minor**. `1.5.1` is a patch. Three ways out:
+belongs in a minor. The draft weighed a patch that published nothing on a frozen surface; the user
+chose instead to ship the variants **in `1.6.0`, JSON included**, beside `snack dash`, which another
+slice builds (D1). The patch was never published, so nothing published is renumbered.
 
-- **(a) Recommended. `1.5.1` publishes nothing on a frozen surface.** Variants computed, recorded
-  (`019`) and calibrated; visible in `status --verbose` and `stats --verbose`, which are human
-  formatting (not frozen — the `1.1.3` precedent). Every `--json` document is byte-identical to
-  `1.5.0`'s for every source. The JSON of §7.3 is fully specified here and lands in the next minor
-  (`1.6.0`, or the one after), reading rows recorded since `1.5.1`, so no record is lost; promotion
-  needs a later minor anyway. Cost: the renderer gets the variant views beside `data` rather than in
-  it, one argument that the minor removes.
-- (b) Renumber: this release is `1.6.0`, `snack dash` moves to `1.7.0`. Breaks the rule PLAN.md
-  states under its release table against renumbering published commitments.
-- (c) Ship §7.3 in `1.5.1` and record the deviation. Breaks strict SemVer as PLAN.md states it.
-
-### 7.3 Additive fields (in the minor that publishes them)
+### 7.3 Additive fields
 
 Envelope `schema_version` 2, export 2, configuration 1, spool 1: unchanged. Every field optional,
 absent — never `null` — when it does not apply.
@@ -398,7 +409,8 @@ every report (every source now has at least one shadow method):
 removed in 1.x. Its description gains: "also the `reported-capacity` entry of `shadows`". New
 member placed **last**, so every 1.5.0 member keeps its byte position.
 
-**`stats.schema.json`, `calibration.by_method`:** present on **every** source. Entries: the answer,
+**`stats.schema.json`, `calibration.by_method`:** present on **every** source, superseding 1.5.0's
+D5. Entries: the answer,
 then `reported-capacity@1` where present (positions 0-1 on a Codex source are byte-identical to
 1.5.0's), then each variant with `role: "shadow"`, `includes: ["<id>@<version>"]`, `live`,
 `backtest`, `paired`. `role` stays `answer | shadow`.
@@ -407,8 +419,8 @@ Is by_method's new presence allowed? **Additive, yes:** the field gains document
 and a consumer must tolerate added fields. The schema description's "present only when a Codex CLI
 installation feeds this capacity source -- the one kind of source where a second method runs" stops
 being true and is rewritten to "present whenever a shadow method runs: on every source from
-`<minor>`". A consumer that used `by_method`'s presence to detect Codex was never promised that —
-`reported_capacity` is the documented Codex signal — and `compatibility.md` says so in the minor's
+`1.6.0`". A consumer that used `by_method`'s presence to detect Codex was never promised that —
+`reported_capacity` is the documented Codex signal — and `compatibility.md` says so in its `1.6.0`
 section. The 1.5.0 decision D5 (by_method only on Codex, to keep other sources byte-identical to
 1.4) is superseded there, deliberately.
 
@@ -416,11 +428,11 @@ section. The 1.5.0 decision D5 (by_method only on Codex, to keep other sources b
 
 ### 7.4 Byte-identity, asserted
 
-- **Under (a), `1.5.1`:** `compatibility.test.js` replays the `1.5` capture and asserts every
-  document byte-identical, whole, every source — stronger than 1.5.0's assertion — while
-  `prediction_shadow` holds two rows per recorded attempt (non-vacuity).
-- **In the minor:** every report differs from `1.5` only by `shadows`, and every `stats` report only
-  by `by_method` (new on non-Codex sources, two appended entries on Codex ones).
+- `compatibility.test.js` replays the `1.5` capture: `setup-*` and `sync` byte-identical whole;
+  every `status` report differs from `1.5` only by `shadows` (and its `shadow`, where present, is
+  byte-identical), and every `stats` report only by `by_method` (new on non-Codex sources, two
+  appended entries on Codex ones, whose first two are byte-identical to `1.5`'s) — while
+  `prediction_shadow` holds two rows per recorded attempt that computed them (non-vacuity).
 - **Always:** the answer — `status`, `status --sequence`, their answering members, the envelope
   status and warnings, the overview, `stats`' top-level figures — equals what the answer alone gives
   (`shadow.property.test.js`, extended; §9).
@@ -473,16 +485,16 @@ suffix appears once per panel, on the first shadow line. Never on the default pa
 | File | What it asserts |
 | --- | --- |
 | `prediction.test.js` | a variant at H 30 equals the answer in every member but `method`/`model_policy_version`; `WEIGHTING_VARIANTS` frozen, ids kebab, policy versions distinct, every half-life finite and the time half-life unchanged (the "always decays" guard); `buildForecast` without `method` is byte-identical to 1.5.0's |
-| `prediction.simulation.test.js` | the collapse simulation run per variant, **recorded, not gated** (asserts the measured counts of §1.3 so a policy change is seen); the existing test unchanged for the answer |
+| `prediction.simulation.test.js` | the collapse simulation run per variant through the harness of §6.1 condition 5, **recorded, not gated** (asserts the measured counts so a policy change is seen); the existing test's assertion unchanged for the answer |
 | `calibration.test.js` | property: `backtestWeightings(...)[0]` deep-equals a frozen copy of 1.5.0's `backtest`, double for double, over arbitrary histories (mutation: apply one policy's recency factor to another's weights → fails); each variant's result equals a single-policy `backtest` with that policy; a variant at the prior is not scored and `paired` stays aligned; `liveByMethod`: the answer's entry deep-equals `summarizeCalibration(pairs)`, sample sizes independent, `paired` the same outcomes on both sides, versions never pooled, `reported-capacity@1` unchanged |
 | `status` / `shadow.property.test.js` | for arbitrary histories on OpenCode, Claude and Codex sources: the answer, `--sequence 3`, envelope status, warnings and overview equal the answer alone; mutation-checked by letting a computed variant replace the answer |
 | `prediction-storage.test.js` / `storage.test.js` | attempt, sequence, reported shadow and both variant rows commit or roll back together; immutability; `readCalibrationPairs` returns exactly 1.5.0's rows with variant rows present; `019` applies from every published level, `1.5.0`'s included |
 | `purge.test.js` | variant rows go with their attempts, counted as predictions |
 | `compatibility.test.js` | §7.4 |
-| `contracts.test.js` | `"1.5"` in `FROZEN_VERSIONS`; in the minor, `shadows` and every-source `by_method` validated |
+| `contracts.test.js` | `"1.5"` in `FROZEN_VERSIONS`; `shadows` and every-source `by_method` validated |
 | `render.test.js` / `vocabulary.test.js` | §8 verbatim; never on the default panel or overview; vacuity guards for `recency half-life`, `not the answer above`, `bayesian-pressure-band-hl50` |
 | `privacy.test.js` | canaries through a run that computes variants; `prediction_shadow` holds none |
-| measured, spawned (like 1.5.0 §9.4) | `status --no-sync` p95 on 100,000-prompt Claude Code and Codex histories, interleaved with the published `1.5.0`, under 250 ms; `stats --verbose --json` on 100,000 under 10 s; recorded in `docs/release/performance.md` |
+| measured, spawned (like 1.5.0 §9.4) | `status --no-sync` p95 on 100,000-prompt Claude Code and Codex histories, interleaved with the published `1.5.0`, under 250 ms; `stats --verbose --json` on 100,000 under 10 s; recorded in `docs/release/performance.md` by the release PR |
 
 ---
 
@@ -493,15 +505,15 @@ suffix appears once per panel, on the first shadow line. Never on the default pa
   `createWeightingShadows`.
 - **S2 storage.** `019`, `recordPredictionAttempt`'s fifth argument, `readShadowForecasts`, purge.
 - **S3 calibration.** `backtestWeightings` with `backtest` on top of it, `liveByMethod` generalized,
-  variant entries built in `buildCalibrationReport` (under D1 (a): only for `--verbose`).
+  variant entries built in `buildCalibrationReport` for every source.
 - **S4 surface.** `status --verbose` rows, `stats --verbose` entries, vocabulary; the measured
   budgets of §9.
 - **S5 docs.** CONTEXT **Recency half-life**; `docs/specification/analysis.md` a section on weighting
-  variants; ADR-0011 "a shadow earns the answer by its record" (the shadow mechanism and both
-  promotion rules in one place, ADR-0007's amendment pointing to it); `compatibility.md` "What 1.5.1
-  changes, and why it is a patch" (or "adds, and why it is a minor"); the roadmap entry closed.
-- **S6 JSON — in a minor only (D1).** §7.3 schemas, `shadows`, `by_method` everywhere, render side
-  channel removed, a new corpus captured first.
+  variants; `docs/specification/cli.md`; `compatibility.md` "What 1.6.0 adds" (the D5 supersession,
+  `shadows`, `by_method` on every source); the man page regenerated. ADR-0011 "a shadow earns the
+  answer by its record" and the roadmap entry belong to the release PR.
+- **S6 JSON (in scope, D1).** §7.3 schemas, `shadows`, `by_method` everywhere; the `1.5` corpus
+  captured first (S0). The renderer reads the variants from the report itself: no side channel.
 
 Reviewer focus: no path from a variant into an answering member; `backtest`'s doubles unchanged;
 `readCalibrationPairs` untouched; immutability of `prediction_shadow`; the budget measurements.
@@ -510,10 +522,12 @@ Reviewer focus: no path from a variant into an answering member; `backtest`'s do
 
 ## 11. Decisions for the user
 
+The questions as they were put; the answers are in §12 and take precedence.
+
 **D1. Patch or minor.** The JSON additions are additive and therefore minor-only (§7.2).
-**Recommendation: (a)** — `1.5.1` records and calibrates the variants and shows them only under
-`--verbose`; the `shadows` member and `by_method` on every source land in the next minor, reading
-the record `1.5.1` started.
+**Recommendation (draft):** a patch that records and calibrates the variants and shows them only
+under `--verbose`, with the `shadows` member and `by_method` on every source landing in the next
+minor.
 
 **D2. The set: `hl50` and `hl100`, recency only, time half-life unchanged.** **Recommendation:
 accept.** A 14-day time variant duplicates the answer at any real cadence and cannot meet the
@@ -532,3 +546,48 @@ lowest paired Brier, which selects for luck at these samples.
 **D5. Whether `shadows` repeats `reported-capacity@1`** (minor only). **Recommendation: yes** — one
 list a consumer can read for every shadow, present and future; `shadow` stays as the 1.5 alias for
 the rest of 1.x. Alternative: `shadows` holds only the variants, and a consumer reads two members.
+
+---
+
+## 12. Decisions
+
+Taken by the user before the build. They override any earlier section they contradict, and
+sections 1-11 have been revised to match.
+
+**D1 — Ship in `1.6.0`, a minor, JSON included.** There is no patch release. The variants ship in the
+minor `1.6.0`, beside `snack dash` (another slice). Slice S6 is in scope: the additive `shadows`
+array on every source's `status` report, with 1.5's `shadow` member kept byte-identical for 1.5
+consumers, and `calibration.by_method` on every source that has a shadow — in `1.6.0`, every source.
+This supersedes 1.5.0's D5 (`by_method` only on Codex-fed sources), deliberately, and
+`compatibility.md`'s `1.6.0` section says so. The draft's patch / `--verbose`-only framing is
+withdrawn.
+
+**D2 — The set is `bayesian-pressure-band-hl50@1` and `bayesian-pressure-band-hl100@1`**, model
+policies `recency-hl50-v1` and `recency-hl100-v1`: recency only. The 7-day time half-life stays, in
+the answer and in both variants.
+
+**D3 — The collapse test is a mandatory promotion condition** (§6.1, condition 5). It is defined as
+exactly the test that chose the answer's 30-prompt half-life, with its 8% limit: at a 6-minute and a
+2-hour cadence, at most 2 of 25 runs may still claim a lower bound above 0.9 twenty prompts into a
+collapse from 0.99 to 0.70. It is computed by `runCollapseTest`
+(`packages/cli/test/fixtures/collapse-simulation.js`), the function `prediction.simulation.test.js`
+gates the answer with, and reproduced by `npm run collapse:check`, which prints each policy's counts
+and verdict and promotes nothing. A variant that fails it cannot be promoted whatever its Brier
+score; relaxing the test is an explicit decision of a promoting release, never a side effect.
+
+**D4 — If several variants pass, promote the shortest half-life** (§6.3).
+
+**D5 — `shadows` also lists `reported-capacity@1`**, first, where a Codex installation feeds the
+source; it is the same object as `shadow`.
+
+### 12.1 Evidence the user saw
+
+- **Collapse failures, 1.5.0 era** (§1.3, the investigation's script): at the 6-minute cadence H 50
+  left **5/25** runs still claiming safety and H 100 **18/25**, against the 8% limit (2/25). The
+  committed harness, built for D3, reads H 50 3/25 and H 100 11/25 at that cadence (H 100 also
+  3/25 at two hours): the same verdicts.
+- **Near-indistinguishable effective sample on the maintainer's history**: at 1.6 prompts a day in
+  the cell, ESS **12.3 / 13.7 / 15.0** for H 30 / 50 / 100 (§1.2, first row). Where the user
+  actually works, the variants and the answer read nearly the same evidence, and their record will
+  say little for a long time.
+
