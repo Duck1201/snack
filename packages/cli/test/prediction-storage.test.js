@@ -397,3 +397,104 @@ test("readOutcomeRows can return only the most recent prompts, still chronologic
   );
   assert.equal(readOutcomeRows(databaseFile, "work").length, 10);
 });
+
+/** @returns {import("../src/storage.js").PredictionShadowRow} */
+function shadowRow(overrides = {}) {
+  return {
+    method_id: "reported-capacity",
+    method_version: "1",
+    model_policy_version: "reported-capacity-v1",
+    evidence_policy_version: "reported-capacity-evidence-v1",
+    lower: 0.1,
+    point: 0.3,
+    upper: 0.6,
+    coverage_target: 0.8,
+    risk_label: "high",
+    evidence_level: "very_low",
+    backoff_level: "stated_full_prior",
+    posterior_alpha: 0.2,
+    posterior_beta: 0.8,
+    installation_id: "11111111-1111-4111-8111-111111111111",
+    limit_id: "codex",
+    window_minutes: 300,
+    used_percent: 100,
+    resets_at: "2026-01-09T05:00:00.000Z",
+    stated_at: "2026-01-08T23:59:00.000Z",
+    band: "full",
+    policy_version: "reported-capacity-v1",
+    ...overrides,
+  };
+}
+
+test("an attempt and its shadow commit together or not at all", async () => {
+  const { databaseFile } = await makeDatabase();
+  const id = recordPredictionAttempt(databaseFile, attempt(), undefined, shadowRow());
+
+  // A shadow that breaks a constraint takes its attempt down with it.
+  assert.throws(
+    () =>
+      recordPredictionAttempt(
+        databaseFile,
+        attempt({ generated_at: "2026-01-09T01:00:00.000Z" }),
+        undefined,
+        shadowRow({ band: "unknown" }),
+      ),
+    /CHECK constraint failed/u,
+  );
+  assert.equal(readPredictionAttemptCount(databaseFile, "work"), 1);
+
+  const database = new Database(databaseFile);
+  try {
+    const stored = database
+      .prepare("SELECT * FROM prediction_reported_capacity WHERE prediction_attempt_id = ?")
+      .get(id);
+    assert.deepEqual(stored, { prediction_attempt_id: id, ...shadowRow() });
+    // A figure above 100 is possible, and the copy does not refuse one.
+    recordPredictionAttempt(
+      databaseFile,
+      attempt({ generated_at: "2026-01-09T02:00:00.000Z" }),
+      undefined,
+      shadowRow({ used_percent: 100.5 }),
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("calibration pairs carry the answering method and the shadow recorded beside it", async () => {
+  const { databaseFile, seed } = await makeDatabase();
+  seed([
+    { id: 1, started_at: "2026-01-09T02:00:00.000Z" },
+    { id: 2, started_at: "2026-01-09T04:00:00.000Z", outcome: "restricted" },
+  ]);
+  const withShadow = recordPredictionAttempt(databaseFile, attempt(), undefined, shadowRow());
+  const plain = recordPredictionAttempt(
+    databaseFile,
+    attempt({ generated_at: "2026-01-09T03:00:00.000Z" }),
+  );
+  for (const id of [withShadow, plain]) {
+    recordPredictionDelivery(databaseFile, {
+      prediction_attempt_id: id,
+      delivered_at: id === withShadow ? "2026-01-09T00:00:01.000Z" : "2026-01-09T03:00:01.000Z",
+      channel: "stdout",
+      format: "json",
+      invocation_id: `invocation-${id}`,
+    });
+  }
+  linkPrimaryEvaluations(databaseFile, "work", "stage5-evaluation-v1");
+
+  const pairs = readCalibrationPairs(databaseFile, "work");
+  assert.deepEqual(
+    pairs.map((pair) => [
+      pair.method_id,
+      pair.method_version,
+      pair.shadow_method_id,
+      pair.shadow_point,
+      pair.outcome,
+    ]),
+    [
+      ["bayesian-pressure-band", "1", "reported-capacity", 0.3, "success"],
+      ["bayesian-pressure-band", "1", null, null, "restricted"],
+    ],
+  );
+});
