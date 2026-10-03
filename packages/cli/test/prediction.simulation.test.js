@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { EVIDENCE_POLICY, PREDICTION_POLICY, buildForecast } from "../src/prediction.js";
+import {
+  EVIDENCE_POLICY,
+  PREDICTION_POLICY,
+  WEIGHTING_VARIANTS,
+  buildForecast,
+} from "../src/prediction.js";
+import { COLLAPSE_TEST, runCollapseTest } from "./fixtures/collapse-simulation.js";
 
 /**
  * Deterministic PRNG so simulation evidence is reproducible.
@@ -289,56 +295,42 @@ test("simulation: the period aggregate is unreliable when cells differ", () => {
 
 // Evidence for PREDICTION_POLICY.recency_half_life_prompts: the forecast must stop calling
 // a collapsed source safe, and it must do so after a similar number of prompts whatever
-// the user's cadence, which elapsed-time decay alone cannot deliver.
+// the user's cadence, which elapsed-time decay alone cannot deliver. The simulation itself is
+// `runCollapseTest`, shared with the promotion condition a weighting variant must meet.
 test("simulation: a collapse is admitted within a bounded number of prompts at any cadence", () => {
-  const start = Date.parse("2026-01-01T00:00:00.000Z");
-
-  for (const gapMinutes of [6, 120]) {
-    const random = mulberry32(20260809);
-    let stillSafeAfterTwenty = 0;
-    const repetitions = 25;
-
-    for (let repetition = 0; repetition < repetitions; repetition += 1) {
-      /** @type {import("../src/prediction.js").OutcomeRow[]} */
-      const rows = [];
-      for (let index = 0; index < 200; index += 1) {
-        rows.push({
-          started_at: new Date(start + index * gapMinutes * MINUTE).toISOString(),
-          outcome: random() < 0.99 ? "success" : "restricted",
-          pressure_band: "moderate",
-          size_category: "typical",
-        });
-      }
-      for (let index = 0; index <= 20; index += 1) {
-        const at = new Date(start + (200 + index) * gapMinutes * MINUTE);
-        if (index === 20) {
-          const forecast = buildForecast({
-            now: at,
-            prior: { strength: 1, viability: 0.5 },
-            expectedBand: "moderate",
-            expectedCategory: "typical",
-            outcomes: rows,
-            dataCompleteness: "complete",
-          });
-          if (forecast.viability.lower > 0.9) stillSafeAfterTwenty += 1;
-        }
-        rows.push({
-          started_at: at.toISOString(),
-          outcome: random() < 0.7 ? "success" : "restricted",
-          pressure_band: "moderate",
-          size_category: "typical",
-        });
-      }
-    }
-
-    // Twenty prompts into a collapse from 0.99 to 0.70 the run has seen roughly six
-    // refusals, but an unlucky stretch can still show two, and a forecast that stays
-    // optimistic on that evidence is defensible. What must not happen is the old
-    // behaviour: with elapsed-time decay alone every single run still called the source
-    // safe at both cadences. Measured here: 1/25 at six minutes, 0/25 at two hours.
+  const result = runCollapseTest(PREDICTION_POLICY);
+  // Twenty prompts into a collapse from 0.99 to 0.70 the run has seen roughly six
+  // refusals, but an unlucky stretch can still show two, and a forecast that stays
+  // optimistic on that evidence is defensible. What must not happen is the old
+  // behaviour: with elapsed-time decay alone every single run still called the source
+  // safe at both cadences. Measured here: 1/25 at six minutes, 1/25 at two hours.
+  for (const cadence of result.cadences) {
     assert.ok(
-      stillSafeAfterTwenty <= repetitions * 0.08,
-      `at a ${gapMinutes}-minute cadence, ${stillSafeAfterTwenty}/${repetitions} runs still claimed a lower bound above 0.9 twenty prompts after viability fell to 0.7`,
+      cadence.still_safe <= COLLAPSE_TEST.runs * COLLAPSE_TEST.max_still_safe_share,
+      `at a ${cadence.gap_minutes}-minute cadence, ${cadence.still_safe}/${COLLAPSE_TEST.runs} runs still claimed a lower bound above 0.9 twenty prompts after viability fell to 0.7`,
     );
   }
+  assert.ok(result.passes);
+  assert.deepEqual(
+    result.cadences.map((cadence) => cadence.still_safe),
+    [1, 1],
+  );
+});
+
+// Recorded, not gated: the weighting variants' counts on the same test (spec §1.3). Both fail it
+// today, which is promotion condition 5 refusing them; the counts are asserted so a change to the
+// test or to a variant's policy is seen rather than slipping by.
+test("simulation: the weighting variants' collapse counts are recorded, and both fail today", () => {
+  const recorded = WEIGHTING_VARIANTS.map((variant) => {
+    const result = runCollapseTest(variant.policy);
+    return [
+      variant.policy.version,
+      result.cadences.map((cadence) => cadence.still_safe),
+      result.passes,
+    ];
+  });
+  assert.deepEqual(recorded, [
+    ["recency-hl50-v1", [3, 1], false],
+    ["recency-hl100-v1", [11, 3], false],
+  ]);
 });
