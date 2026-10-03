@@ -377,6 +377,61 @@ ceils its upper end to a whole percent, where `1.3` rounded both to the nearest 
 move by one point (`0.6394` was `64` and is `63`). Human formatting is not a frozen surface, and no
 `--json` value, corpus document or export byte changes with it.
 
+## What 1.5.0 adds, and why it is a minor
+
+**A second method, in shadow: the answer does not move.** For a capacity source a Codex CLI
+installation feeds, `status` also computes `reported-capacity@1` — a forecast whose cells are keyed
+on the band of the window Codex states (ADR-0007, amended `1.5.0`) — records it, and calibrates it,
+but never shows it as the answer. The `next prompt` interval, the risk label, the evidence level, the
+method, `sequence`, the caveats and every human surface but `--verbose` are the baseline's, for every
+source, Codex-fed ones included. A test replays the `1.4` corpus capture on today's tree and asserts
+it byte for byte; a property test drives `status` with arbitrary fresh Codex statements and asserts
+the answer equals the one the baseline alone gives — and fails when the shadow is allowed to answer.
+
+**`status --json` gains one optional member per Codex-fed report.** `shadow`: `method`
+(`reported-capacity`, version `1`), `computed`, `reason` (null when computed, else one of
+`no_statement`, `before_period`, `stale`, `windows_reset`, `superseded`, `no_local_outcomes`),
+`binding` (the window it read — installation, limit, window length, stated and reset instants,
+`band` — and never the stated figure, which `reported_capacity` quotes once), `policy_version`
+(`reported-capacity-v1`), and, exactly when `computed` is true, `viability`, `risk`, `evidence`
+(policy `reported-capacity-evidence-v1`), `model_policy_version` and `contributors`. It is present
+exactly when `reported_capacity` is, and absent — never `null` — for every other source, whose
+report is byte-identical to `1.4`'s. `reported_capacity.description` now says it informs only the
+shadow. `--sequence` stays baseline-only: the shadow never answers, so it has no sequence.
+
+**`stats --json` gains one optional member per Codex-fed report.** `calibration.by_method`: one
+entry per method — `id`, `version`, `role` (`answer` or `shadow`), `includes` (`initial-generic@1`
+is folded into `bayesian-pressure-band@1`, its last rung), `live`, `backtest` (with `forecasts`) —
+answering method first. The shadow entry adds `paired.live` and `paired.backtest`: `sample_size`,
+`restrictions`, `brier` and `baseline_brier` over exactly the same outcomes, the comparison that
+decides whether the method may ever answer. The top-level `live` and `backtest` keep their meaning and
+their numbers. Absent for a source no Codex installation feeds.
+
+**Human output: one `--verbose` row.** `status --verbose` adds a `shadow` row after `reported`; the
+default panel, the overview and `--sequence` without `--verbose` never show it. `stats --verbose`
+adds a `by method` block. Human formatting is not a frozen surface.
+
+**No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
+`PREDICTION_POLICY.version` stays `stage5-prediction-v2`; the shadow names its own policies. No new
+flag, exit code, configuration key or reason. `status.schema.json` and `stats.schema.json` declare
+the new members; every frozen corpus — `0.9`, `1.2`, `1.3`, and the `1.4` corpus captured at
+`v1.4.0` before any of this changed — still validates, unchanged.
+
+**Two migrations, append-only.** `017` creates `prediction_reported_capacity`, one row per attempt
+whose invocation computed the shadow, written in the attempt's transaction, holding the shadow's
+interval, labels, policies and the binding window it read; immutable on `UPDATE`, deletable only by
+`data purge` (the `009` pattern), counted with `counts.predictions`, so `data-purge.schema.json`
+does not move. `018` adds `stated_band` and `stated_band_policy_version` to `prompt_execution` and
+two indexes: a rebuildable projection of the band each prompt began in, recomputed after every
+synchronization from the earliest prompt or statement that moved, and after every purge. It exists
+because replaying the stated timeline inside `status` cost the `status --no-sync` budget its margin
+(`docs/history/specs/reported-capacity-method/spec.md` §9.4). Neither the table nor the columns are
+**exported**: a new table or column would fail every version-2 validator. The first `sync` after the
+upgrade computes the whole projection once; on a 100,000-prompt Codex history with 200,000 reported
+rows it took 3.1 s with the backup, and the file grew 156.7 → 173.0 MB. `storage.test.js` upgrades
+every published schema level, `1.4.0`'s included, straight to `018`, and `npm run upgrade:smoke`
+upgrades a database the published `1.4.0` wrote.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

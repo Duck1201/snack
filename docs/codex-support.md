@@ -189,8 +189,10 @@ with the `limit_id` it was stated for.
 `--json` as the optional `reported_capacity` array. A reset is said as a duration within a day and as
 a weekday after that, and an absolute time says `UTC`; a window whose reset has passed is not
 repeated, and each window in `--json` carries `reset_passed`. It is never an input to the viability interval,
-the risk label, the evidence level or usage pressure. `plan_type` is shown and never rotates the
-capacity period, which stays keyed on the plan label the user configured.
+the risk label, the evidence level or usage pressure. From `1.5` it informs only the
+`reported-capacity` shadow estimate ([analysis.md §9.9](./specification/analysis.md)), which is
+recorded and calibrated beside the answer and never shown as it. `plan_type` is shown and never
+rotates the capacity period, which stays keyed on the plan label the user configured.
 
 **Reported figures stay local in `1.3`: `export` does not include them.** Adding a table to the
 export document would be a breaking export change, which from `1.0` takes a major release.

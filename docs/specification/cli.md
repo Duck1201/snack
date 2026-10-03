@@ -151,6 +151,34 @@ installation feeds. A figure is attributed to a source only when the stating thr
 to that one source; while the provider maps to more than one source of the installation, it waits
 with that thread's prompts.
 
+**From 1.5, a shadow estimate under `--verbose`, and never the answer.** For a source a Codex
+installation feeds, `status` also computes the `reported-capacity@1` method from the window Codex
+states ([analysis.md §9.9](analysis.md)), records it, and leaves the answer to the baseline: the
+`next prompt` row, `next <n>`, the risk, the evidence, the method row and the overview are the ones
+the baseline gives, whatever Codex states. The shadow is shown on one human surface only — the
+`--verbose` panel, as a `shadow` row after `reported` and before `as of`.
+
+```text
+  reported     Codex states 86% of its 5h window, resets in 1h 12m · 3m ago
+  shadow       reported-capacity@1 would say 41-97% · risk high · evidence low — recorded to compare, not the answer above
+               reads what Codex states about its 5h window — stated nearly full · reported-capacity-v1
+```
+
+The first line says what the method would say, with the method named first, and that it is not
+the answer above it. The interval is rounded outward like every other shown interval and carries no
+stated percentage: the figure it read is quoted once, on the `reported` row. The second line names
+the window it read and the stated band — no qualifier in `clear`, "stated nearly full" in `near`,
+"stated full until it resets" in `full` — and the policy version. When the band is `full` and no
+prompt of the user's has been seen in that state, the second line reads instead "a starting
+assumption — Codex states its 5h window is full, and no prompt of yours has been seen in that state
+yet", because the interval is then the versioned assumption and nothing else. When the shadow was
+not computed the row says why on one line, `reported-capacity@1 not computed —` and then "no
+figure stated yet", "stated before this period", "stale, stated 7h ago", "every window has reset",
+"another client sent a prompt since" or "no outcome of yours to read yet". The default panel, the
+overview and every surface without `--verbose` never show the shadow. In `--json` it is the optional
+`shadow` member of that source's report (see [compatibility.md](../compatibility.md)), absent for a
+source no Codex installation feeds.
+
 **With `--sequence <n>`, a second estimate beneath the first.** From 1.4, `--sequence <n>` also
 assesses **sequence viability**: the probability that prompts sent one after another — all of the
 next `n` — complete without an observed restriction. `n` is the user's own number, a whole number from 1 to
@@ -226,6 +254,22 @@ missing count; the per-model breakdown, counted in usage slices; both calibratio
 Brier scores, sample sizes and interval coverage; and the policy versions. A statistic is never
 reported as a bare number without its unit and sample size, and those travel with it under
 `--verbose` rather than being dropped.
+
+From 1.5, for a source a Codex installation feeds, `--verbose` closes the calibration block with
+`by method`: one line per method — its identifier, its role (`answer` or `shadow`), and its live and
+backtest Brier scores, each with its sample size — and, beneath the shadow's line, its comparison
+with the answering baseline over exactly the same outcomes, live and replayed, with the number of
+those outcomes and of the restrictions among them.
+
+```text
+  by method
+    bayesian-pressure-band@1  answer · live brier 0.010, sample 40 · backtest brier 0.017, sample 84
+    reported-capacity@1       shadow · live not available yet · backtest brier 0.019, sample 71
+                              same outcomes as the baseline · live not available yet · backtest brier 0.019 against 0.017, sample 71, 1 restricted
+```
+
+A stream with nothing scored yet says "not available yet", never zero. The default `stats` output
+is unchanged. In `--json` the same figures are the optional `calibration.by_method` array.
 
 `--by-client` compares the clients feeding each capacity source. It answers the one question a
 shared source invites: whether one client is refused more often than the others against the same

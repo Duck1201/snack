@@ -114,6 +114,8 @@ Historical rolling-origin evaluation must construct each forecast using only obs
 
 A sequence-viability answer (§9.8) is recorded too, but beside its attempt in a table of its own, never as an attempt: an attempt is scored against one prompt, and a sequence is not a forecast about one prompt.
 
+From 1.5 a shadow forecast (§9.9) is recorded beside its attempt in the same way, in `prediction_reported_capacity`, with the binding window it read. The attempt itself always carries the forecast the user was shown — the baseline's.
+
 ### 9.7 Promotion of Advanced Models
 
 Regression, survival analysis, clustering, time-series methods, or ML remain experimental until they:
@@ -139,6 +141,18 @@ From 1.4, `status --sequence <n>` also answers for a **user-supplied** number `n
 - **Recording.** Each answer is stored in `prediction_sequence`, keyed on the attempt the same invocation recorded, with the posterior `α` and `β` so a later calibration can reproduce it without recalculating the past. Delivery is the parent attempt's. It is immutable, deleted only by `data purge` with its attempt, and not exported.
 - **Calibration** is for a later release and is never folded into the live stream. The outcome is definable — the next `n` eligible prompts of the same capacity period all completed — but successive invocations produce overlapping, dependent windows, which need their own primary-forecast rule before a Brier score means anything (ADR-0008's separate calibration report). Until then `stats` is identical whether or not `--sequence` was ever used.
 
+### 9.9 Reported-capacity Method (shadow)
+
+From 1.5, for a capacity source a Codex CLI installation feeds, a second named method — `reported-capacity`, version `1`, model policy `reported-capacity-v1` — is computed beside the baseline on every `status`. It runs **in shadow**: it is recorded and calibrated, and it never answers. The `next prompt` interval, the risk, the evidence, the method, `--sequence` and the caveats are the baseline's for every source ([ADR-0007](../adr/0007-quote-codex-reported-capacity.md), amended 1.5.0). The specification, the measured history behind it, and the rule for ever promoting it are in [`docs/history/specs/reported-capacity-method/spec.md`](../history/specs/reported-capacity-method/spec.md).
+
+- **Binding window.** At an instant, the latest statement per installation and limit is filtered: made in the active capacity period (the source's first period absorbs earlier history, exactly as it absorbs earlier prompts); at most `max_age_seconds` = 21,600 old (exactly six hours binds, one second more does not); then the most recent statement wins across installations and limits (ties by installation, then limit) — two limits are never combined; of its windows, only those whose reset is null or later than the instant; the highest stated figure binds, a tie going to the shorter window. Below full, a prompt another installation started on the source after the statement supersedes it; a full statement survives that, since within an unreset window a stated figure only rises. No usable window: the shadow is not computed, and says why.
+- **Stated band.** `clear` below 80, `near` from 80, `full` from 100 (a figure above 100 is `full`), under `reported-capacity-v1`.
+- **Cells.** The baseline's Beta-Binomial, decay, recency and evidence window, keyed on the stated band each outcome *began in* — resolved at its own start from statements strictly earlier and prompts that started strictly earlier — instead of on the pressure band. Pressure is never read. `clear`/`near`: band + size category, band, the period aggregate; a ladder that would end at the plan prior is not computed (`no_local_outcomes`): a prior relabelled as a figure-informed estimate is what §9.1 forbids. `full`: band + category, band, then `stated_full_prior`; it never backs off to the period aggregate, whose prompts were sent in `clear`. Below the cell minimum the `full` cell's own evidence is still read, on the full prior.
+- **Full prior.** `Beta(0.2, 0.8)`: mean 0.2, the strength of every bundled plan profile, giving `0-70%` at 80% coverage with no outcome seen. No observation stands behind 0.2 — the history the method was specified from never stated 100 — and wherever the interval is that assumption alone, the surface says "a starting assumption".
+- **Evidence.** The baseline's gates and thresholds under `reported-capacity-evidence-v1`, whose relevance ceilings are `low` for both stated cells and `very_low` for the period and the full prior: no simulation and no meaningful calibration stand behind stated cells yet.
+- **Projection.** The band each prompt began in is stored on the prompt (`stated_band`, migration 018) and recomputed after every synchronization from the earliest prompt or statement that moved, and after every purge — a rebuildable projection, like the size category, so `status` replays nothing.
+- **Not modelled in v1.** Time to reset beyond the binding rule; a sequence crossing a reset; any curve near 100. Each needs outcomes in `near` and `full` cells first.
+
 ## 10. Calibration and Quality Metrics
 
 Primary predictive quality is calibration. SNACK tracks:
@@ -154,6 +168,8 @@ Primary predictive quality is calibration. SNACK tracks:
 Simple accuracy is never the primary metric because restrictions are rare and a constant high-success prediction could look accurate while being useless.
 
 Calibration shown to users must distinguish live prediction snapshots from retrospective backtesting.
+
+**Per method.** From 1.5, where a shadow method runs (§9.9), `stats` also reports calibration per method, each with its own sample sizes and never pooled across methods or versions. The answering baseline's live stream is every delivered attempt it answered — `initial-generic@1` folded in as its last rung — with the attempt's numbers; the shadow's live stream is every one of those attempts it was computed beside, with its own recorded numbers. Its backtest replays the history as of each prompt from the stated band each prompt began in, and scores only the prompts where it would have been computed, so its sample is smaller than the baseline's. Both carry `paired`: the shadow's Brier score and the baseline's over exactly the same outcomes, with how many of them were restrictions. That comparison, and nothing else, decides whether the method may answer in a later release; the rule is in the method's specification. The top-level live and backtest streams keep their meaning and their numbers.
 
 ## 11. Statistics Behavior
 
