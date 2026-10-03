@@ -501,3 +501,68 @@ export function executeOpenCodeSql(databaseFile, sql) {
     database.close();
   }
 }
+
+/**
+ * Write stated figures straight into the two tables a statement lives in, the way
+ * `storeObservations` writes them, and nothing else. A whole ingestion batch would also move the
+ * cursor and possibly the period, and a test comparing two histories would then be comparing two
+ * different ones.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ * @param {string} installationId a Codex installation already bound to `alias`
+ * @param {{observation_key: string, observed_at: string, limit_id: string | null, plan_type: string | null, windows: {window_minutes: number, used_percent: number, resets_at: string | null}[], parser_version: string}[]} snapshots
+ * @param {Date} now
+ */
+export function plantStatements(databaseFile, alias, installationId, snapshots, now) {
+  const database = new Database(databaseFile);
+  try {
+    const insert = database.prepare(
+      `INSERT INTO reported_capacity_observation
+         (source_alias, installation_id, observation_key, observed_at, limit_id, plan_type,
+          window_minutes, used_percent, resets_at, parser_version, first_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const latest = database.prepare(
+      `INSERT INTO reported_capacity_latest
+         (source_alias, installation_id, limit_key, observation_key, observed_at, row_id)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (source_alias, installation_id, limit_key) DO UPDATE
+          SET observation_key = excluded.observation_key, observed_at = excluded.observed_at,
+              row_id = excluded.row_id
+        WHERE excluded.observed_at > reported_capacity_latest.observed_at
+           OR (excluded.observed_at = reported_capacity_latest.observed_at
+               AND excluded.row_id > reported_capacity_latest.row_id)`,
+    );
+    for (const snapshot of snapshots) {
+      let row = 0;
+      for (const window of snapshot.windows) {
+        row = Number(
+          insert.run(
+            alias,
+            installationId,
+            snapshot.observation_key,
+            snapshot.observed_at,
+            snapshot.limit_id,
+            snapshot.plan_type,
+            window.window_minutes,
+            window.used_percent,
+            window.resets_at,
+            snapshot.parser_version,
+            now.toISOString(),
+          ).lastInsertRowid,
+        );
+      }
+      latest.run(
+        alias,
+        installationId,
+        snapshot.limit_id ?? "",
+        snapshot.observation_key,
+        snapshot.observed_at,
+        row,
+      );
+    }
+  } finally {
+    database.close();
+  }
+}

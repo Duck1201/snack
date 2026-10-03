@@ -1,4 +1,14 @@
-import { PREDICTION_POLICY, assembleForecast, chooseCell } from "./prediction.js";
+import {
+  PREDICTION_POLICY,
+  REPORTED_PREDICTION_POLICY,
+  assembleForecast,
+  chooseCell,
+} from "./prediction.js";
+import {
+  REPORTED_CAPACITY_POLICY,
+  REPORTED_EVIDENCE_RELEVANCE,
+  walkStatedHistory,
+} from "./reported-capacity.js";
 
 /**
  * Calibration of delivered forecasts against the outcomes that followed them.
@@ -203,6 +213,233 @@ export function backtest(outcomes, options) {
 }
 
 /**
+ * Replay the `reported-capacity` shadow method over a history, scoring a forecast only where it
+ * would have been computed (spec §7.2).
+ *
+ * The same walk as `backtest`, with the stated timeline merged in: at each prompt the binding
+ * window is resolved at that prompt's own start from statements strictly earlier, and the cells
+ * are keyed on the stated band each earlier prompt began in. A prompt where no window bound, or
+ * where a `clear`/`near` ladder would have ended at the plan prior, is not scored -- so the sample
+ * is smaller than the baseline's, and is reported as what it is.
+ *
+ * At every scored prompt the baseline's replayed forecast is scored too, so `paired` compares the
+ * two methods on exactly the same outcomes. Nothing here changes `backtest`.
+ *
+ * @param {(import("./prediction.js").OutcomeRow & {installation_id?: string | null})[]} outcomes
+ * @param {import("./reported-capacity.js").Statement[]} timeline chronological, oldest first
+ * @param {{prior: {strength: number, viability: number}, periodStart: string | null}} options
+ * @returns {{forecasts: number, scored: ScoredForecast[], calibration: ReturnType<typeof summarizeCalibration>, paired: PairedComparison, policy_version: string}}
+ */
+export function backtestReported(outcomes, timeline, options) {
+  const policy = REPORTED_PREDICTION_POLICY;
+  const baselinePolicy = PREDICTION_POLICY;
+  const ordered = [...outcomes].sort((left, right) =>
+    left.started_at.localeCompare(right.started_at),
+  );
+  /** @type {Map<string, ReturnType<typeof createAccumulator>>} */
+  const stated = new Map();
+  /** @type {Map<string, ReturnType<typeof createAccumulator>>} */
+  const baseline = new Map();
+  /** @param {Map<string, ReturnType<typeof createAccumulator>>} levels @param {string} key */
+  const accumulatorFor = (levels, key) => {
+    const existing = levels.get(key);
+    if (existing) return existing;
+    const created = createAccumulator();
+    levels.set(key, created);
+    return created;
+  };
+
+  /** @type {ScoredForecast[]} */
+  const scored = [];
+  /** @type {ScoredForecast[]} */
+  const baselineScored = [];
+  let index = 0;
+  walkStatedHistory(ordered, timeline, { periodStart: options.periodStart }, (row, state) => {
+    const at = Date.parse(row.started_at);
+    const category = row.size_category ?? "typical";
+    const pressureBand = row.pressure_band ?? "unknown";
+
+    if (
+      index >= CALIBRATION_POLICY.minimum_backtest_history &&
+      row.outcome !== "excluded" &&
+      state.band !== null
+    ) {
+      const band = state.band;
+      const full = band === "full";
+      const candidates = [
+        { level: "period_stated_category", key: `${band}\u0000${category}` },
+        { level: "period_stated", key: band },
+        ...(full ? [] : [{ level: "period", key: "" }]),
+      ].map(({ level, key }) => ({
+        level,
+        cell: readAccumulator(accumulatorFor(stated, key), at, policy.decay_half_life_seconds),
+      }));
+      const chosen = chooseCell(candidates, policy);
+      if (chosen.level !== "prior" || full) {
+        const forecast = assembleForecast({
+          cell: chosen.cell,
+          level: chosen.level === "prior" ? "stated_full_prior" : chosen.level,
+          prior: full ? REPORTED_CAPACITY_POLICY.full_prior : options.prior,
+          policy,
+          dataCompleteness: "unknown",
+          method: REPORTED_CAPACITY_POLICY.method,
+          relevance: REPORTED_EVIDENCE_RELEVANCE,
+        });
+        scored.push(scoredOf(forecast, row.outcome));
+        const baselineForecast = assembleForecast({
+          ...chooseCell(
+            [
+              { level: "period_band_category", key: `${pressureBand}\u0000${category}` },
+              { level: "period_band", key: pressureBand },
+              { level: "period", key: "" },
+            ].map(({ level, key }) => ({
+              level,
+              cell: readAccumulator(
+                accumulatorFor(baseline, key),
+                at,
+                baselinePolicy.decay_half_life_seconds,
+              ),
+            })),
+            baselinePolicy,
+          ),
+          prior: options.prior,
+          policy: baselinePolicy,
+          dataCompleteness: "unknown",
+        });
+        baselineScored.push(scoredOf(baselineForecast, row.outcome));
+      }
+    }
+
+    // Every prompt is history for the period aggregate; only a prompt that began in a stated band
+    // is history for that band's cells.
+    const statedKeys =
+      state.band === null ? [""] : [`${state.band}\u0000${category}`, state.band, ""];
+    for (const key of statedKeys) observe(accumulatorFor(stated, key), row.outcome, at, policy);
+    for (const key of [`${pressureBand}\u0000${category}`, pressureBand, ""]) {
+      observe(accumulatorFor(baseline, key), row.outcome, at, baselinePolicy);
+    }
+    index += 1;
+  });
+
+  return {
+    forecasts: scored.length,
+    scored,
+    calibration: summarizeCalibration(scored),
+    paired: comparePaired(scored, baselineScored),
+    policy_version: CALIBRATION_POLICY.version,
+  };
+}
+
+/**
+ * @param {{viability: {lower: number, point: number, upper: number}}} forecast
+ * @param {"success" | "restricted" | "excluded"} outcome
+ * @returns {ScoredForecast}
+ */
+function scoredOf(forecast, outcome) {
+  return {
+    lower: forecast.viability.lower,
+    point: forecast.viability.point,
+    upper: forecast.viability.upper,
+    outcome,
+  };
+}
+
+/**
+ * Two methods scored against the same outcomes, side by side.
+ *
+ * @typedef {object} PairedComparison
+ * @property {number} sample_size Outcomes both forecasts were scored against, excluded ones aside.
+ * @property {number} restrictions How many of them were observed restrictions.
+ * @property {number | null} brier The shadow method's Brier score over them.
+ * @property {number | null} baseline_brier The baseline's, over the very same outcomes.
+ */
+
+/**
+ * @param {ScoredForecast[]} shadow
+ * @param {ScoredForecast[]} baseline the same outcomes, in the same order
+ * @returns {PairedComparison}
+ */
+export function comparePaired(shadow, baseline) {
+  const shadowSummary = summarizeCalibration(shadow);
+  const baselineSummary = summarizeCalibration(baseline);
+  return {
+    sample_size: shadowSummary.brier.sample_size,
+    restrictions: shadow.filter((forecast) => forecast.outcome === "restricted").length,
+    brier: shadowSummary.brier.value,
+    baseline_brier: baselineSummary.brier.value,
+  };
+}
+
+/**
+ * Methods a calibration entry folds into the baseline's. `initial-generic@1` is the baseline
+ * model's last rung -- the plan prior alone -- not a model of its own, so its forecasts belong to
+ * the baseline's stream. Versions are never pooled: a future `reported-capacity@2` is its own entry.
+ */
+export const BASELINE_METHOD_FAMILY = Object.freeze([
+  "bayesian-pressure-band@1",
+  "initial-generic@1",
+]);
+
+/**
+ * @typedef {object} MethodPair
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ * @property {"success" | "restricted" | "excluded"} outcome
+ * @property {string} method_id
+ * @property {string} method_version
+ * @property {string | null} shadow_method_id
+ * @property {string | null} shadow_method_version
+ * @property {number | null} shadow_lower
+ * @property {number | null} shadow_point
+ * @property {number | null} shadow_upper
+ */
+
+/**
+ * The live calibration stream of each method, from the same delivered pairs (spec §7.1).
+ *
+ * The baseline's entry reads every pair whose attempt it answered, with the attempt's numbers. A
+ * shadow method's entry reads every pair it was computed for, with its own recorded numbers, and
+ * carries `paired`: its Brier score and the answering baseline's over exactly those outcomes. Each
+ * entry carries its own sample sizes; nothing is pooled across methods or versions.
+ *
+ * @param {MethodPair[]} pairs
+ * @param {{id: string, version: string}} shadowMethod
+ */
+export function liveByMethod(pairs, shadowMethod) {
+  const shadowKey = `${shadowMethod.id}@${shadowMethod.version}`;
+  /** @type {ScoredForecast[]} */
+  const baseline = [];
+  /** @type {ScoredForecast[]} */
+  const shadow = [];
+  /** @type {ScoredForecast[]} */
+  const pairedBaseline = [];
+  for (const pair of pairs) {
+    const answered = BASELINE_METHOD_FAMILY.includes(`${pair.method_id}@${pair.method_version}`);
+    if (answered) baseline.push(pair);
+    if (
+      `${pair.shadow_method_id}@${pair.shadow_method_version}` === shadowKey &&
+      pair.shadow_lower !== null &&
+      pair.shadow_point !== null &&
+      pair.shadow_upper !== null
+    ) {
+      shadow.push({
+        lower: pair.shadow_lower,
+        point: pair.shadow_point,
+        upper: pair.shadow_upper,
+        outcome: pair.outcome,
+      });
+      if (answered) pairedBaseline.push(pair);
+    }
+  }
+  return {
+    baseline: summarizeCalibration(baseline),
+    shadow: summarizeCalibration(shadow),
+    paired: comparePaired(shadow, pairedBaseline),
+  };
+}
+
+/**
  * Decayed counts for one backoff level, anchored at a point in time.
  *
  * @returns {{anchor: number, weightedSuccesses: number, weightedRestrictions: number, successes: number, restrictions: number, excluded: number}}
@@ -256,7 +493,7 @@ function supersede(accumulator, recencyHalfLifePrompts) {
  * @param {ReturnType<typeof createAccumulator>} accumulator
  * @param {"success" | "restricted" | "excluded"} outcome
  * @param {number} at
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {{decay_half_life_seconds: number, recency_half_life_prompts: number}} policy
  */
 function observe(accumulator, outcome, at, policy) {
   if (outcome === "excluded") {

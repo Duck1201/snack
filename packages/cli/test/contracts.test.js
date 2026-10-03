@@ -187,6 +187,36 @@ test("every command's JSON document validates against the published envelope sch
         reports.every((/** @type {object} */ report) => !("sequence" in report)),
         "a sequence appeared without --sequence",
       );
+      // Non-vacuity for the 1.5.0 addition: the shadow was validated, computed, on the one source
+      // a Codex installation feeds, and appeared nowhere else.
+      assert.equal(codex?.shadow?.computed, true, "no computed shadow reached status");
+      assert.ok(
+        reports
+          .filter(
+            (/** @type {{source: {alias: string}}} */ report) => report.source.alias !== "codex",
+          )
+          .every((/** @type {object} */ report) => !("shadow" in report)),
+        "a source no Codex installation feeds grew a shadow",
+      );
+    }
+    if (invocation.name === "stats") {
+      const reports = document.data.sources ?? [document.data];
+      const withMethods = reports.filter(
+        (/** @type {{calibration: object}} */ report) => "by_method" in report.calibration,
+      );
+      assert.deepEqual(
+        withMethods.map((/** @type {{source: {alias: string}}} */ report) => report.source.alias),
+        ["codex"],
+      );
+      assert.deepEqual(
+        withMethods[0].calibration.by_method.map(
+          (/** @type {{id: string, role: string}} */ entry) => [entry.id, entry.role],
+        ),
+        [
+          ["bayesian-pressure-band", "answer"],
+          ["reported-capacity", "shadow"],
+        ],
+      );
     }
     if (invocation.name === "status-sequence") {
       const reports = document.data.sources ?? [document.data];
@@ -368,7 +398,17 @@ function declaredProperties(schema) {
 test("the declared report keys are the report's own, not those of a nested definition", async () => {
   const declared = declaredProperties(await readSchema("commands/status.schema.json"));
   for (const nested of ["level", "label", "gates"]) assert.ok(!declared.has(nested), nested);
-  for (const own of ["source", "viability", "risk", "evidence", "method", "caveats", "sequence"]) {
+  for (const own of [
+    "source",
+    "viability",
+    "risk",
+    "evidence",
+    "method",
+    "caveats",
+    "sequence",
+    "reported_capacity",
+    "shadow",
+  ]) {
     assert.ok(declared.has(own), own);
   }
 });

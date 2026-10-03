@@ -74,12 +74,86 @@
             },
             "backtest": {
               "type": ["object", "null"]
+            },
+            "by_method": {
+              "description": "Added in 1.5.0, optional. Calibration per method, present only when a Codex CLI installation feeds this capacity source -- the one kind of source where a second method runs. Ordered with the answering method first. Each entry carries its own streams and sample sizes; methods and versions are never pooled. `role` is `answer` for the method whose forecast the user was shown and `shadow` for one computed and recorded beside it and never shown as the answer (ADR-0007, amended 1.5.0). `includes` lists the method identifiers folded into the entry: `initial-generic@1` is the baseline model's last rung, so it belongs to `bayesian-pressure-band@1`. `live` scores the forecasts recorded at delivered attempts; `backtest` replays the history as of each prompt, and for a shadow method scores only the prompts where it would have been computed. A shadow entry's `paired` compares its Brier score with the answering baseline's over exactly the same outcomes. The top-level `live` and `backtest` keep their meaning and their numbers.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/methodCalibration"
+              }
             }
           }
         },
         "by_client": {
           "description": "Present only for `--by-client`: the same window split per client feeding the source.",
           "type": ["array", "null"]
+        }
+      }
+    },
+    "methodCalibration": {
+      "type": "object",
+      "required": ["id", "version", "role", "includes", "live", "backtest"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "role": {
+          "enum": ["answer", "shadow"]
+        },
+        "includes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "live": {
+          "type": "object"
+        },
+        "backtest": {
+          "type": "object",
+          "required": ["forecasts"],
+          "properties": {
+            "forecasts": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "paired": {
+          "description": "Present on a shadow entry only: the shadow method and the answering baseline scored over the same outcomes, live and replayed. Brier scores are null, never zero, while `sample_size` is 0.",
+          "type": "object",
+          "required": ["live", "backtest"],
+          "properties": {
+            "live": {
+              "$ref": "#/$defs/pairedComparison"
+            },
+            "backtest": {
+              "$ref": "#/$defs/pairedComparison"
+            }
+          }
+        }
+      }
+    },
+    "pairedComparison": {
+      "type": "object",
+      "required": ["sample_size", "restrictions", "brier", "baseline_brier"],
+      "properties": {
+        "sample_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "restrictions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "brier": {
+          "type": ["number", "null"]
+        },
+        "baseline_brier": {
+          "type": ["number", "null"]
         }
       }
     },

@@ -52,7 +52,15 @@ import {
   resolveOpenCodeConfig,
   writePluginRegistration,
 } from "./opencode-config.js";
-import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
+import {
+  BASELINE_METHOD_FAMILY,
+  CALIBRATION_POLICY,
+  backtest,
+  backtestReported,
+  liveByMethod,
+  summarizeCalibration,
+} from "./calibration.js";
+import { REPORTED_CAPACITY_POLICY } from "./reported-capacity.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { renderStats, renderStatus, renderStatusTable } from "./render.js";
@@ -69,7 +77,12 @@ import {
   classifyIngestionCompleteness,
 } from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
-import { createSourceStatus, describeReportedCapacity } from "./status.js";
+import {
+  attachShadow,
+  createShadowStatus,
+  createSourceStatus,
+  describeReportedCapacity,
+} from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
   assertReadableStorage,
@@ -95,6 +108,8 @@ import {
   purgeScope,
   readReportedCapacity,
   readSourceSummary,
+  readStatedTimeline,
+  hasForeignPromptSince,
   rollbackDatabaseInitialization,
   storeObservations,
   withStorageOperationLock,
@@ -664,6 +679,11 @@ export async function run(argv, options = {}) {
           now,
           clients:
             commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
+          // Per-method calibration exists only where a second method runs: a source a Codex
+          // installation feeds. Every other source's document stays the one 1.4 emitted.
+          byMethod: allConfigured.some(
+            (entry) => entry.alias === source.alias && isCodexSource(entry),
+          ),
         });
       });
       const data = reports.length === 1 ? reports[0] : { sources: reports };
@@ -696,7 +716,7 @@ export async function run(argv, options = {}) {
         commandOptions.sequence === undefined
           ? undefined
           : parseSequenceLength(commandOptions.sequence);
-      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>})[]} */
+      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>, shadow?: import("./status.js").ShadowView})[]} */
       const statuses = [];
       /** @type {number[]} */
       const attemptIds = [];
@@ -791,6 +811,9 @@ export async function run(argv, options = {}) {
               });
             }
           }
+          const outcomes = readOutcomeRows(paths.databaseFile, source.alias, {
+            limit: PREDICTION_POLICY.evidence_window_prompts,
+          });
           const sourceStatus = createSourceStatus(
             source,
             summary,
@@ -798,9 +821,7 @@ export async function run(argv, options = {}) {
             synchronization,
             pressure,
             {
-              outcomes: readOutcomeRows(paths.databaseFile, source.alias, {
-                limit: PREDICTION_POLICY.evidence_window_prompts,
-              }),
+              outcomes,
               windowSeconds: parseHorizon(primaryHorizon(current)),
               completeness: classifyIngestionCompleteness({
                 synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
@@ -817,25 +838,46 @@ export async function run(argv, options = {}) {
           );
           // Attached after the forecast is built, and beside it: what Codex states about its own
           // windows is quoted, never an input to the interval, the risk, the evidence or pressure
-          // (ADR-0007). Absent unless a Codex installation feeds this capacity source.
+          // (ADR-0007). Absent unless a Codex installation feeds this capacity source, and a source
+          // no Codex installation feeds never reaches this branch: its report is the 1.4 one.
           const quotesCodex = inScope.some(
             (entry) => entry.alias === source.alias && isCodexSource(entry),
           );
-          statuses.push(
-            quotesCodex
-              ? {
-                  ...sourceStatus,
-                  reported_capacity: describeReportedCapacity(
-                    readReportedCapacity(paths.databaseFile, source.alias),
-                    now,
-                  ),
-                }
-              : sourceStatus,
-          );
+          /** @type {import("./storage.js").PredictionShadowRow | undefined} */
+          let shadowRow;
+          if (quotesCodex) {
+            const latest = readReportedCapacity(paths.databaseFile, source.alias);
+            // The `reported-capacity` method, in shadow: computed and recorded beside the
+            // baseline, never the answer (ADR-0007, amended 1.5.0). It reads the same evidence
+            // window the baseline did and none of what the baseline produced.
+            const shadow = createShadowStatus({
+              now,
+              latest,
+              periodStart: summary.active_period_floor,
+              foreignPromptAfter: (installationId, since) =>
+                hasForeignPromptSince(paths.databaseFile, source.alias, installationId, since),
+              readTimeline: (from) =>
+                readStatedTimeline(paths.databaseFile, source.alias, { from }),
+              outcomes,
+              expectedCategory: sourceStatus.expected_prompt_category,
+              prior: {
+                strength: planProfile.prior_strength,
+                viability: planProfile.prior_viability,
+              },
+              dataCompleteness: sourceStatus.completeness.level,
+            });
+            shadowRow = shadow.row;
+            statuses.push(
+              attachShadow(sourceStatus, describeReportedCapacity(latest, now), shadow.view),
+            );
+          } else {
+            statuses.push(sourceStatus);
+          }
           if (summary.active_period_id !== null) {
             attemptIds.push(
               recordPredictionAttempt(
                 paths.databaseFile,
+                // The baseline's forecast: the answer the user is shown. The shadow never is.
                 toPredictionAttempt(source.alias, summary.active_period_id, sourceStatus, now),
                 // The sequence the same invocation answered rides with its attempt, in its own
                 // table: a `prediction_attempt` row is scored against one prompt, and a sequence
@@ -843,6 +885,7 @@ export async function run(argv, options = {}) {
                 sourceStatus.sequence === undefined
                   ? undefined
                   : toPredictionSequence(sourceStatus),
+                shadowRow,
               ),
             );
           }
@@ -2765,7 +2808,7 @@ function summarizeWindow(rows, now) {
 /**
  * Describe observed usage for one capacity source across the requested horizons.
  *
- * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null}} input
+ * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null, byMethod?: boolean}} input
  */
 function buildSourceStats(input) {
   /** @type {{groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number} | null} */
@@ -2819,7 +2862,12 @@ function buildSourceStats(input) {
         includeTrend: true,
       }),
     },
-    calibration: buildCalibrationReport(input.databaseFile, input.source.alias, input.planProfile),
+    calibration: buildCalibrationReport(
+      input.databaseFile,
+      input.source.alias,
+      input.planProfile,
+      input.byMethod === true,
+    ),
     ...(input.clients
       ? {
           by_client: buildClientComparison({
@@ -2914,23 +2962,56 @@ function buildClientComparison(input) {
  * Report predictive quality from the two streams that must never be mixed: forecasts the
  * user actually saw, and forecasts replayed from history.
  *
+ * `byMethod` adds the per-method streams, for a source where the `reported-capacity` shadow runs
+ * beside the baseline. The top-level `live` and `backtest` keep their meaning either way -- every
+ * delivered forecast, every replayed baseline forecast -- and so their numbers.
+ *
  * @param {string} databaseFile
  * @param {string} alias
  * @param {import("./plan-profile.js").PlanProfile} planProfile
+ * @param {boolean} [byMethod]
  */
-function buildCalibrationReport(databaseFile, alias, planProfile) {
+function buildCalibrationReport(databaseFile, alias, planProfile, byMethod = false) {
   const pairs = readCalibrationPairs(databaseFile, alias);
   const snapshots = readPredictionSnapshots(databaseFile, alias);
-  const replay = backtest(readOutcomeRows(databaseFile, alias), {
-    now: new Date(),
-    prior: { strength: planProfile.prior_strength, viability: planProfile.prior_viability },
-  });
-  return {
+  const outcomes = readOutcomeRows(databaseFile, alias);
+  const prior = { strength: planProfile.prior_strength, viability: planProfile.prior_viability };
+  const replay = backtest(outcomes, { now: new Date(), prior });
+  const report = {
     policy_version: CALIBRATION_POLICY.version,
     snapshots: snapshots.length,
     undelivered_attempts: readPredictionAttemptCount(databaseFile, alias) - snapshots.length,
     live: summarizeCalibration(pairs),
     backtest: { ...replay.calibration, forecasts: replay.forecasts },
+  };
+  if (!byMethod) return report;
+
+  const periodStart = readSourceSummary(databaseFile, alias).active_period_floor;
+  const timeline = readStatedTimeline(databaseFile, alias, { from: periodStart ?? "" });
+  const shadowReplay = backtestReported(outcomes, timeline, { prior, periodStart });
+  const method = REPORTED_CAPACITY_POLICY.method;
+  const live = liveByMethod(pairs, method);
+  return {
+    ...report,
+    by_method: [
+      {
+        id: "bayesian-pressure-band",
+        version: "1",
+        role: "answer",
+        includes: [...BASELINE_METHOD_FAMILY],
+        live: live.baseline,
+        backtest: { ...replay.calibration, forecasts: replay.forecasts },
+      },
+      {
+        id: method.id,
+        version: method.version,
+        role: "shadow",
+        includes: [`${method.id}@${method.version}`],
+        live: live.shadow,
+        backtest: { ...shadowReplay.calibration, forecasts: shadowReplay.forecasts },
+        paired: { live: live.paired, backtest: shadowReplay.paired },
+      },
+    ],
   };
 }
 

@@ -139,10 +139,57 @@
           "items": { "type": "string" }
         },
         "reported_capacity": {
-          "description": "Added in 1.3.0, optional. What Codex CLI itself stated about its own capacity windows, quoted beside the estimate and never an input to it: viability, risk, evidence and pressure are identical with or without it (ADR-0007). Present only when a Codex CLI installation feeds this capacity source; one entry per installation and limit, its latest statement.",
+          "description": "Added in 1.3.0, optional. What Codex CLI itself stated about its own capacity windows, quoted beside the estimate and never an input to it: viability, risk, evidence and pressure are identical with or without it (ADR-0007). From 1.5.0 it informs only the `reported-capacity` method, which runs in `shadow` and never answers. Present only when a Codex CLI installation feeds this capacity source; one entry per installation and limit, its latest statement.",
           "type": "array",
           "items": { "$ref": "#/$defs/reportedCapacity" }
+        },
+        "shadow": {
+          "description": "Added in 1.5.0, optional. The `reported-capacity` method in shadow: a forecast computed from the window Codex states, recorded beside the answer and calibrated against the same outcomes, and **never the answer**. `viability`, `risk`, `evidence`, `method`, `sequence` and `caveats` above are the baseline's, identical with or without it (ADR-0007, amended 1.5.0). Present exactly when `reported_capacity` is. `computed` says whether a forecast was made; `reason` says why not (`no_statement`, `before_period`, `stale`, `windows_reset`, `superseded`, `no_local_outcomes`) and is null when it was. `binding` identifies the window it read and carries no stated figure: the figure is quoted once, in `reported_capacity`. `viability`, `risk`, `evidence`, `model_policy_version` and `contributors` are present exactly when `computed` is true.",
+          "$ref": "#/$defs/shadow"
         }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "required": ["method", "computed", "reason", "binding", "policy_version"],
+      "properties": {
+        "method": { "$ref": "#/$defs/method" },
+        "computed": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "binding": {
+          "type": ["object", "null"],
+          "required": [
+            "installation_id",
+            "limit_id",
+            "window_minutes",
+            "resets_at",
+            "stated_at",
+            "band"
+          ],
+          "properties": {
+            "installation_id": { "type": "string" },
+            "limit_id": { "type": ["string", "null"] },
+            "window_minutes": { "type": "integer", "minimum": 1 },
+            "resets_at": { "type": ["string", "null"] },
+            "stated_at": { "type": "string" },
+            "band": { "enum": ["clear", "near", "full"] }
+          }
+        },
+        "policy_version": { "type": "string" },
+        "viability": {
+          "type": "object",
+          "required": ["lower", "point", "upper", "coverage_target"],
+          "properties": {
+            "lower": { "type": "number", "minimum": 0, "maximum": 1 },
+            "point": { "type": "number", "minimum": 0, "maximum": 1 },
+            "upper": { "type": "number", "minimum": 0, "maximum": 1 },
+            "coverage_target": { "type": "number" }
+          }
+        },
+        "risk": { "$ref": "#/$defs/risk" },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "model_policy_version": { "type": "string" },
+        "contributors": { "type": "object" }
       }
     },
     "risk": {
