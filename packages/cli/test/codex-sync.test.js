@@ -201,11 +201,11 @@ for (const order of [
 
     assert.deepEqual(statedPercents(fixture.paths.databaseFile, "az"), [71, 71, 83, 83]);
     assert.deepEqual(statedPercents(fixture.paths.databaseFile, "oa"), [19, 19, 34, 34]);
-    for (const [alias, percents] of [
+    for (const [alias, percents] of /** @type {[string, number[]][]} */ ([
       ["az", [71, 83]],
       ["oa", [19, 34]],
-    ]) {
-      const status = await json(fixture, ["status", "--no-sync", "--source", String(alias)]);
+    ])) {
+      const status = await json(fixture, ["status", "--no-sync", "--source", alias]);
       const shown = JSON.stringify(status.data.reported_capacity);
       for (const percent of percents)
         assert.match(shown, new RegExp(`"used_percent":${percent}\\b`));
