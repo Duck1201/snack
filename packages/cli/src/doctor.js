@@ -520,6 +520,8 @@ function codexCoverageChecks(alias, adapter) {
   const health = adapter.health();
   const skippedForks = "skipped_fork_files" in health ? Number(health.skipped_fork_files) : 0;
   const compressed = "compressed_files" in health ? Number(health.compressed_files) : 0;
+  const droppedFigures =
+    "dropped_reported_snapshots" in health ? Number(health.dropped_reported_snapshots) : 0;
   const subagentTurns =
     "skipped_subagent_turns" in health ? Number(health.skipped_subagent_turns) : 0;
   /** @type {DoctorCheck[]} */
@@ -539,6 +541,16 @@ function codexCoverageChecks(alias, adapter) {
         `source_coverage:${alias}:codex:subagent_turns`,
         `${subagentTurns} subagent turn(s) from Codex 0.147 or earlier are not counted; ` +
           "their history does not say which prompt spawned them.",
+      ),
+    );
+  }
+  if (droppedFigures > 0) {
+    checks.push(
+      warn(
+        `source_coverage:${alias}:codex:stated_figures`,
+        `${droppedFigures} figure${droppedFigures === 1 ? "" : "s"} Codex stated could not be ` +
+          "quoted (a percentage outside 0-100 or a label that is not an identifier); " +
+          "the prompts around them are still read.",
       ),
     );
   }

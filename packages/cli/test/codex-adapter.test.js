@@ -131,6 +131,7 @@ test("a missing sessions directory is an unavailable source, named without a pat
     fingerprint: { family: null, families: [], supported: false },
     skipped_fork_files: 0,
     skipped_subagent_turns: 0,
+    dropped_reported_snapshots: 0,
     compressed_files: 0,
   });
 });
@@ -427,11 +428,32 @@ test("record types from a later Codex release are skipped, not refused", async (
   assert.deepEqual(rejected, []);
 });
 
-for (const fixture of [
-  "drifted-usage.jsonl",
-  "drifted-rate-limits.jsonl",
-  "missing-session-meta.jsonl",
-]) {
+for (const [fixture, thread] of /** @type {[string, string][]} */ ([
+  ["stated-percent-out-of-range.jsonl", "00000000-0000-7000-8000-000000000015"],
+  ["stated-label-unshaped.jsonl", "00000000-0000-7000-8000-000000000016"],
+])) {
+  test(`a stated figure that is not one is dropped and counted, never the prompts: ${fixture}`, async () => {
+    // The figure is only ever displayed. Refusing the whole history for it would cost every prompt
+    // for a value no estimate reads; dropping it costs exactly that value.
+    const adapter = adapterFor(await codexHome(["version-0-159-3.jsonl", fixture]));
+
+    assert.equal(adapter.fingerprint().supported, true);
+    const { observations, reported_capacity: reported } = adapter.readAll();
+    assert.equal(observations.length, 2);
+    const own = observations.find((observation) => observation.source_session_id === thread);
+    assert.ok(own, "the prompt beside the bad figure was lost");
+    assert.equal(own?.outcome, "success");
+    // Only the well-formed rollout's figures remain.
+    assert.equal(reported.length, 2);
+    assert.ok(reported.every((snapshot) => snapshot.limit_id === "codex"));
+    assert.ok(
+      reported.every((snapshot) => snapshot.windows.every((window) => window.used_percent <= 100)),
+    );
+    assert.equal(adapter.health().dropped_reported_snapshots, 1);
+  });
+}
+
+for (const fixture of ["drifted-usage.jsonl", "missing-session-meta.jsonl"]) {
   test(`drift refuses every read, not only setup: ${fixture}`, async () => {
     const adapter = adapterFor(await codexHome(["version-0-159-3.jsonl", fixture]));
 

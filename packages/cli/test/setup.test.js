@@ -527,7 +527,7 @@ test("setup codex refuses a drifted history before it asks anything", async () =
   const fixture = await makeRunFixture("snack-setup-codex-drift-");
   fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
     "version-0-159-3.jsonl",
-    "drifted-rate-limits.jsonl",
+    "drifted-usage.jsonl",
   ]);
   const { prompt, asked } = scriptedPrompt(defaultAnswers);
   fixture.options.prompt = prompt;

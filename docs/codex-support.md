@@ -65,10 +65,16 @@ present — so upgrading Codex, or deleting the old rollouts afterwards, does no
 
 Every record SNACK reads is held to its shape on every read, not on a sample. A violation refuses the
 whole history with `source_schema_unsupported` (exit `4`) and writes nothing: a token field that is
-not a non-negative integer, a `used_percent` outside `0..100`, a `window_minutes` that is not a
-positive integer, a first line that is not `session_meta`, or a line that does not parse anywhere
-but at the end of the file. A half-written last line is a rollout Codex is still writing and is
-ignored.
+not a non-negative integer, a `rate_limit_reached_type` that is not an identifier, a first line that
+is not `session_meta`, or a line that does not parse anywhere but at the end of the file. A
+half-written last line is a rollout Codex is still writing and is ignored.
+
+A stated figure is held to its shape too, but it is only ever quoted, so a bad one costs only
+itself: a `used_percent` outside `0..100`, a `window_minutes` that is not a positive integer, two
+windows of one length, or a `limit_id`/`plan_type` that is not an identifier drops that one
+statement. The prompts around it are still read, and `doctor` warns how many statements were
+dropped. Codex's own TUI clamps an out-of-range percentage rather than ruling it out, so a figure
+above 100 is treated as possible, not as a different file format.
 
 Record types SNACK does not read are skipped rather than refused. Codex adds them every release —
 `retained_context` and `token_usage_record` both arrived between `0.147` and `0.159` — so refusing

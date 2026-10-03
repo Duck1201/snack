@@ -422,6 +422,7 @@ test("doctor warns about Codex history it deliberately does not read", async () 
     "version-0-147-0.jsonl",
     "fork-0-146-0.jsonl",
     "subagent-0-147-0.jsonl",
+    "stated-percent-out-of-range.jsonl",
   ]);
   fixture.options.env.CODEX_HOME = home;
   await mkdir(join(home, "archived_sessions"), { recursive: true });
@@ -440,4 +441,7 @@ test("doctor warns about Codex history it deliberately does not read", async () 
   const turns = checks.find((check) => check.id === "source_coverage:codex:codex:subagent_turns");
   assert.equal(turns?.status, "warn");
   assert.match(String(turns?.message), /^1 subagent turn/u);
+  const figures = checks.find((check) => check.id === "source_coverage:codex:codex:stated_figures");
+  assert.equal(figures?.status, "warn");
+  assert.match(String(figures?.message), /^1 figure Codex stated/u);
 });

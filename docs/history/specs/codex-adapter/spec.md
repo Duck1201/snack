@@ -711,3 +711,26 @@ throws it too, so `doctor` reports the source inaccessible, and `health()` says 
 Once the rollouts of the family setup recorded are deleted, that failed while `sync` stayed
 healthy. For a Codex source `doctor` now passes when the fingerprint is supported and every family
 present is one of `CODEX_FAMILIES`; the recorded family no longer has to be present.
+
+### R6 — smaller corrections
+
+- **A bad stated figure drops itself, not the history** (amends §1 "Drift that refuses", §3.5). A
+  `used_percent` outside `0..100`, a non-positive or non-integer `window_minutes`, a non-integer
+  `resets_at`, a non-object window, two windows of one length, or a `limit_id`/`plan_type` that
+  fails the identifier pattern no longer refuses the history: that token count yields no snapshot,
+  its usage and classification are still read, and `health().dropped_reported_snapshots` counts it
+  (`doctor`: `source_coverage:<alias>:codex:stated_figures`). The figure is only quoted, never an
+  input, so refusing every prompt for it was disproportionate; and Codex's own TUI clamps an
+  out-of-range percentage (`codex-rs/tui/src/status/rate_limits.rs`), so a value above 100 is
+  possible rather than a format change. `rate_limit_reached_type` still refuses when it is not an
+  identifier, because it classifies the prompt. Fixture `drifted-rate-limits.jsonl` is renamed
+  `stated-percent-out-of-range.jsonl`; `stated-label-unshaped.jsonl` is added.
+- **Relative `CODEX_HOME`** (amends §5.1). Codex's `find_codex_home`
+  (`codex-rs/utils/home-dir/src/lib.rs`) canonicalizes any non-empty `CODEX_HOME`, so a relative
+  value names a directory under the working directory. SNACK resolves it the same way; setup records
+  the resolved path. An empty value is unset.
+- **Reset times say UTC** (amends §5.6). The `reported` row prints a reset as `14:30 UTC` and a
+  weekday as `Fri UTC`. Every absolute time SNACK prints is UTC, and a bare clock reads as local.
+- **The support-matrix gate is exact** (amends §6 "Release gate"). `supportMatrixIncomplete` passes
+  only a whole line `Status: complete.` or `Status: completed on YYYY-MM-DD.`; a line merely
+  containing the word — "not yet complete" — keeps blocking.

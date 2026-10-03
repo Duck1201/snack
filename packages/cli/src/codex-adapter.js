@@ -230,6 +230,7 @@ export function createCodexAdapter(options) {
           },
           skipped_fork_files: scanned.skippedForkFiles,
           skipped_subagent_turns: scanned.skippedSubagentTurns,
+          dropped_reported_snapshots: scanned.droppedSnapshots,
           compressed_files: scanned.compressedFiles,
         };
       } catch (error) {
@@ -240,6 +241,7 @@ export function createCodexAdapter(options) {
           fingerprint: { family: null, families: [], supported: false },
           skipped_fork_files: 0,
           skipped_subagent_turns: 0,
+          dropped_reported_snapshots: 0,
           compressed_files: 0,
         };
       }
@@ -264,6 +266,10 @@ function scan(home) {
     parsed,
     skippedForkFiles: parsed.filter((file) => file.skippedFork).length,
     skippedSubagentTurns: parsed.reduce((sum, file) => sum + file.skippedSubagentTurns, 0),
+    droppedSnapshots: parsed.reduce(
+      (sum, file) => sum + (file.skippedFork ? 0 : file.droppedSnapshots),
+      0,
+    ),
     compressedFiles: listing.compressed,
   };
 }
@@ -407,6 +413,7 @@ function familyRoots(entries) {
  * @property {string[]} families every family a turn of this file belongs to
  * @property {Set<string>} usageTurns turns whose usage Codex recorded per response
  * @property {boolean} skippedFork
+ * @property {number} droppedSnapshots token counts whose stated figure was not one, so not quoted
  * @property {number} skippedSubagentTurns subagent turns that name no root, so belong to no prompt
  * @property {Projected[]} records records at or past the fork-replay boundary, in file order
  */
@@ -422,7 +429,7 @@ function familyRoots(entries) {
 /**
  * @typedef {{id: string | null, cli_version: string | null, model_provider: string | null, thread_source: "user" | "subagent" | null, parent_thread_id: string | null, forked: boolean, history_start: number | null}} SessionMeta
  * @typedef {{input_tokens: number, cached_input_tokens: number, cache_write_input_tokens: number | null, output_tokens: number, reasoning_output_tokens: number, total_tokens: number}} Usage
- * @typedef {{limit_id: string | null, plan_type: string | null, reached: string | null, spend_control_reached: boolean, windows: ReportedCapacityWindow[]}} RateLimits
+ * @typedef {{limit_id: string | null, plan_type: string | null, reached: string | null, spend_control_reached: boolean, windows: ReportedCapacityWindow[], invalid: boolean}} RateLimits
  */
 
 /**
@@ -532,6 +539,9 @@ function parseFile(home, file, rejected) {
     families: [...families].sort(),
     usageTurns,
     skippedFork,
+    droppedSnapshots: kept.filter(
+      (record) => record.kind === "token_count" && record.rate_limits?.invalid === true,
+    ).length,
     skippedSubagentTurns:
       subagent && !skippedFork
         ? kept.filter((record) => opensNoPrompt(record, subagent)).length
@@ -765,6 +775,15 @@ function projectUsage(field, prefix) {
 }
 
 /**
+ * Project what a token count says about rate limits.
+ *
+ * Two kinds of field live here. `rate_limit_reached_type` and `spend_control_reached` classify the
+ * prompt, so a value that does not fit refuses the history like any other drift. The windows,
+ * `limit_id` and `plan_type` are only ever quoted beside the estimate: a value that does not fit
+ * there -- a `used_percent` above 100, which Codex's own TUI clamps rather than rules out, or a
+ * label that is not an identifier -- drops that one statement (`invalid`, counted by `health()`),
+ * never the prompts the same history holds.
+ *
  * @param {(path: string) => unknown} field
  * @returns {RateLimits | null}
  */
@@ -772,11 +791,15 @@ function projectRateLimits(field) {
   const limits = field("payload.rate_limits");
   if (limits === undefined || limits === null) return null;
   if (!isObject(limits)) throw drift();
+  let invalid = false;
   /** @param {string} path */
   const label = (path) => {
     const value = field(path);
     if (value === undefined || value === null) return null;
-    if (typeof value !== "string" || !labelPattern.test(value)) throw drift();
+    if (typeof value !== "string" || !labelPattern.test(value)) {
+      invalid = true;
+      return null;
+    }
     return value;
   };
   /** @type {ReportedCapacityWindow[]} */
@@ -784,35 +807,55 @@ function projectRateLimits(field) {
   for (const slot of ["primary", "secondary"]) {
     const window = field(`payload.rate_limits.${slot}`);
     if (window === undefined || window === null) continue;
-    if (!isObject(window)) throw drift();
-    const used = field(`payload.rate_limits.${slot}.used_percent`);
-    const minutes = field(`payload.rate_limits.${slot}.window_minutes`);
-    const resets = field(`payload.rate_limits.${slot}.resets_at`);
-    if (typeof used !== "number" || !(used >= 0 && used <= 100)) throw drift();
-    if (!Number.isSafeInteger(minutes) || Number(minutes) <= 0) throw drift();
-    let resetsAt = null;
-    if (resets !== undefined && resets !== null) {
-      if (!Number.isSafeInteger(resets)) throw drift();
-      const date = new Date(Number(resets) * 1000);
-      if (!Number.isFinite(date.getTime())) throw drift();
-      resetsAt = date.toISOString();
-    }
-    windows.push({ window_minutes: Number(minutes), used_percent: used, resets_at: resetsAt });
+    const projected = isObject(window) ? projectWindow(field, slot) : null;
+    if (projected === null) invalid = true;
+    else windows.push(projected);
   }
   // Windows are identified by their length, never by their slot, so two figures for one length
   // could not be told apart once stored.
   if (windows.length === 2 && windows[0]?.window_minutes === windows[1]?.window_minutes) {
+    invalid = true;
+  }
+  const reachedValue = field("payload.rate_limits.rate_limit_reached_type");
+  if (
+    reachedValue !== undefined &&
+    reachedValue !== null &&
+    (typeof reachedValue !== "string" || !labelPattern.test(reachedValue))
+  ) {
     throw drift();
   }
-  const reached = label("payload.rate_limits.rate_limit_reached_type");
   const spend = field("payload.rate_limits.spend_control_reached");
+  const limitId = label("payload.rate_limits.limit_id");
+  const planType = label("payload.rate_limits.plan_type");
   return {
-    limit_id: label("payload.rate_limits.limit_id"),
-    plan_type: label("payload.rate_limits.plan_type"),
-    reached: reached === null ? null : code(reached),
+    limit_id: invalid ? null : limitId,
+    plan_type: invalid ? null : planType,
+    reached: typeof reachedValue === "string" ? code(reachedValue) : null,
     spend_control_reached: spend !== undefined && spend !== null,
-    windows,
+    windows: invalid ? [] : windows,
+    invalid,
   };
+}
+
+/**
+ * @param {(path: string) => unknown} field
+ * @param {string} slot
+ * @returns {ReportedCapacityWindow | null} null for a window that is not a stated figure
+ */
+function projectWindow(field, slot) {
+  const used = field(`payload.rate_limits.${slot}.used_percent`);
+  const minutes = field(`payload.rate_limits.${slot}.window_minutes`);
+  const resets = field(`payload.rate_limits.${slot}.resets_at`);
+  if (typeof used !== "number" || !(used >= 0 && used <= 100)) return null;
+  if (!Number.isSafeInteger(minutes) || Number(minutes) <= 0) return null;
+  let resetsAt = null;
+  if (resets !== undefined && resets !== null) {
+    if (!Number.isSafeInteger(resets)) return null;
+    const date = new Date(Number(resets) * 1000);
+    if (!Number.isFinite(date.getTime())) return null;
+    resetsAt = date.toISOString();
+  }
+  return { window_minutes: Number(minutes), used_percent: used, resets_at: resetsAt };
 }
 
 /**
@@ -1166,7 +1209,8 @@ function readSnapshots(file) {
   for (const record of file.records) {
     if (record.kind !== "token_count" || record.rate_limits === null) continue;
     const limits = record.rate_limits;
-    if (limits.windows.length === 0) continue;
+    // A statement that was not a figure is dropped here and counted by `health()`.
+    if (limits.invalid || limits.windows.length === 0) continue;
     const windows = limits.windows.map((window) => ({ ...window }));
     const signature = JSON.stringify([limits.limit_id, limits.plan_type, windows]);
     latest = {
