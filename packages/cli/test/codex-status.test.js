@@ -624,3 +624,310 @@ test("a source no Codex installation feeds keeps no stated-band state on its pro
     database.close();
   }
 });
+
+/**
+ * A stated figure for one window of one limit, in the shape `plantStatements` takes.
+ *
+ * @param {string} key one character, repeated into the observation key
+ * @param {string} observedAt
+ * @param {number} usedPercent
+ */
+function statement(key, observedAt, usedPercent) {
+  return {
+    observation_key: key.repeat(64),
+    observed_at: observedAt,
+    limit_id: "codex",
+    plan_type: "plus",
+    windows: [{ window_minutes: 10080, used_percent: usedPercent, resets_at: null }],
+    parser_version: "codex-rate-limits-v1",
+  };
+}
+
+/**
+ * Commit prompts as one ingestion transaction of `installationId` on the fixture's Codex source --
+ * what `synchronizeSource` does for each batch it reads -- and nothing else: no restate follows.
+ *
+ * @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture
+ * @param {string} installationId
+ * @param {{id: string, startedAt: string, revision?: string}[]} prompts
+ */
+async function commitPrompts(fixture, installationId, prompts) {
+  const { databaseFile, configFile } = fixture.paths;
+  const config = JSON.parse(await readFile(configFile, "utf8"));
+  const source = { ...config.sources[0], installation_id: installationId };
+  storeObservations(
+    databaseFile,
+    source,
+    {
+      observations: prompts.map((prompt) => ({
+        source_prompt_id: prompt.id,
+        source_session_id: "direct-session",
+        revision: prompt.revision ?? "1",
+        revision_domain: "codex-turn-v1",
+        parser_version: "codex-rollout-v1",
+        started_at: prompt.startedAt,
+        completed_at: prompt.startedAt,
+        duration_ms: 3000,
+        completion: "completed",
+        outcome: "success",
+        provider: "openai",
+        model: "gpt-test",
+        usage_slices: [],
+        restrictions: [],
+      })),
+      cursor: readIngestionCursor(databaseFile, "codex"),
+    },
+    /** @type {Date} */ (fixture.options.now),
+    { planProfile: resolvePlanProfile(config.sources[0]).profile },
+  );
+}
+
+/**
+ * The projected band of each named prompt.
+ *
+ * @param {string} databaseFile
+ * @param {string[]} ids source prompt ids
+ */
+function bandsOf(databaseFile, ids) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const read = database.prepare(
+      "SELECT stated_band FROM prompt_execution WHERE source_alias = 'codex' AND source_prompt_id = ?",
+    );
+    return ids.map((id) => /** @type {{stated_band: string | null}} */ (read.get(id)).stated_band);
+  } finally {
+    database.close();
+  }
+}
+
+test("a frontier hours after the statement that binds it still reads that statement, and leaves earlier prompts alone", async () => {
+  const fixture = await makeRunFixture("snack-codex-lookback-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  const codexHome = /** @type {string} */ (fixture.options.env.CODEX_HOME);
+
+  // Codex states the source full at 04:00, and nothing after.
+  fixture.options.now = new Date("2026-01-02T04:00:30.000Z");
+  plantStatements(
+    databaseFile,
+    "codex",
+    installationId,
+    [statement("a", "2026-01-02T04:00:00.000Z", 100)],
+    fixture.options.now,
+  );
+  await json(fixture, ["sync"]);
+
+  // Three hours later, two turns: the frontier is theirs, and the statement is three hours older.
+  await addCodexTurns(codexHome, {
+    from: Date.parse("2026-01-02T07:00:00.000Z"),
+    count: 2,
+    spacingMs: 60_000,
+  });
+  fixture.options.now = new Date("2026-01-02T07:10:00.000Z");
+  await json(fixture, ["sync"]);
+  const afterTurns = assertProjected(databaseFile).filter(
+    (row) => row.started_at >= "2026-01-02T07:00:00.000Z",
+  );
+  assert.deepEqual(
+    afterTurns.map((row) => row.stated_band),
+    ["full", "full"],
+  );
+
+  // Five and a half hours after those, one more turn. Its lookback starts after the statement, so
+  // the two turns before it must be left as they are, not recomputed from a timeline without it.
+  await addCodexTurns(codexHome, {
+    from: Date.parse("2026-01-02T12:30:00.000Z"),
+    count: 1,
+    spacingMs: 60_000,
+    thread: 1,
+  });
+  fixture.options.now = new Date("2026-01-02T12:40:00.000Z");
+  await json(fixture, ["sync"]);
+  const late = assertProjected(databaseFile).filter(
+    (row) => row.started_at >= "2026-01-02T07:00:00.000Z",
+  );
+  assert.deepEqual(
+    late.map((row) => row.stated_band),
+    ["full", "full", null],
+  );
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("two ingestion commits without a restate between them keep the earlier frontier", async () => {
+  const fixture = await makeRunFixture("snack-codex-two-commits-");
+  await codexFixture(fixture);
+  const { databaseFile, configFile } = fixture.paths;
+  const first = /** @type {{started_at: string}} */ (assertProjected(databaseFile)[0]);
+  const config = JSON.parse(await readFile(configFile, "utf8"));
+  const early = new Date(Date.parse(first.started_at) - 1000).toISOString();
+
+  // `synchronizeSource` commits a source in several batches and restates once, after the last: the
+  // second commit, with a later statement, must not raise the frontier the first one lowered.
+  for (const { key, observedAt } of [
+    { key: "e", observedAt: early },
+    { key: "f", observedAt: "2026-01-02T02:00:30.000Z" },
+  ]) {
+    storeObservations(
+      databaseFile,
+      config.sources[0],
+      {
+        observations: [],
+        cursor: readIngestionCursor(databaseFile, "codex"),
+        reported_capacity: [{ ...statement(key, observedAt, 100), provider: "openai" }],
+      },
+      /** @type {Date} */ (fixture.options.now),
+      { planProfile: resolvePlanProfile(config.sources[0]).profile },
+    );
+  }
+  assert.equal(frontierOf(databaseFile), early);
+
+  await json(fixture, ["sync"]);
+  assert.equal(assertProjected(databaseFile)[0]?.stated_band, "full");
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("a revision that moves a prompt's start lowers the frontier to the earlier of its two starts", async () => {
+  const fixture = await makeRunFixture("snack-codex-revision-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+
+  await commitPrompts(fixture, installationId, [
+    { id: "moved", startedAt: "2026-01-02T02:00:30.000Z" },
+  ]);
+  await json(fixture, ["sync"]);
+  assert.equal(frontierOf(databaseFile), null);
+
+  // Moved later: what it bound from its old start may have moved too.
+  await commitPrompts(fixture, installationId, [
+    { id: "moved", startedAt: "2026-01-02T02:00:40.000Z", revision: "2" },
+  ]);
+  assert.equal(frontierOf(databaseFile), "2026-01-02T02:00:30.000Z");
+  await json(fixture, ["sync"]);
+  assertProjected(databaseFile);
+
+  // Moved earlier: its new start is the earliest instant that can have moved.
+  await commitPrompts(fixture, installationId, [
+    { id: "moved", startedAt: "2026-01-02T02:00:01.000Z", revision: "3" },
+  ]);
+  assert.equal(frontierOf(databaseFile), "2026-01-02T02:00:01.000Z");
+  await json(fixture, ["sync"]);
+  assertProjected(databaseFile);
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("attributing a prompt whose client was unknown supersedes another installation's statement", async () => {
+  const fixture = await makeRunFixture("snack-codex-attribution-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  const other = "22222222-3333-4444-8555-666666666666";
+
+  // Hours after the fixture's own statements, a second Codex installation on the same source
+  // states it clear, and the first runs two prompts.
+  fixture.options.now = new Date("2026-01-02T09:10:00.000Z");
+  await commitPrompts(fixture, other, []);
+  plantStatements(
+    databaseFile,
+    "codex",
+    other,
+    [statement("b", "2026-01-02T09:00:00.000Z", 10)],
+    fixture.options.now,
+  );
+  const prompts = [
+    { id: "orphan", startedAt: "2026-01-02T09:00:10.000Z" },
+    { id: "after", startedAt: "2026-01-02T09:00:20.000Z" },
+  ];
+  await commitPrompts(fixture, installationId, prompts);
+  await json(fixture, ["sync"]);
+  assert.deepEqual(bandsOf(databaseFile, ["orphan", "after"]), ["clear", null]);
+
+  // What an upgrade leaves on a shared source: the first prompt's client unknown. Unknown is not
+  // another client's, so the statement binds the second prompt again.
+  const database = new Database(databaseFile);
+  try {
+    database.exec(
+      `UPDATE prompt_execution SET installation_id = NULL WHERE source_prompt_id = 'orphan';
+       UPDATE stated_band_projection SET stale_from = ''`,
+    );
+  } finally {
+    database.close();
+  }
+  await json(fixture, ["sync"]);
+  assert.deepEqual(bandsOf(databaseFile, ["orphan", "after"]), ["clear", "clear"]);
+
+  // Its client observes it again and claims it: it is another installation's prompt after the
+  // statement, so the next one is superseded.
+  await commitPrompts(fixture, installationId, prompts);
+  assert.equal(frontierOf(databaseFile), "2026-01-02T09:00:10.000Z");
+  await json(fixture, ["sync"]);
+  assert.deepEqual(bandsOf(databaseFile, ["orphan", "after"]), ["clear", null]);
+  assertProjected(databaseFile);
+});
+
+test("a purge of every source restates every source it reached", async () => {
+  const fixture = await makeRunFixture("snack-codex-purge-all-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  const first = /** @type {{started_at: string}} */ (assertProjected(databaseFile)[0]);
+  plantStatements(
+    databaseFile,
+    "codex",
+    installationId,
+    [statement("e", new Date(Date.parse(first.started_at) - 1000).toISOString(), 100)],
+    /** @type {Date} */ (fixture.options.now),
+  );
+  await json(fixture, ["sync"]);
+  assert.equal(assertProjected(databaseFile)[0]?.stated_band, "full");
+
+  await json(fixture, [
+    "data",
+    "purge",
+    "--all",
+    "--since",
+    new Date(Date.parse(first.started_at) - 2000).toISOString(),
+    "--until",
+    new Date(Date.parse(first.started_at) - 500).toISOString(),
+    "--yes",
+  ]);
+  assert.equal(assertProjected(databaseFile)[0]?.stated_band, null);
+  assert.equal(frontierOf(databaseFile), null);
+});
+
+test("a purge that removes only another client's prompt lifts the supersession it caused", async () => {
+  const fixture = await makeRunFixture("snack-codex-purge-foreign-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+  const other = "22222222-3333-4444-8555-666666666666";
+
+  fixture.options.now = new Date("2026-01-02T09:10:00.000Z");
+  plantStatements(
+    databaseFile,
+    "codex",
+    installationId,
+    [statement("c", "2026-01-02T09:00:00.000Z", 10)],
+    fixture.options.now,
+  );
+  await commitPrompts(fixture, installationId, [
+    { id: "own-1", startedAt: "2026-01-02T09:00:10.000Z" },
+    { id: "own-2", startedAt: "2026-01-02T09:00:30.000Z" },
+  ]);
+  await commitPrompts(fixture, other, [{ id: "foreign", startedAt: "2026-01-02T09:00:20.000Z" }]);
+  await json(fixture, ["sync"]);
+  assert.deepEqual(bandsOf(databaseFile, ["own-1", "own-2"]), ["clear", null]);
+
+  // No statement is in the range: only the other client's prompt goes.
+  const purged = await json(fixture, [
+    "data",
+    "purge",
+    "--source",
+    "codex",
+    "--since",
+    "2026-01-02T09:00:15.000Z",
+    "--until",
+    "2026-01-02T09:00:25.000Z",
+    "--yes",
+  ]);
+  assert.equal(purged.data.counts.prompts, 1);
+  assert.equal(purged.data.counts.reported_capacity_observations, 0);
+  assert.deepEqual(bandsOf(databaseFile, ["own-1", "own-2"]), ["clear", "clear"]);
+  assertProjected(databaseFile);
+});
