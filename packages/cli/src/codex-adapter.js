@@ -11,9 +11,9 @@ import { ExitCode, SnackError } from "./errors.js";
  *
  * `cx-rollout-tokencount-v1` is Codex `0.145`–`0.147`: per-turn usage exists only on token counts.
  * `cx-rollout-usagerecord-v1` is Codex `0.159`: a `token_usage_record` per model response and a
- * `root_turn_id` on every turn. One sessions tree holds both at once, because Codex never rewrites
- * an old rollout, so the family is decided per file and a directory is supported when every file
- * belongs to one of them.
+ * `root_turn_id` on every turn. One sessions tree holds both at once, and a rollout resumed by a
+ * later Codex holds both in one file, so a turn's slice source is decided per turn and a directory
+ * is supported when every turn belongs to one of them.
  */
 export const CODEX_FAMILIES = Object.freeze(
   /** @type {const} */ (["cx-rollout-tokencount-v1", "cx-rollout-usagerecord-v1"]),
