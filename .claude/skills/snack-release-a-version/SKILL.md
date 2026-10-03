@@ -10,7 +10,7 @@ description: >
 license: MIT
 metadata:
   author: Duck
-  version: "1.3"
+  version: "2.0"
 ---
 
 # Release a SNACK version
@@ -19,131 +19,69 @@ Publishing here is a sequence of gates, and each one fails as **success-shaped s
 as an error: nothing refuses, nothing reports, the step simply did not happen. This is the order
 that works, and the specific places where a step looks done and is not.
 
+## The shape of a release
+
+**One PR, one dispatch.** The version is cut inside the PR that carries the change, and the release
+workflow does everything after the publish that used to be a hand step or a PR of its own. Before
+1.2.2 a release cost three to four extra PRs — "cut X", "arm the publish gate", "record the X
+publication", "record that stable moved" — and none of them changed what users received.
+
 ## Who does what
 
-An agent can do everything up to and including opening the PR, plus the GitHub release and tag. **An
-agent cannot merge, publish, or move a dist-tag.** Those need a human:
+An agent does everything up to and including the PR. **An agent cannot merge, dispatch the release,
+approve it, or move a dist-tag.** In order — out of order these fail confusingly rather than
+refusing:
 
-- Merging the PR. Nothing downstream works before it: the release workflow is gated on
-  `refs/heads/main`.
-- The release workflow is `workflow_dispatch` only — someone dispatches it from the Actions UI. This
-  is what publishes, and it sets `latest` or `rc` through `--tag` on the publish itself.
-- `npm dist-tag add|rm`, for the tags the workflow cannot set — `stable`, a temporary tag, or a
-  repair. Run as the agent it opens a web auth flow and leaves the tag unchanged, reporting
-  something that looks like a network error; it did this twice. `npm whoami` answering `duck1201` is
-  not evidence that writes will work. Hand the command to the user to run with a `!` prefix and the
-  output lands in the conversation.
-
-Say this up front rather than discovering it at the end — and say it **in order**, because these
-steps fail confusingly out of order rather than refusing. A dist-tag before the publish answers
-`E400`, and a dispatch before the merge does nothing at all.
+1. The human merges the PR. The release workflow is gated on `refs/heads/main`.
+2. The human dispatches **Release** (Actions UI, or
+   `! gh workflow run release.yml --ref main -f confirmation=publish-<version> -f dist_tag=latest`).
+   The `npm` environment may ask them to approve the deployment; that approval is theirs to give,
+   never the agent's, even though `gh api` would accept it from their session.
+3. Only for `stable` or a temporary tag: `! npm dist-tag add @snack-ai/cli@<version> stable`. Run as
+   the agent it opens a web auth flow and leaves the tag unchanged while reporting something that
+   looks like a network error; `npm whoami` answering is not evidence that writes work.
 
 ## Procedure
 
-1. **Land the work on a branch and open a PR.** CI is the evidence, and:
+1. **Cut the version in the change's own PR**: `npm run release:prepare`. It runs
+   `changeset version`, moves the CLI's plugin pin and the support matrix to the plugin version that
+   produced (`scripts/sync-plugin-pin.mjs`), regenerates `man snack`, and writes the artifact
+   evidence. A package no changeset names is not bumped and its publish step skips.
 
-   ```yaml
-   # .github/workflows/ci.yml
-   on:
-     pull_request:
-     push:
-       branches: [main]
-   ```
+   Run it **under npm 11.16.0**, the version the workflow packs with:
+   `npx -y -p npm@11.16.0 -c 'npm run release:prepare'`. npm 12 has packed the same bytes so far,
+   but the SBOM comes from npm too.
 
-   **Pushing a feature branch runs nothing.** Only a PR (or a push to `main`) triggers the three
-   jobs — `ubuntu-latest`, `macos-latest`, `WSL2 / Debian 13` — each running `npm run check` and
-   `npm run pack:smoke`. If `gh run list --branch <branch>` is empty after a push, this is why; do
-   not wait for a run that will never start.
+2. **Record performance** in `docs/release/performance.md` when the release touches a hot path — the
+   measured numbers and the load they were taken under, not just the word.
 
-2. **Cut the version** with `npx changeset version`. It bumps only the packages a changeset names. A
-   package it does not bump will _skip_ its publish step, which matters in step 6.
+3. **Clear `npm run release:check`** and `npm run check`. `release:check` packs the tree and
+   requires every digest to appear in `docs/release/artifacts.md`, so anything named in a `files`
+   array edited after step 1 — a README included — means running step 1's evidence again.
 
-3. **Update the release workflow's confirmation string.** `.github/workflows/release.yml` gates on:
+4. **Choose the channel.** `dist_tag` is a dispatch input (`latest` | `rc` | `candidate`). Each
+   minor and patch takes `latest`; `rc` is for candidates; `candidate` is the window a major
+   publishes under — read `references/promoting-a-major.md`. `stable` is never set by a release. The
+   rule is PLAN.md's npm Channel Policy; read it rather than assuming.
 
-   ```yaml
-   if: inputs.confirmation == 'publish-<VERSION>' && github.ref == 'refs/heads/main'
-   ```
+5. **Push everything, then say "ready"** — `git rev-list --count origin/main..HEAD` is what you
+   expect. Ask the human to merge and dispatch with `publish-<version>`.
 
-   It is hardcoded to the _previous_ release. Bump it and the matching `description:` or the
-   dispatch does nothing and reports success-shaped silence.
+6. **The workflow then**, in this order, failing loudly at each step rather than skipping:
+   - refuses a confirmation that is not `publish-` + the version in `packages/cli/package.json`;
+   - requires CI green for the commit, then `check`, `pack:smoke`, `release:check`;
+   - publishes each package whose version is absent from the registry (a retried run is safe);
+   - waits up to five minutes for both versions and the channel tag to resolve;
+   - downloads the registry's tarballs and requires their digests to appear in `artifacts.md`;
+   - creates the GitHub release `v<version>` on the published commit, notes taken from both
+     CHANGELOGs (`scripts/release-notes.mjs`), marked Latest only on the `latest` channel.
 
-4. **Choose the channel deliberately.** `dist_tag` is an input of the dispatch (`latest` | `rc` |
-   `candidate`), defaulting to `latest`. The rule lives in PLAN.md's npm Channel Policy: each minor
-   takes `latest`; `rc` is for release candidates; `candidate` is the temporary tag a major
-   publishes under before `latest` is moved by hand; `stable` is never set by a release. Read it
-   rather than assuming — it changed at 0.7.0, again when `next` was retired, and again at 1.0.
+   That release **is** the record of the publication. Nothing is written back into the repository,
+   so nothing needs a PR.
 
-   **For a major, publish to `candidate` and read `references/promoting-a-major.md`** — the
-   `candidate` window and the hand-run promotion that closes it are the whole of that branch.
-
-5. **Clear `npm run release:check`.** It blocks on gate lines in `docs/release/*.md` and on a
-   `Status:` line in each client support matrix. Record the evidence when you clear one — the CI run
-   URL and the measured numbers — not just the word. A gate you can satisfy by editing a word is a
-   gate that measures nothing.
-
-6. **Merge, then dispatch.** The workflow requires `refs/heads/main`, so nothing works before the
-   merge. It publishes each package only if that exact version is absent from the registry, so a
-   retried run is safe.
-
-7. **Verify the published artifact against the recorded evidence, before promoting it.** This is the
-   step the `candidate` tag exists for, and the one that pays for the whole ceremony. `npm pack`
-   against a spec downloads the published tarball as-is, so its digest is what a consumer receives:
-
-   ```bash
-   npm pack @snack-ai/cli@<version> @snack-ai/opencode@<version>
-   sha256sum *.tgz                       # must equal docs/release/artifacts.md
-   ```
-
-   A mismatch is not automatically a broken artifact — check which side is wrong before touching
-   anything. Pack the published commit's tree and compare:
-
-   ```bash
-   npm pack --workspace @snack-ai/cli --pack-destination /tmp/check
-   ```
-
-   If the local pack equals the registry, the artifact is right and the **evidence** is stale;
-   regenerate it with `npm run release:evidence`. If it does not, the published artifact is not what
-   the gates approved, and the release restarts rather than being patched in place. Either way
-   `latest` has not moved yet, so nothing a user can install was ever wrong.
-
-8. **Tag and release on GitHub**, from the commit the workflow published
-   (`gh api .../actions/runs/<id> --jq .head_sha`, which is `main`'s head, not the PR branch's):
-
-   ```bash
-   git tag -a v0.7.0 <sha> -m "v0.7.0" -m "<what this version is>"
-   git push origin v0.7.0
-   gh release create v0.7.0 --title "v0.7.0" --latest --notes "..."
-   ```
-
-   Titles are the tag; the body carries the feature. Stage 6's **SNACK MVP** is the one documented
-   exception. A GitHub release defaults to Latest — if the version is not the newest supported
-   product, pass `--latest=false`.
-
-9. **Check the channel tag rather than setting it.** `latest` and `rc` are set by the publish itself
-   — `release.yml` passes `--tag "${DIST_TAG}"` and then verifies the result, failing the run if the
-   tag does not resolve to the version it just published. For an ordinary minor there is nothing to
-   move by hand.
-
-   ```bash
-   npm view @snack-ai/cli dist-tags
-   ```
-
-   Hand tags are for the three cases the workflow cannot reach, and only those:
-
-   - **`stable`**, which no release ever moves. It points at the newest version whose surface the
-     project is willing to hold still, and it moves by decision. Give it to the user:
-     `! npm dist-tag add @snack-ai/cli@<version> stable`
-   - **a temporary tag**, such as the `candidate` tag the 1.0 flow publishes under before promotion.
-   - **repairing a failed verification**, when the publish succeeded but the tag did not land.
-
-   **There is no `next`.** It was retired after `0.7.0` and does not come back: a tag meaning
-   "whatever is newest" duplicates `latest` while it agrees with it and traps whoever installed it
-   the moment it does not. Release candidates publish to `rc`, which the workflow sets through
-   `--tag` like any other channel, and which is absent whenever no candidate is outstanding.
-
-10. **Verify the registry against the docs.** `npm view @snack-ai/cli dist-tags` must match what
-    `docs/release/identity.md` claims. Update the doc to what is true, and only after the registry
-    actually says so.
+7. **Check, do not set.** `npm view @snack-ai/cli dist-tags` after the run. If the run failed after
+   publishing, read which step: a digest mismatch means the published artifact is not what the gates
+   approved — `latest` already moved, so restart with a new patch rather than patching in place.
 
 ## Gotchas
 
@@ -161,8 +99,8 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
   It reads like an npm fault or a permissions problem. It is neither: it means the version is not in
   the registry, which on this repo almost always means the PR was not merged or the release workflow
   was never dispatched. `npm view @snack-ai/cli versions` settles it in one command. This is the
-  failure an earlier version of step 8 caused by handing over the tag commands as routine, before
-  anything had published.
+  failure an earlier version of this skill caused by handing over the tag commands as routine,
+  before anything had published.
 
 - **"Did anything named in `files` change?" governs the evidence, not just the package.** This is
   the Stage 9 republish rule applied one level up, and 1.0.0 learned it the hard way: the artifact
@@ -207,9 +145,11 @@ steps fail confusingly out of order rather than refusing. A dist-tag before the 
 - **Deriving the dist-tag from the version string.** `0.7.0` and `1.0.0-rc.1` belong to different
   channels and a version comparison does not say which; both are answers a human gives. It stays an
   explicit input behind the confirmation string.
-- **Editing `docs/release/identity.md` before the tag actually moved.** The table there is a record
-  of fact; writing the intended state makes the document lie, which is the failure this repo spends
-  the most effort avoiding.
+- **Writing the intended state into a record before the registry said so.**
+  `docs/release/identity.md` once carried a per-release table that was edited ahead of the tag
+  moving, and the document lied. It is also why that table is gone: a record written by hand in a PR
+  after the fact is a second copy of what the registry and the GitHub release already state, and it
+  drifts.
 - **A `Status:` gate matched with `/^Status:.*pending/m`** while the word "pending" sat on the
   second line of a wrapped sentence. The gate passed and checked nothing — success-shaped silence in
   a gate is the same failure as in a dispatch. Prove a new gate _fails_ before trusting that it
@@ -227,8 +167,8 @@ Stage 7 shipped through this exact sequence: `@snack-ai/cli@0.7.0` from `7379c02
 platforms, tag `v0.7.0`, and `npm view dist-tags` ending at `{ latest: '0.7.0', stable: '0.6.1' }` —
 matching `docs/release/identity.md`. The `--tag latest` defect was caught before the dispatch; had
 it shipped, every default install would have moved to a pre-1.0 preview, which republishing does not
-undo. `1.0.0` then shipped through the `candidate` path and step 7 caught a stale-evidence defect
-within minutes — the walkthrough is in `references/promoting-a-major.md`.
+undo. `1.0.0` then shipped through the `candidate` path and the registry-digest check caught a
+stale-evidence defect within minutes — the walkthrough is in `references/promoting-a-major.md`.
 
 ## Reference
 

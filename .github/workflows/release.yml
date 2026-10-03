@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type publish-1.2.1 after reviewing the release evidence
+        description: >
+          Type publish-<version>, the version in packages/cli/package.json, after reviewing the
+          release evidence. Anything else fails the run.
         required: true
         type: string
       dist_tag:
@@ -27,12 +29,13 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  # write: the run tags the published commit and creates its GitHub release.
+  contents: write
   id-token: write
 
 jobs:
   publish:
-    if: inputs.confirmation == 'publish-1.2.1' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -43,6 +46,18 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.16.0
+      # The confirmation used to be a literal in the `if:` above, edited by a PR before every
+      # release, and a mismatch skipped the job and reported success. Reading the version here
+      # removes that PR and turns a mistyped confirmation into a failure.
+      - name: Check the confirmation names this version
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          version="$(node -p "require('./packages/cli/package.json').version")"
+          if [ "${CONFIRMATION}" != "publish-${version}" ]; then
+            echo "::error::confirmation '${CONFIRMATION}' does not name this version; type publish-${version}"
+            exit 1
+          fi
       # A release publishes only a commit whose CI has finished and passed. Dispatching while that
       # run is still going is an ordinary thing to do — the 0.6.1 release did it — and failing
       # immediately taught nothing except to wait and try again, so this waits instead. It is a
@@ -121,7 +136,9 @@ jobs:
             # A freshly published version takes a moment to become readable, so a single
             # immediate lookup reports a version that was in fact published.
             found=0
-            for attempt in 1 2 3 4 5 6; do
+            # Five minutes. `1.2.1` published correctly and failed this check at one minute, while the
+            # registry was still propagating.
+            for attempt in $(seq 1 30); do
               if npm view "${spec}" version > /dev/null 2>&1; then
                 found=1
                 break
@@ -158,3 +175,47 @@ jobs:
             fi
           done
           exit "${failed}"
+      # What a consumer downloads is the registry's tarball, so that is what is compared against the
+      # digests the gates approved. This was a hand step after every release.
+      - name: Verify the registry serves the tarballs the evidence records
+        run: |
+          mkdir -p "${RUNNER_TEMP}/registry"
+          cli_version="$(node -p "require('./packages/cli/package.json').version")"
+          plugin_version="$(node -p "require('./packages/opencode/package.json').version")"
+          npm pack "@snack-ai/cli@${cli_version}" "@snack-ai/opencode@${plugin_version}" \
+            --pack-destination "${RUNNER_TEMP}/registry" --silent > /dev/null
+          failed=0
+          for tarball in "${RUNNER_TEMP}"/registry/*.tgz; do
+            digest="sha256:$(sha256sum "${tarball}" | cut -d' ' -f1)"
+            if grep -qF "${digest}" docs/release/artifacts.md; then
+              echo "registry $(basename "${tarball}") matches ${digest}" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::registry $(basename "${tarball}") is ${digest}, which artifacts.md does not record"
+              failed=1
+            fi
+          done
+          exit "${failed}"
+      # The tag and the GitHub release are the record of the publication. Both were written by hand
+      # after every publish and then recorded again in docs/release/identity.md by a PR of their own.
+      - name: Tag the published commit and create its GitHub release
+        if: env.CLI_PUBLISHED == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          version="$(node -p "require('./packages/cli/package.json').version")"
+          plugin_version="$(node -p "require('./packages/opencode/package.json').version")"
+          notes="${RUNNER_TEMP}/notes.md"
+          node scripts/release-notes.mjs "${version}" "${plugin_version}" > "${notes}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo
+            echo "## Published"
+            echo
+            echo "From ${GITHUB_SHA} by ${run_url}, npm ${DIST_TAG}, with SLSA provenance."
+            echo "The registry tarballs match docs/release/artifacts.md."
+          } >> "${notes}"
+          flags=(--latest)
+          if [ "${DIST_TAG}" != "latest" ]; then flags=(--prerelease --latest=false); fi
+          gh release create "v${version}" --target "${GITHUB_SHA}" --title "v${version}" \
+            --notes-file "${notes}" "${flags[@]}"
