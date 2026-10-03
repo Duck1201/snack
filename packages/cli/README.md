@@ -27,11 +27,11 @@ snack status
 ```text
 $ snack status --source work
 work
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  as of        5m ago · sync ok · period since 2026-10-03
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -45,7 +45,7 @@ Here is what each piece means, no statistics required:
 
 | You see                                        | It means                                                                                                                            |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `96-100% chance it goes through`               | A range, not a promise. Somewhere in there is the chance your next prompt completes.                                                |
+| `95-100% chance it goes through`               | A range, not a promise. Somewhere in there is the chance your next prompt completes.                                                |
 | `risk low`                                     | Read off the **bottom** of that range, never the middle. A wide range can never look confident.                                     |
 | `evidence moderate`                            | How much your own history actually backs this up. A fresh install says `very_low`, and means it.                                    |
 | `pressure high`                                | You, right now, compared to you on a normal day. Nothing to do with your provider's limits.                                         |
@@ -79,11 +79,11 @@ Planning a run rather than a single prompt? `--sequence <n>` adds the chance tha
 $ snack status --source work --sequence 10
 work
   next prompt  95-100% chance it goes through · risk low
-  next 10      62-100% chance all 10 go through · risk elevated
+  next 10      61-100% chance all 10 go through · risk elevated
   evidence     moderate — some history, but few refusals seen yet
-  pressure     moderate · above 72% of your own history · typical prompt
+  pressure     moderate · above 74% of your own history · typical prompt
   drivers      input tokens, output tokens
-  as of        34m ago · sync ok · period since 2026-10-03
+  as of        11m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -93,7 +93,7 @@ work
 | You see                            | It means                                                                                                                                 |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `next 10`                          | The number you asked about, echoed back. SNACK never picks it, and never tells you how far you can go.                                   |
-| `62-100% chance all 10 go through` | A range for the whole run. Lower than the single-prompt one, because every one of them has to make it.                                   |
+| `61-100% chance all 10 go through` | A range for the whole run. Lower than the single-prompt one, because every one of them has to make it.                                   |
 | `risk elevated`                    | Read off the bottom of that range, under the same thresholds as `next prompt`.                                                           |
 | the last `!`                       | What the estimate assumes: each prompt meets the conditions the next one does, with no allowance for pressure climbing as you send them. |
 
@@ -103,10 +103,10 @@ the method has its own name — `sequence-bayesian-pressure-band@1` here — on 
 row and in `--json`.
 
 Ask about a long enough run on a short enough history and the range gets wide. When it is wider than
-half the scale, the panel says so: on this same history `--sequence 25` reads `30-99%` and adds "The
-25-prompt interval is too wide to say much; it cannot tell whether all of them going through is more
-likely than not." Read that as an honest "not enough to say", not as a broken tool: a range that
-straddles even odds cannot tell you whether the run is more likely to go through than not. It
+half the scale, the panel says so: on this same history `--sequence 25` reads `29-100%` and adds
+"The 25-prompt interval is too wide to say much; it cannot tell whether all of them going through is
+more likely than not." Read that as an honest "not enough to say", not as a broken tool: a range
+that straddles even odds cannot tell you whether the run is more likely to go through than not. It
 suggests no fix, because neither a shorter sequence nor more history reliably narrows it.
 
 And `snack stats` shows you what your week actually looked like:
@@ -407,12 +407,12 @@ The figure Codex states about its own windows is quoted on the `reported` row of
 ```text
 $ snack status --source codex
 codex
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
-  as of        5m ago · sync ok · period since 2026-10-03
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 9m ago
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.

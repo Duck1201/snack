@@ -164,8 +164,8 @@ The panel gains one row directly beneath `next prompt`, so the two readings comp
 
 ```text
 work
-  next prompt  96-100% chance it goes through · risk low
-  next 10      64-100% chance all 10 go through · risk elevated
+  next prompt  95-100% chance it goes through · risk low
+  next 10      61-100% chance all 10 go through · risk elevated
 ```
 
 The label is `next <n>`; the sentence is `{lower}-{upper}% chance all {n} go through · risk {label}`,
@@ -184,7 +184,7 @@ usage pressure rising as they are sent." At `n = 1` there is no next prompt to a
 caveat is omitted. When the sequence interval is wider than half the probability scale
 (`sequence-width-v1`), a further caveat says so plainly — "The 10-prompt interval is too wide to say
 much; it cannot tell whether all of them going through is more likely than not." — so that a
-`0-78%` reads as an honest "not enough to say" rather than as a broken tool. It names no remedy:
+`0-79%` reads as an honest "not enough to say" rather than as a broken tool. It names no remedy:
 neither a shorter sequence nor more history always narrows the interval. Each is shared beneath the
 panels when every source carries it, by the rule above. In `--json` each report gains the
 optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without

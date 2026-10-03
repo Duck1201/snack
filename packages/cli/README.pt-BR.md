@@ -27,11 +27,11 @@ snack status
 ```text
 $ snack status --source work
 work
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  as of        5m ago · sync ok · period since 2026-10-03
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -45,7 +45,7 @@ O que cada pedaço quer dizer, sem exigir estatística:
 
 | Você vê                                        | Quer dizer                                                                                                                         |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `96-100% chance it goes through`               | Uma faixa, não uma promessa. Em algum ponto dela está a chance do próximo prompt completar.                                        |
+| `95-100% chance it goes through`               | Uma faixa, não uma promessa. Em algum ponto dela está a chance do próximo prompt completar.                                        |
 | `risk low`                                     | Lido pela **base** da faixa, nunca pelo meio. Uma faixa larga nunca consegue parecer confiante.                                    |
 | `evidence moderate`                            | O quanto o seu próprio histórico sustenta isso. Instalação nova diz `very_low`, e é sincera.                                       |
 | `pressure high`                                | Você, agora, comparado a você num dia normal. Nada a ver com os limites do provedor.                                               |
@@ -79,11 +79,11 @@ os próximos `<n>` passem, numa linha própria logo abaixo de `next prompt`:
 $ snack status --source work --sequence 10
 work
   next prompt  95-100% chance it goes through · risk low
-  next 10      62-100% chance all 10 go through · risk elevated
+  next 10      61-100% chance all 10 go through · risk elevated
   evidence     moderate — some history, but few refusals seen yet
-  pressure     moderate · above 72% of your own history · typical prompt
+  pressure     moderate · above 74% of your own history · typical prompt
   drivers      input tokens, output tokens
-  as of        34m ago · sync ok · period since 2026-10-03
+  as of        11m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -93,7 +93,7 @@ work
 | Você vê                            | Quer dizer                                                                                                                              |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `next 10`                          | O número que você perguntou, devolvido. O SNACK nunca o escolhe, e nunca diz até onde você pode ir.                                     |
-| `62-100% chance all 10 go through` | Uma faixa para a sequência inteira. Mais baixa que a de um prompt só, porque cada um deles tem que passar.                              |
+| `61-100% chance all 10 go through` | Uma faixa para a sequência inteira. Mais baixa que a de um prompt só, porque cada um deles tem que passar.                              |
 | `risk elevated`                    | Lido pela base dessa faixa, com os mesmos limiares de `next prompt`.                                                                    |
 | o último `!`                       | O que a estimativa supõe: cada prompt encontra as mesmas condições que o seguinte, sem contar a pressão subindo enquanto você os envia. |
 
@@ -104,7 +104,7 @@ método tem nome próprio — aqui `sequence-bayesian-pressure-band@1` — na li
 
 Pergunte por uma sequência longa o bastante sobre um histórico curto o bastante e a faixa fica
 larga. Quando ela passa de metade da escala, o painel diz isso: neste mesmo histórico,
-`--sequence 25` dá `30-99%` e acrescenta "The 25-prompt interval is too wide to say much; it cannot
+`--sequence 25` dá `29-100%` e acrescenta "The 25-prompt interval is too wide to say much; it cannot
 tell whether all of them going through is more likely than not." Leia isso como um "não dá para
 dizer" honesto, não como ferramenta quebrada: uma faixa que atravessa o meio a meio não consegue
 dizer se é mais provável a sequência passar do que não. Ela não sugere conserto, porque nem uma
@@ -414,12 +414,12 @@ O número que o Codex declara sobre as próprias janelas é citado na linha `rep
 ```text
 $ snack status --source codex
 codex
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
-  as of        5m ago · sync ok · period since 2026-10-03
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 9m ago
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.

@@ -36,11 +36,11 @@ SNACK reads that history and turns it into three things:
 ```text
 $ snack status --source work
 work
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  as of        5m ago · sync ok · period since 2026-10-03
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -71,11 +71,11 @@ next `<n>` go through, not only the next one.
 $ snack status --source work --sequence 10
 work
   next prompt  95-100% chance it goes through · risk low
-  next 10      62-100% chance all 10 go through · risk elevated
+  next 10      61-100% chance all 10 go through · risk elevated
   evidence     moderate — some history, but few refusals seen yet
-  pressure     moderate · above 72% of your own history · typical prompt
+  pressure     moderate · above 74% of your own history · typical prompt
   drivers      input tokens, output tokens
-  as of        34m ago · sync ok · period since 2026-10-03
+  as of        11m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
@@ -93,7 +93,7 @@ prompts: that count would be a claim about remaining capacity, which is exactly 
 know. The last line above says what the estimate assumes.
 
 When the interval is wider than half the probability scale, a further line says so plainly. On the
-same history, `--sequence 25` reads `30-99%` and adds "The 25-prompt interval is too wide to say
+same history, `--sequence 25` reads `29-100%` and adds "The 25-prompt interval is too wide to say
 much; it cannot tell whether all of them going through is more likely than not." That is not the
 tool failing. It is an honest "not enough to say": the range straddles even odds, so it cannot tell
 you whether the whole run is more likely to go through than not. It suggests no fix, because neither
@@ -180,12 +180,12 @@ SNACK's — on a row of its own beside the estimate:
 ```text
 $ snack status --source codex
 codex
-  next prompt  96-100% chance it goes through · risk low
+  next prompt  95-100% chance it goes through · risk low
   evidence     moderate — some history, but few refusals seen yet
   pressure     high · higher than every window in your own history · typical prompt
   drivers      prompt count, input tokens
-  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 5m ago
-  as of        5m ago · sync ok · period since 2026-10-03
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Wed UTC · 9m ago
+  as of        9m ago · sync ok · period since 2026-10-03
   ! The estimate is not yet calibrated against observed outcomes.
   ! Real provider capacity is unknown.
   ! Usage pressure compares this window with local history; it is not a share of capacity.
