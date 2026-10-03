@@ -12,6 +12,13 @@ test("a support matrix blocks the release until its Status line says complete", 
   assert.equal(supportMatrixIncomplete("Status: pending.\nthis says complete\n"), true);
   // A page with no Status line at all has not said it is finished.
   assert.equal(supportMatrixIncomplete("# Matrix\n"), true);
+  // The word anywhere on the line is not the line saying it: these all say the opposite.
+  assert.equal(supportMatrixIncomplete("Status: in progress — not yet complete.\n"), true);
+  assert.equal(supportMatrixIncomplete("Status: complete except Windows.\n"), true);
+  assert.equal(supportMatrixIncomplete("Status: will be complete once CI runs.\n"), true);
+  // The two ways the published pages write it.
+  assert.equal(supportMatrixIncomplete("Status: completed on 2026-07-30.\n"), false);
+  assert.equal(supportMatrixIncomplete("Status: complete\n"), false);
 });
 
 test("every client's published matrix is held to the gate", async () => {
