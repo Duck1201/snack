@@ -195,7 +195,10 @@ async function statusJson(fixture, argv) {
  */
 function assertSequenceShape(sequence, n) {
   const keys = (/** @type {unknown} */ value) => Object.keys(/** @type {object} */ (value)).sort();
-  const member = /** @type {Record<string, any>} */ (sequence);
+  const member =
+    /** @type {{length: number, viability: object, risk: object, evidence: {gates: object[]}, method: object, width: object}} */ (
+      sequence
+    );
   assert.deepEqual(keys(member), ["evidence", "length", "method", "risk", "viability", "width"]);
   assert.equal(member.length, n);
   assert.deepEqual(keys(member.viability), ["coverage_target", "lower", "point", "upper"]);
