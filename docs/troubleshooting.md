@@ -63,7 +63,8 @@ creates every one of these privately and never widens them.
 
 | Check | Looks at | Verdicts |
 | --- | --- | --- |
-| `source_fingerprint:<alias>:<client>` | Whether the client's history is a shape this build reads | **fail** — unsupported or inaccessible. SNACK fails closed here on purpose |
+| `source_fingerprint:<alias>:<client>` | Whether the client's history is a shape this build reads | **fail** — unsupported or inaccessible. SNACK fails closed here on purpose. For Codex CLI it passes while the family recorded at setup is still among those present, because one Codex history holds several supported families at once |
+| `source_coverage:<alias>:codex:<what>` | Codex CLI history SNACK deliberately does not read | **warn** — `forked_subagents`: forked subagent rollouts from Codex 0.147 or earlier, skipped whole because their copied parent turns cannot be told apart; `compressed_rollouts`: `rollout-*.jsonl.zst` files, not read in 1.3. `sync` keeps working; the prompts in them are not observed. See [the Codex support matrix](./codex-support.md) |
 | `plan_profile:<alias>` | The plan profile named in configuration | **warn** — unusable, so the bundled `generic` profile is used instead. Estimates stay honest but lean harder on a weak prior |
 | `source_mapping:<alias>` | Observations waiting on a provider mapping | **warn** — pending mappings, or the count is unknown. They are not lost; they are not attributed yet |
 | `source_freshness:<alias>` | How old the synchronized usage is | **warn** — nothing synchronized yet, older than 24 hours, or unknown. Run `snack sync` |

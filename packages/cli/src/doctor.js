@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { access, constants, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
+import { isCodexSource } from "./codex-adapter.js";
 import { isConfiguredSource, readConfig, requireConfiguredSource } from "./config.js";
 import { SnackError } from "./errors.js";
 import { probeSqliteDriver } from "./sqlite-driver.js";
@@ -163,18 +164,32 @@ export async function runDoctor(paths, options = {}) {
     (source) => options.source === undefined || source.alias === options.source,
   );
   for (const source of selected) {
-    const client = source.adapter === "claude" ? "Claude Code" : "OpenCode";
+    const client = clientNames[source.adapter] ?? source.adapter;
     // The adapter is what distinguishes the answer, so it belongs in the id and not only in the
     // prose. Two clients on one alias otherwise report the same id twice, and a reader cannot tell
     // which history is the unreadable one.
     const id = `source_fingerprint:${source.alias}:${source.adapter}`;
     try {
-      const fingerprint = createSourceAdapter(source).fingerprint();
-      checks.push(
-        fingerprint.supported && fingerprint.family === source.fingerprint
-          ? pass(id, `${client} schema fingerprint is supported.`)
-          : fail(id, `${client} schema fingerprint is unsupported.`),
+      const adapter = createSourceAdapter(source);
+      const fingerprint = adapter.fingerprint();
+      // Codex keeps several supported families in one history at once, because it never rewrites
+      // an old rollout. Upgrading Codex from one supported family to the next moves the newest
+      // file's family away from the one setup recorded while `sync` keeps reading both, so the
+      // configured family only has to be among those present.
+      const families = /** @type {(string | null)[]} */ (
+        "families" in fingerprint ? fingerprint.families : [fingerprint.family]
       );
+      checks.push(
+        fingerprint.supported && families.includes(source.fingerprint)
+          ? pass(id, `${client} schema fingerprint is supported.`)
+          : fail(
+              id,
+              `${client} schema fingerprint is unsupported; ` +
+                "SNACK refuses to read this history rather than guess at it. " +
+                "Check the client version against SNACK's support matrix, and update SNACK.",
+            ),
+      );
+      if (isCodexSource(source)) checks.push(...codexCoverageChecks(source.alias, adapter));
     } catch {
       checks.push(fail(id, `${client} source is inaccessible.`));
     }
@@ -474,6 +489,50 @@ function pendingMappingDetail(paths, source, pending) {
     `${sentence} Waiting on: ${named}. Configure each with \`snack setup\` and its --provider, ` +
     "then run `snack sync --full` to attribute what is already stored."
   );
+}
+
+/** How each client is named to a person. @type {Record<string, string>} */
+const clientNames = {
+  opencode: "OpenCode",
+  claude: "Claude Code",
+  codex: "Codex CLI",
+};
+
+/**
+ * What a Codex history holds that SNACK deliberately does not read, said where a user looks.
+ *
+ * Both are known undercounts rather than failures: a forked subagent from Codex 0.145-0.147 has no
+ * recoverable replay boundary, and a compressed rollout is not read in 1.3.0. `sync` keeps working
+ * either way, so each is a warning naming what is missing, never a refusal.
+ *
+ * @param {string} alias
+ * @param {ReturnType<typeof createSourceAdapter>} adapter
+ * @returns {DoctorCheck[]}
+ */
+function codexCoverageChecks(alias, adapter) {
+  const health = adapter.health();
+  const skippedForks = "skipped_fork_files" in health ? Number(health.skipped_fork_files) : 0;
+  const compressed = "compressed_files" in health ? Number(health.compressed_files) : 0;
+  /** @type {DoctorCheck[]} */
+  const checks = [];
+  if (skippedForks > 0) {
+    checks.push(
+      warn(
+        `source_coverage:${alias}:codex:forked_subagents`,
+        `${skippedForks} forked subagent rollout(s) from Codex 0.147 or earlier are not counted; ` +
+          "their history does not say where the copied parent turns end.",
+      ),
+    );
+  }
+  if (compressed > 0) {
+    checks.push(
+      warn(
+        `source_coverage:${alias}:codex:compressed_rollouts`,
+        `${compressed} compressed Codex rollout(s) are not read; their prompts are not observed.`,
+      ),
+    );
+  }
+  return checks;
 }
 
 /** @param {string} id @param {string} message @returns {DoctorCheck} */

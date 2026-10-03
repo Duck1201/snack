@@ -13,6 +13,7 @@ import { ENVELOPE_SCHEMA_VERSION } from "../src/output.js";
 import {
   cleanupRunFixtures,
   createClaudeHistory,
+  createCodexHistory,
   createOpenCodeDatabase,
   makeRunFixture,
 } from "./fixtures/run-fixture.js";
@@ -83,6 +84,11 @@ const invocations = [
     command: "setup claude",
     argv: ["setup", "claude", ...setupFlags("personal")],
   },
+  {
+    name: "setup-codex",
+    command: "setup codex",
+    argv: ["setup", "codex", ...setupFlags("codex")],
+  },
   { name: "sync", command: "sync", argv: ["sync", "--full"] },
   { name: "stats", command: "stats", argv: ["stats", "--verbose"] },
   { name: "status", command: "status", argv: ["status", "--no-sync"] },
@@ -129,6 +135,7 @@ async function makeConfiguredFixture() {
   const fixture = await makeRunFixture("snack-contracts-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root);
   fixture.options.modulePath = "/usr/local/lib/node_modules/@snack-ai/cli/src/update.js";
   return fixture;
 }
@@ -147,6 +154,23 @@ test("every command's JSON document validates against the published envelope sch
       validate(document),
       `${invocation.name}: ${JSON.stringify(validate.errors, null, 2)}`,
     );
+    if (invocation.name === "status") {
+      // Non-vacuity for the 1.3.0 addition: the Codex source really carried a stated figure, so
+      // the optional field was validated rather than merely allowed to be absent.
+      const reports = document.data.sources ?? [document.data];
+      const codex = reports.find(
+        (/** @type {{source: {alias: string}}} */ report) => report.source.alias === "codex",
+      );
+      assert.ok(codex?.reported_capacity?.length > 0, "no reported capacity reached status");
+      assert.ok(
+        reports
+          .filter(
+            (/** @type {{source: {alias: string}}} */ report) => report.source.alias !== "codex",
+          )
+          .every((/** @type {object} */ report) => !("reported_capacity" in report)),
+        "a source no Codex installation feeds quoted a Codex figure",
+      );
+    }
   }
 });
 
@@ -160,6 +184,7 @@ test("an applied setup says so under the key that names the opposite", async () 
   for (const [client, alias] of /** @type {[string, string][]} */ ([
     ["opencode", "work"],
     ["claude", "personal"],
+    ["codex", "codex"],
   ])) {
     fixture.stdout.value = "";
     await run(
@@ -523,6 +548,18 @@ test("the published command and flag surface has not changed", async () => {
       "--json",
       "--help",
     ],
+    "setup codex": [
+      "--non-interactive",
+      "--source",
+      "--provider",
+      "--profile",
+      "--plan",
+      "--plan-profile",
+      "--dry-run",
+      "--enable-prospective-analysis",
+      "--json",
+      "--help",
+    ],
     "setup opencode": [
       "--non-interactive",
       "--source",
@@ -622,11 +659,17 @@ test("the published support matrix names families the adapters actually read", a
   for (const [prefix, adapter] of [
     ["oc", "opencode-adapter.js"],
     ["cc", "claude-adapter.js"],
+    ["cx", "codex-adapter.js"],
   ]) {
     const source = await readFile(new URL(`../src/${adapter}`, import.meta.url), "utf8");
     /** @type {Set<string>} */
     const families = new Set();
-    for (const document of ["opencode-support.md", "claude-support.md", "compatibility.md"]) {
+    for (const document of [
+      "opencode-support.md",
+      "claude-support.md",
+      "codex-support.md",
+      "compatibility.md",
+    ]) {
       const matrix = await readFile(new URL(`../../../docs/${document}`, import.meta.url), "utf8");
       for (const quoted of matrix.match(new RegExp(`\`${prefix}-[a-z0-9-]+-v\\d+\``, "gu")) ?? []) {
         families.add(quoted.replaceAll("`", ""));

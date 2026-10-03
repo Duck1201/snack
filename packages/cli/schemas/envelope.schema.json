@@ -43,6 +43,9 @@
       "$ref": "#/$defs/payloadOf/setup-claude"
     },
     {
+      "$ref": "#/$defs/payloadOf/setup-codex"
+    },
+    {
       "$ref": "#/$defs/payloadOf/sync"
     },
     {
@@ -116,6 +119,30 @@
           "properties": {
             "data": {
               "$ref": "https://snack-ai.dev/schemas/commands/setup-claude.schema.json"
+            }
+          }
+        }
+      },
+      "setup-codex": {
+        "if": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "setup codex"
+            },
+            "status": {
+              "not": {
+                "const": "error"
+              }
+            }
+          },
+          "required": ["command"]
+        },
+        "then": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "https://snack-ai.dev/schemas/commands/setup-codex.schema.json"
             }
           }
         }

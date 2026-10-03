@@ -19,12 +19,12 @@ Human warnings go to stderr. Primary human output goes to stdout. JSON mode writ
 ### 12.2 `snack setup`
 
 ```text
-snack setup <opencode|claude> [--dry-run] [--non-interactive] [--json]
-                              [--source <alias>] [--provider <id>]
-                              [--profile <name>] [--plan <label>]
-                              [--plan-profile <name>]
-                              [--enable-prospective-analysis]
-snack setup opencode          [--install-plugin] [--yes]
+snack setup <opencode|claude|codex> [--dry-run] [--non-interactive] [--json]
+                                    [--source <alias>] [--provider <id>]
+                                    [--profile <name>] [--plan <label>]
+                                    [--plan-profile <name>]
+                                    [--enable-prospective-analysis]
+snack setup opencode                [--install-plugin] [--yes]
 ```
 
 Responsibilities:
@@ -38,7 +38,7 @@ Responsibilities:
 - initialize/migrate SNACK storage;
 - test source/spool permissions and report next steps.
 
-The MVP accepts `opencode`; `claude` is accepted from 0.7. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
+The MVP accepts `opencode`; `claude` is accepted from 0.7, and `codex` from 1.3. Claude Code and Codex CLI are read from the histories they already write, so neither registers anything in the client and neither is offered a plugin. Setup is idempotent. Re-running it shows current state and proposed changes rather than duplicating plugin/hook entries or sources.
 
 Setup is guided by default and asks only for what it cannot observe. The source database, its schema fingerprint, the providers present in it, any already-configured sources, and the current plugin registration are all discovered. An unsupported fingerprint fails closed before the first question, so nobody is walked through a questionnaire that cannot lead anywhere. The local account or profile alias is deliberately asked rather than discovered: OpenCode does not expose account identity, and SNACK never reads credentials.
 
@@ -120,6 +120,16 @@ requirement from naming the method: an interval built from no observation of thi
 measurement of it, and an interface that let it pass beside a calibrated one would be relabelling a
 weak prior as a calibrated probability. The label carries no identifier and no version, because it
 exists to be read rather than parsed.
+
+**A figure a client states about itself is quoted on its own row, beside the estimate.** From 1.3, a
+capacity source fed by Codex CLI carries a `reported` row in the panel, after the estimate's rows and
+before `as of`: "Codex states 34% of its 5h window, resets in 2h 30m · 19% of its 7d window, resets
+Fri · 3m ago". The verb is the client's, and the unit is a stated window identified by its length. A
+window whose reset has passed is not repeated — "Codex's 5h window reset 14:30; no figure stated
+since". The row is never part of the `next prompt` interval or the `pressure` band, and nothing in
+the forecast reads it ([ADR-0007](../adr/0007-quote-codex-reported-capacity.md)). In `--json` the same
+figures are the optional `reported_capacity` array on that source's report, absent for a source no
+Codex installation feeds.
 
 `status` draws no chart. The window scores remain in `pressure.trend` in `--json`; the drawing of
 them belongs to a surface with room for a series worth drawing.

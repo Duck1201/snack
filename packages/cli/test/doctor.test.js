@@ -11,6 +11,7 @@ import { initializeDatabase, migrationDirectory } from "../src/storage.js";
 import {
   cleanupRunFixtures,
   createClaudeHistory,
+  createCodexHistory,
   createOpenCodeDatabase,
   makeRunFixture,
 } from "./fixtures/run-fixture.js";
@@ -275,7 +276,16 @@ test("every check doctor can report is documented in the troubleshooting guide",
   const fixture = await makeRunFixture("snack-doctor-docs-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
-  for (const client of ["opencode", "claude"]) {
+  // A Codex history with both gaps doctor reports for it, so its coverage checks are produced too.
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-147-0.jsonl",
+    "fork-0-146-0.jsonl",
+  ]);
+  await writeFile(
+    join(fixture.options.env.CODEX_HOME, "sessions", "2026", "01", "02", "rollout-x.jsonl.zst"),
+    "zstd",
+  );
+  for (const client of ["opencode", "claude", "codex"]) {
     await run(
       [
         "node",
@@ -284,7 +294,7 @@ test("every check doctor can report is documented in the troubleshooting guide",
         client,
         "--non-interactive",
         "--source",
-        client === "opencode" ? "work" : "personal",
+        client === "opencode" ? "work" : client === "claude" ? "personal" : "codex",
         "--provider",
         "anthropic",
         "--profile",
@@ -315,4 +325,96 @@ test("every check doctor can report is documented in the troubleshooting guide",
       `doctor reports ${check.id}, which docs/troubleshooting.md never explains`,
     );
   }
+});
+
+/**
+ * @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture
+ * @param {string} alias
+ */
+async function setupCodex(fixture, alias = "codex") {
+  return run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "codex",
+      "--non-interactive",
+      "--source",
+      alias,
+      "--provider",
+      "openai",
+      "--profile",
+      "default",
+      "--plan",
+      "plus",
+    ],
+    fixture.options,
+  );
+}
+
+/** @param {Awaited<ReturnType<typeof makeRunFixture>>} fixture */
+async function doctorChecks(fixture) {
+  fixture.stdout.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const document = JSON.parse(fixture.stdout.value);
+  return /** @type {{id: string, status: string, message: string}[]} */ (document.data.checks);
+}
+
+test("doctor keeps passing a Codex source when Codex moves to the next supported family", async () => {
+  const fixture = await makeRunFixture("snack-doctor-codex-family-");
+  const home = await createCodexHistory(fixture.root, "version-0-147-0.jsonl");
+  fixture.options.env.CODEX_HOME = home;
+  assert.equal(await setupCodex(fixture), 0);
+  // Codex upgraded: a newer rollout in the usage-record family is now the most recent file, while
+  // the configuration still names the token-count family setup saw.
+  await writeFile(
+    join(home, "sessions", "2026", "01", "02", "rollout-later.jsonl"),
+    await readFile(new URL("./fixtures/codex/version-0-159-3.jsonl", import.meta.url), "utf8"),
+  );
+
+  const checks = await doctorChecks(fixture);
+  const fingerprint = checks.find((check) => check.id === "source_fingerprint:codex:codex");
+  assert.equal(fingerprint?.status, "pass", JSON.stringify(fingerprint));
+  assert.ok(!checks.some((check) => check.id.startsWith("source_coverage:")));
+});
+
+test("doctor fails a drifted Codex history with output that says what to do", async () => {
+  const fixture = await makeRunFixture("snack-doctor-codex-drift-");
+  const home = await createCodexHistory(fixture.root, "version-0-159-3.jsonl");
+  fixture.options.env.CODEX_HOME = home;
+  assert.equal(await setupCodex(fixture), 0);
+  await writeFile(
+    join(home, "sessions", "2026", "01", "02", "rollout-drift.jsonl"),
+    await readFile(new URL("./fixtures/codex/drifted-usage.jsonl", import.meta.url), "utf8"),
+  );
+
+  const exitCode = await run(["node", "snack", "doctor"], fixture.options);
+  assert.notEqual(exitCode, 0);
+  const checks = await doctorChecks(fixture);
+  const fingerprint = checks.find((check) => check.id === "source_fingerprint:codex:codex");
+  assert.equal(fingerprint?.status, "fail");
+  assert.match(String(fingerprint?.message), /Codex CLI schema fingerprint is unsupported/u);
+  assert.match(String(fingerprint?.message), /support matrix/u);
+});
+
+test("doctor warns about Codex history it deliberately does not read", async () => {
+  const fixture = await makeRunFixture("snack-doctor-codex-coverage-");
+  const home = await createCodexHistory(fixture.root, [
+    "version-0-147-0.jsonl",
+    "fork-0-146-0.jsonl",
+  ]);
+  fixture.options.env.CODEX_HOME = home;
+  await mkdir(join(home, "archived_sessions"), { recursive: true });
+  await writeFile(join(home, "archived_sessions", "rollout-old.jsonl.zst"), "zstd");
+  assert.equal(await setupCodex(fixture), 0);
+
+  const checks = await doctorChecks(fixture);
+  const forks = checks.find((check) => check.id === "source_coverage:codex:codex:forked_subagents");
+  const compressed = checks.find(
+    (check) => check.id === "source_coverage:codex:codex:compressed_rollouts",
+  );
+  assert.equal(forks?.status, "warn");
+  assert.match(String(forks?.message), /^1 forked subagent/u);
+  assert.equal(compressed?.status, "warn");
+  assert.match(String(compressed?.message), /^1 compressed Codex rollout/u);
 });

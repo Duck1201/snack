@@ -37,6 +37,11 @@ import {
   exportJsonChunks,
 } from "./export.js";
 import { createClaudeAdapter, resolveClaudeProjectsDirectory } from "./claude-adapter.js";
+import {
+  createCodexAdapter,
+  isCodexSource,
+  resolveCodexSessionsDirectory,
+} from "./codex-adapter.js";
 import { createSourceAdapter } from "./source-adapter.js";
 import { createOpenCodeAdapter, resolveOpenCodeDatabase } from "./opencode-adapter.js";
 import {
@@ -60,7 +65,7 @@ import {
 } from "./spool.js";
 import { PREDICTION_POLICY, classifyIngestionCompleteness } from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
-import { createSourceStatus } from "./status.js";
+import { createSourceStatus, describeReportedCapacity } from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
   assertReadableStorage,
@@ -84,6 +89,7 @@ import {
   readSpoolIssueCount,
   readPendingMappingCount,
   purgeScope,
+  readReportedCapacity,
   readSourceSummary,
   rollbackDatabaseInitialization,
   storeObservations,
@@ -352,92 +358,139 @@ export async function run(argv, options = {}) {
         ...(options.env ? { env: options.env } : {}),
         ...(options.home ? { home: options.home } : {}),
       });
-      const adapter = createClaudeAdapter({ projectsDirectory });
-      // Reading the history is what proves it is there and readable, so it comes before any
-      // question: a guided setup must never walk someone through a questionnaire that cannot lead
-      // anywhere. An absent directory throws `source_unavailable` from here.
-      const fingerprint = adapter.fingerprint();
-      if (!fingerprint.supported || fingerprint.family === null) {
-        throw new SnackError("The Claude Code history fingerprint is unsupported.", {
-          code: ExitCode.unavailable,
-          reason: "source_schema_unsupported",
-        });
-      }
-      const dryRun = adapter.readAll();
-      const resolved = await resolveSetupValues({
-        commandOptions,
-        observations: dryRun.observations,
-        existingSources: await readConfiguredSources(paths.configFile),
-        prompt: options.prompt,
-        stdout,
-        // Claude Code registers no plugin, so the question that would offer one is not asked.
-        offerPluginInstall: false,
-      });
-      if (resolved === null) {
-        stdout.write("Setup cancelled; nothing was changed.\n");
-        return;
-      }
-      const configuredSource = {
-        alias: resolved.source,
-        installation_id: randomUUID(),
+      await setupHistoryClient(this, commandOptions, {
+        name: "Claude Code",
+        command: "setup claude",
         adapter: "claude",
-        projects: projectsDirectory,
-        provider: resolved.provider,
-        profile: resolved.profile,
-        plan: resolved.plan,
-        plan_profile: resolved.planProfile ?? "generic",
-        fingerprint: fingerprint.family,
-      };
-      /** @type {{rotated: boolean, retired_prompts: number} | null} */
-      let capacityPeriod = null;
-      let committed = configuredSource;
-      if (resolved.dryRun !== true) {
-        const result = await commitConfiguredSource({
-          paths,
-          now,
-          source: configuredSource,
-          locationKey: "projects",
-          enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
-          writeConfig: options.writeConfig,
-          registerPlugin: undefined,
-        });
-        committed = /** @type {typeof configuredSource} */ (result.source);
-        capacityPeriod = result.capacityPeriod;
-      }
-      const data = {
-        source: {
-          alias: committed.alias,
-          installation_id: committed.installation_id,
-          adapter: committed.adapter,
-          provider: committed.provider,
-          profile: committed.profile,
-          plan: committed.plan,
-          plan_profile: committed.plan_profile,
-        },
-        fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
-        dry_run: {
-          observations: dryRun.observations.length,
-          applied: resolved.dryRun !== true,
-        },
-      };
-      if (wantsJson(this, configuredJson)) {
-        stdout.write(
-          formatJson(
-            createEnvelope("setup claude", data, {
-              now,
-              warnings: capacityPeriodWarnings(capacityPeriod),
-            }),
-          ),
-        );
-      } else {
-        stdout.write(
-          resolved.dryRun === true
-            ? `Validated Claude Code source ${committed.alias}; no changes applied.\n`
-            : `Configured Claude Code source ${committed.alias}.\n`,
-        );
-        reportWarnings(stderr, capacityPeriodWarnings(capacityPeriod));
-      }
+        locationKey: "projects",
+        location: projectsDirectory,
+        reader: createClaudeAdapter({ projectsDirectory }),
+      });
     });
+
+  setup
+    .command("codex")
+    .description("configure read-only Codex CLI history")
+    .option("--non-interactive", "require all setup values as flags")
+    .option("--source <alias>", "capacity-source alias")
+    .option("--provider <identifier>", "provider identifier")
+    .option("--profile <alias>", "local account/profile alias")
+    .option("--plan <identifier>", "how you refer to your plan; a label, not a lookup key")
+    .option("--plan-profile <identifier>", "bundled or custom plan profile to use as the prior")
+    .option("--dry-run", "validate and show the proposal without mutation")
+    .option("--enable-prospective-analysis", "enable allowlisted ephemeral prompt features")
+    .option("--json", "emit one versioned JSON document")
+    .action(async function setupCodex(commandOptions) {
+      const sessionsDirectory = resolveCodexSessionsDirectory({
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.home ? { home: options.home } : {}),
+      });
+      await setupHistoryClient(this, commandOptions, {
+        name: "Codex CLI",
+        command: "setup codex",
+        adapter: "codex",
+        locationKey: "sessions",
+        location: sessionsDirectory,
+        reader: createCodexAdapter({ sessionsDirectory }),
+      });
+    });
+
+  /**
+   * Configure a client SNACK reads from the history it already writes, with nothing registered in
+   * the client: Claude Code and Codex CLI.
+   *
+   * One body for both, because this is the part of setup where two clients must never drift. The
+   * fingerprint is checked before any question, so a guided setup never walks someone through a
+   * questionnaire that cannot lead anywhere; an absent history throws `source_unavailable` from
+   * the fingerprint itself.
+   *
+   * @param {Command} command
+   * @param {Record<string, unknown>} commandOptions
+   * @param {{name: string, command: string, adapter: "claude" | "codex", locationKey: "projects" | "sessions", location: string, reader: {fingerprint(): {family: string | null, supported: boolean}, readAll(): {observations: {provider: string | null, model: string | null}[]}}}} client
+   */
+  async function setupHistoryClient(command, commandOptions, client) {
+    const fingerprint = client.reader.fingerprint();
+    if (!fingerprint.supported || fingerprint.family === null) {
+      throw new SnackError(`The ${client.name} history fingerprint is unsupported.`, {
+        code: ExitCode.unavailable,
+        reason: "source_schema_unsupported",
+      });
+    }
+    const dryRun = client.reader.readAll();
+    const resolved = await resolveSetupValues({
+      commandOptions,
+      observations: dryRun.observations,
+      existingSources: await readConfiguredSources(paths.configFile),
+      prompt: options.prompt,
+      stdout,
+      // Neither client registers a plugin, so the question that would offer one is not asked.
+      offerPluginInstall: false,
+    });
+    if (resolved === null) {
+      stdout.write("Setup cancelled; nothing was changed.\n");
+      return;
+    }
+    const configuredSource = {
+      alias: resolved.source,
+      installation_id: randomUUID(),
+      adapter: client.adapter,
+      [client.locationKey]: client.location,
+      provider: resolved.provider,
+      profile: resolved.profile,
+      plan: resolved.plan,
+      plan_profile: resolved.planProfile ?? "generic",
+      fingerprint: fingerprint.family,
+    };
+    /** @type {{rotated: boolean, retired_prompts: number} | null} */
+    let capacityPeriod = null;
+    let committed = configuredSource;
+    if (resolved.dryRun !== true) {
+      const result = await commitConfiguredSource({
+        paths,
+        now,
+        source: configuredSource,
+        locationKey: client.locationKey,
+        enableProspectiveAnalysis: resolved.enableProspectiveAnalysis === true,
+        writeConfig: options.writeConfig,
+        registerPlugin: undefined,
+      });
+      committed = /** @type {typeof configuredSource} */ (result.source);
+      capacityPeriod = result.capacityPeriod;
+    }
+    const data = {
+      source: {
+        alias: committed.alias,
+        installation_id: committed.installation_id,
+        adapter: committed.adapter,
+        provider: committed.provider,
+        profile: committed.profile,
+        plan: committed.plan,
+        plan_profile: committed.plan_profile,
+      },
+      fingerprint: { family: fingerprint.family, supported: fingerprint.supported },
+      dry_run: {
+        observations: dryRun.observations.length,
+        applied: resolved.dryRun !== true,
+      },
+    };
+    if (wantsJson(command, configuredJson)) {
+      stdout.write(
+        formatJson(
+          createEnvelope(client.command, data, {
+            now,
+            warnings: capacityPeriodWarnings(capacityPeriod),
+          }),
+        ),
+      );
+    } else {
+      stdout.write(
+        resolved.dryRun === true
+          ? `Validated ${client.name} source ${committed.alias}; no changes applied.\n`
+          : `Configured ${client.name} source ${committed.alias}.\n`,
+      );
+      reportWarnings(stderr, capacityPeriodWarnings(capacityPeriod));
+    }
+  }
 
   config
     .command("path")
@@ -627,7 +680,7 @@ export async function run(argv, options = {}) {
     .option("--verbose", "add the evidence gates, the method and the policy versions")
     .option("--json", "emit one versioned JSON document")
     .action(async function status(commandOptions) {
-      /** @type {ReturnType<typeof createSourceStatus>[]} */
+      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>})[]} */
       const statuses = [];
       /** @type {number[]} */
       const attemptIds = [];
@@ -738,7 +791,23 @@ export async function run(argv, options = {}) {
               ? { category: prospective.category, prospective: prospective.prospective }
               : {}),
           });
-          statuses.push(sourceStatus);
+          // Attached after the forecast is built, and beside it: what Codex states about its own
+          // windows is quoted, never an input to the interval, the risk, the evidence or pressure
+          // (ADR-0007). Absent unless a Codex installation feeds this capacity source.
+          const quotesCodex = inScope.some(
+            (entry) => entry.alias === source.alias && isCodexSource(entry),
+          );
+          statuses.push(
+            quotesCodex
+              ? {
+                  ...sourceStatus,
+                  reported_capacity: describeReportedCapacity(
+                    readReportedCapacity(paths.databaseFile, source.alias),
+                    now,
+                  ),
+                }
+              : sourceStatus,
+          );
           if (summary.active_period_id !== null) {
             attemptIds.push(
               recordPredictionAttempt(
@@ -1264,7 +1333,7 @@ async function prepareSpoolDirectories(paths, registration) {
 }
 
 /**
- * @param {{paths: import("./paths.js").SnackPaths, source: {alias: string, installation_id: string, database?: string, projects?: string, fingerprint: string, provider: string, profile: string, plan: string, adapter: string}, full: boolean, now: Date, mappings: {mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}} options
+ * @param {{paths: import("./paths.js").SnackPaths, source: {alias: string, installation_id: string, database?: string, projects?: string, sessions?: string, fingerprint: string, provider: string, profile: string, plan: string, adapter: string}, full: boolean, now: Date, mappings: {mappedProviders: Set<string>, providerMappingCounts: Map<string, number>}}} options
  */
 async function synchronizeSource(options) {
   const results = [];
@@ -1280,14 +1349,23 @@ async function synchronizeSource(options) {
       ? null
       : readIngestionCursor(options.paths.databaseFile, options.source.alias);
     const backfill = options.full ? adapter.readAll() : adapter.readSince(cursor);
-    results.push(
-      storeObservations(options.paths.databaseFile, options.source, backfill, options.now, {
+    const stored = storeObservations(
+      options.paths.databaseFile,
+      options.source,
+      backfill,
+      options.now,
+      {
         ...mappings,
         // Records the adapter could not parse travel with the batch, so a quietly incomplete
         // read is reported rather than looking like a complete one.
         ...("rejected" in backfill ? { rejected: backfill.rejected } : {}),
-      }),
+      },
     );
+    // What a client stated about its own capacity is counted by storage for its own tests, and
+    // deliberately kept out of the sync payload in 1.3.0: the frozen `sync` document describes
+    // observations, and a figure quoted from the client is not one.
+    delete stored.reported_capacity;
+    results.push(stored);
   } catch {
     results.push(emptySyncResult(options.source.alias, "backfill", 1));
   }
@@ -1558,7 +1636,7 @@ async function readConfiguredSources(configFile) {
  * @param {{
  *   paths: import("./paths.js").SnackPaths,
  *   now: Date,
- *   source: {alias: string, installation_id: string, adapter: string, provider: string, profile: string, plan: string, plan_profile: string, fingerprint: string, database?: string, projects?: string},
+ *   source: {alias: string, installation_id: string, adapter: string, provider: string, profile: string, plan: string, plan_profile: string, fingerprint: string, database?: string, projects?: string, sessions?: string},
  *   locationKey: string,
  *   enableProspectiveAnalysis: boolean,
  *   writeConfig: typeof writePrivateAtomic | undefined,
