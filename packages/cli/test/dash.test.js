@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import { afterEach, test } from "node:test";
+import { setImmediate } from "node:timers";
 
 import Database from "better-sqlite3";
 import lockfile from "proper-lockfile";
@@ -158,6 +159,54 @@ test("Ctrl+Z restores the terminal and stops; SIGCONT takes it back and repaints
   // A full repaint: every row of the frame is written again.
   assert.ok(lastWrite(dash.terminal).includes("\u001B[1;1H"));
   dash.terminal.press("q");
+  assert.equal(await dash.done, 0);
+});
+
+test("Ctrl+Z during a recompute stops the process only once the storage lock is released", async () => {
+  // Stopped while holding the lock, the dash would block every other snack command for as long as
+  // the shell kept it stopped. The terminal is restored at once; the stop waits for the work.
+  const source = await makeSeededSource({ origin, roots });
+  source.plant(
+    Array.from({ length: 60 }, (_unused, index) => ({
+      at: new Date(origin.getTime() + index * 30 * 60_000),
+    })),
+  );
+  const terminal = makeFakeTerminal();
+  const clock = makeFakeClock(start);
+  const signals = makeFakeSignals();
+  const target = join(source.paths.stateDir, "storage-operation");
+  /** @type {boolean | null} */
+  let lockAtRaise = null;
+  const raise = signals.port.raise;
+  signals.port.raise = (/** @type {string} */ signal) => {
+    lockAtRaise = lockfile.checkSync(target, { realpath: false, stale: 120_000 });
+    raise(signal);
+  };
+  const dash = await startDash(
+    { env: source.env, home: source.root, now: start },
+    { terminal, clock, sync: makeFakeSync(async () => SYNC_OK), signals },
+  );
+  let pressed = false;
+  let restoredAtOnce = false;
+  const poll = async () => {
+    for (let attempt = 0; attempt < 20_000 && !pressed; attempt += 1) {
+      if (lockfile.checkSync(target, { realpath: false, stale: 120_000 })) {
+        terminal.press("\u001A");
+        pressed = true;
+        restoredAtOnce = !terminal.inAltBuffer && !terminal.rawMode;
+        break;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  await Promise.all([poll(), clock.advance(SYNC_DELAY_MS)]);
+  await dash.settle();
+  assert.ok(pressed, "the recompute never took the lock while the test watched");
+  assert.ok(restoredAtOnce, "the terminal waited for the work to be restored");
+  assert.deepEqual(signals.raised, ["SIGSTOP"]);
+  assert.equal(lockAtRaise, false);
+  signals.send("SIGCONT");
+  terminal.press("q");
   assert.equal(await dash.done, 0);
 });
 

@@ -361,6 +361,11 @@ export async function runDash(ports) {
       recomputeAgain = true;
       return;
     }
+    if (suspended) {
+      // Never take the lock on the way to being stopped: run it when the dash is resumed.
+      recomputeOnTick = true;
+      return;
+    }
     recomputing = true;
     recomputeOnTick = false;
     try {
@@ -559,10 +564,24 @@ export async function runDash(ports) {
     }
   };
 
+  /**
+   * The terminal is handed back at once; the stop itself waits for the work in flight -- a
+   * recompute, a delivery -- so the process is never stopped holding the storage lock, which would
+   * block every other snack command for as long as the shell kept it stopped. Nothing new starts
+   * while suspended: `draw` paints nothing, and a recompute asked for meanwhile runs on resume.
+   */
   const suspend = () => {
+    if (suspended) return undefined;
     restore();
     suspended = true;
-    signals.raise("SIGSTOP");
+    const work = [...inflight];
+    if (work.length === 0) {
+      signals.raise("SIGSTOP");
+      return undefined;
+    }
+    return Promise.allSettled(work).then(() => {
+      if (suspended && !finished) signals.raise("SIGSTOP");
+    });
   };
 
   const resumeFromStop = () => {
@@ -573,6 +592,7 @@ export async function runDash(ports) {
     else enterTerminal();
     screen.invalidate();
     draw();
+    if (recomputeOnTick && !recomputing) track(recompute());
     if (
       !syncStopped &&
       state.sync.phase === "idle" &&

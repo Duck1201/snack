@@ -223,7 +223,7 @@ session promise; the guard every callback runs inside (§2.6); `process.on("exit
 | stdout `resize` (Node's `SIGWINCH`) | read new `columns`/`rows`, `invalidate()`, repaint immediately |
 | `SIGINT`, `SIGTERM` | `restore()`, remove our listener, `process.kill(process.pid, signal)` |
 | `SIGHUP`, `EIO` on stdout/stdin | the terminal is gone: skip writing, release listeners, exit |
-| `Ctrl+Z` key or an external `SIGTSTP` | `restore()`, then `process.kill(process.pid, "SIGSTOP")` (a listener on `SIGTSTP` suppresses the default stop, so the stop is sent as `SIGSTOP`) |
+| `Ctrl+Z` key or an external `SIGTSTP` | `restore()`, then `process.kill(process.pid, "SIGSTOP")` (a listener on `SIGTSTP` suppresses the default stop, so the stop is sent as `SIGSTOP`) — after the work in flight settles, so the process never stops holding the storage lock; no recompute starts while suspended (review of `3978a85`) |
 | `SIGCONT` | re-enter raw mode and the alternate buffer, `invalidate()`, repaint; if the next sync was due while stopped, start it now |
 
 The sync child is spawned **`detached: true`** (its own process group), so `SIGHUP`/`SIGINT` aimed at
