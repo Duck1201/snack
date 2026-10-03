@@ -891,8 +891,13 @@ export async function run(argv, options = {}) {
           { code: ExitCode.usage, reason: "dash_requires_terminal" },
         );
       }
-      await recoverSetupJournal(paths);
-      const current = await readConfig(paths.configFile);
+      // Under the lock, as every other command recovers: a journal another process is still writing
+      // belongs to a setup in flight, and rolling it back would rewrite its configuration and, with
+      // no backup named, delete the database.
+      const current = await withStorageOperationLock(paths, async () => {
+        await recoverSetupJournal(paths);
+        return readConfig(paths.configFile);
+      });
       const inScope = Array.isArray(current.sources)
         ? current.sources.filter(isConfiguredSource)
         : [];

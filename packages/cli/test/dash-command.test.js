@@ -10,12 +10,15 @@ import { promisify } from "node:util";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
+import { setupJournalFile } from "../src/setup-journal.js";
+import { withStorageOperationLock } from "../src/storage.js";
 import {
   makeFakeClock,
   makeFakeSignals,
   makeFakeSync,
   makeFakeTerminal,
   realSync,
+  SYNC_OK,
   startDash,
 } from "./fixtures/fake-tty.js";
 import {
@@ -316,3 +319,47 @@ test(
     );
   },
 );
+
+test("dash never recovers a setup journal another command is still writing under the lock", async () => {
+  // A `snack setup` in flight holds the storage lock and has written its journal. Recovering that
+  // journal from outside the lock would roll back a setup that has not failed -- rewriting the
+  // configuration and, with no backup named, deleting the database.
+  const fixture = await configured();
+  const configBefore = await readFile(fixture.paths.configFile, "utf8");
+  const journal = setupJournalFile(fixture.paths);
+  await withStorageOperationLock(fixture.paths, async () => {
+    await writeFile(
+      journal,
+      JSON.stringify({
+        version: 3,
+        opencode_config_file: join(fixture.root, "absent.json"),
+        config_existed: false,
+        plugin_property_existed: false,
+        previous_plugin: null,
+        previous_plugin_index: -1,
+        installed_plugin_hash: "x",
+        previous_snack_config: configBefore.replace('"work"', '"rolled-back"'),
+        database_backup_file: null,
+      }),
+      { mode: 0o600 },
+    );
+    const terminal = makeFakeTerminal();
+    const outcome = await startDash(fixture.options, {
+      terminal,
+      clock: makeFakeClock(fixture.options.now),
+      sync: makeFakeSync(async () => SYNC_OK),
+      signals: makeFakeSignals(),
+    }).then(
+      () => {
+        terminal.press("q");
+        return "started";
+      },
+      (/** @type {Error} */ error) => error.message,
+    );
+    // Refused as `status` refuses while the lock is held, and nothing was rolled back.
+    assert.match(outcome, /exit 5/u);
+    assert.ok(await stat(fixture.paths.databaseFile).then(() => true));
+    assert.equal(await readFile(fixture.paths.configFile, "utf8"), configBefore);
+    assert.ok(await stat(journal).then(() => true));
+  });
+});
