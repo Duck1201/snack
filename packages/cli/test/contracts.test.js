@@ -447,6 +447,37 @@ function declaredProperties(schema) {
   return names;
 }
 
+test("a computed shadow entry carries no reason; one not computed says why", async () => {
+  const validate = await compileSchema("commands/status.schema.json");
+  // The `1.5` capture's Codex report: its `shadow` is computed, and is what `shadows` repeats.
+  const { data } = JSON.parse(
+    await readFile(new URL("./fixtures/contracts/1.5/status.json", import.meta.url), "utf8"),
+  );
+  const report = data.sources.find(
+    (/** @type {{source: {alias: string}}} */ entry) => entry.source.alias === "codex",
+  );
+  const computed = report.shadow;
+  assert.equal(computed?.computed, true, "no computed shadow to hold to the schema");
+  /** @param {object} entry */
+  const withEntry = (entry) => ({ ...report, shadows: [entry] });
+  assert.ok(validate(withEntry(computed)), JSON.stringify(validate.errors));
+  assert.ok(
+    !validate(withEntry({ ...computed, reason: "no_local_outcomes" })),
+    "a computed shadow was allowed a reason",
+  );
+  assert.ok(
+    validate(
+      withEntry({
+        method: computed.method,
+        computed: false,
+        reason: "no_local_outcomes",
+        policy_version: computed.policy_version,
+      }),
+    ),
+    JSON.stringify(validate.errors),
+  );
+});
+
 test("the declared report keys are the report's own, not those of a nested definition", async () => {
   const declared = declaredProperties(await readSchema("commands/status.schema.json"));
   for (const nested of ["level", "label", "gates"]) assert.ok(!declared.has(nested), nested);

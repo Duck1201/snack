@@ -179,6 +179,7 @@
         "type": "object",
         "required": ["viability", "risk", "evidence", "model_policy_version", "contributors"],
         "properties": {
+          "reason": { "type": "null" },
           "viability": {},
           "risk": {},
           "evidence": {},
