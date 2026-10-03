@@ -349,7 +349,7 @@ test("each sync outcome reads as the specification words it, and never ends the 
   await dash.clock.advance(SYNC_DELAY_MS);
   assert.match(
     dash.terminal.text(),
-    /Storage was upgraded by a newer snack; quit and start snack dash again\./u,
+    /A newer snack upgraded storage; quit and restart snack dash\./u,
   );
   const started = dash.sync.started;
   await dash.clock.advance(5 * SYNC_DELAY_MS);
@@ -430,10 +430,7 @@ test("pending migrations are counted on the banner, and are the first sync's to 
     { env: source.env, home: source.root, now: start },
     { terminal, clock, sync, signals: makeFakeSignals() },
   );
-  assert.match(
-    terminal.text(),
-    /Preparing storage — the first synchronization applies 1 pending migration; a backup is taken first\./u,
-  );
+  assert.match(terminal.text(), /Preparing storage — 1 pending migration, after a backup\./u);
   assert.match(terminal.text(), /preparing storage…|synchronizing…/u);
   // The child fails: the reading was never prepared, and the screen says where to look.
   finish({ exitCode: 10, envelope: null });

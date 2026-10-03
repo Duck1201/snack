@@ -325,10 +325,10 @@ a decision.
 | State at start or during a session | What the dash does |
 |---|---|
 | database missing (never synchronized) | no reading; "Preparing storage — the first synchronization creates it." The first child does. |
-| `storage_migrations_pending` | no reading; "Preparing storage — the first synchronization applies 2 pending migrations; a backup is taken first." (count from the error) The child migrates under its own lock. |
+| `storage_migrations_pending` | no reading; "Preparing storage — 2 pending migrations, after a backup." (count from the error) The child migrates under its own lock. |
 | child fails while preparing | "Storage could not be prepared; run `snack sync` to see why." Keeps trying at the cadence. |
 | lock busy (child exit `5 storage_locked`, or the recompute's own acquire) | "sync skipped — another snack command is using storage" · reading kept, marked stale |
-| `storage_newer_than_application` mid-session | "Storage was upgraded by a newer snack; quit and start snack dash again." Syncs stop; the last reading stays, marked stale. |
+| `storage_newer_than_application` mid-session | "A newer snack upgraded storage; quit and restart snack dash." Syncs stop; the last reading stays, marked stale. |
 
 ---
 
@@ -536,12 +536,14 @@ Header right side, one of:
 When the reading on screen is older than the last attempted sync, the `as of` row gains
 `· showing the reading from 4m ago`.
 
-Banners (one line under the header, replacing nothing else):
+Banners (one line under the header, replacing nothing else; each fits the 64-column minimum with its
+margin, so none is cut — the build first worded the pending-migrations and newer-storage banners at 101
+and 73 columns, and both were reworded to the lines below):
 
-- `Preparing storage — the first synchronization applies 2 pending migrations; a backup is taken first.`
+- `Preparing storage — 2 pending migrations, after a backup.`
 - `Preparing storage — the first synchronization creates it.`
 - `Storage could not be prepared; run snack sync to see why.`
-- `Storage was upgraded by a newer snack; quit and start snack dash again.`
+- `A newer snack upgraded storage; quit and restart snack dash.`
 
 Key bar: ` ↑↓ select   r sync now   ? help   q quit`.
 

@@ -543,11 +543,11 @@ test("banners say what storage is doing, under the header", () => {
   const cases = [
     [
       { computedAt: null, stale: false, storage: "pending", pendingMigrations: 2 },
-      " Preparing storage — the first synchronization applies 2 pending migrations; a backup is taken first.",
+      " Preparing storage — 2 pending migrations, after a backup.",
     ],
     [
       { computedAt: null, stale: false, storage: "pending", pendingMigrations: 1 },
-      " Preparing storage — the first synchronization applies 1 pending migration; a backup is taken first.",
+      " Preparing storage — 1 pending migration, after a backup.",
     ],
     [
       { computedAt: null, stale: false, storage: "missing", pendingMigrations: 0 },
@@ -559,7 +559,7 @@ test("banners say what storage is doing, under the header", () => {
     ],
     [
       { computedAt: ago(60), stale: true, storage: "newer", pendingMigrations: 0 },
-      " Storage was upgraded by a newer snack; quit and start snack dash again.",
+      " A newer snack upgraded storage; quit and restart snack dash.",
     ],
   ];
   for (const [reading, banner] of cases) {
@@ -571,6 +571,14 @@ test("banners say what storage is doing, under the header", () => {
       },
     );
     assert.equal(lines[1], banner);
+    // Whole at the narrowest terminal the dash draws on, so no banner is cut mid-sentence.
+    const narrow = renderDash(
+      stateFor({ reading: { ...reading, pendingMigrations: reading.pendingMigrations * 50 } }),
+      { columns: MINIMUM_COLUMNS, rows: 24 },
+      { color: false },
+    );
+    assert.ok(measure(String(narrow.lines[1])) <= MINIMUM_COLUMNS, String(narrow.lines[1]));
+    assert.match(String(narrow.lines[1]), /\.$/u, "the banner was cut");
   }
 });
 

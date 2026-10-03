@@ -280,16 +280,18 @@ function since(instant, nowMs) {
  */
 function describeBanner(reading) {
   switch (reading.storage) {
+    // Every banner fits the narrowest terminal the dash draws on (`MINIMUM_COLUMNS`, with its
+    // margin), so none is ever cut mid-sentence.
     case "pending": {
       const count = reading.pendingMigrations;
-      return `Preparing storage — the first synchronization applies ${count} pending migration${count === 1 ? "" : "s"}; a backup is taken first.`;
+      return `Preparing storage — ${count} pending migration${count === 1 ? "" : "s"}, after a backup.`;
     }
     case "missing":
       return "Preparing storage — the first synchronization creates it.";
     case "unprepared":
       return "Storage could not be prepared; run snack sync to see why.";
     case "newer":
-      return "Storage was upgraded by a newer snack; quit and start snack dash again.";
+      return "A newer snack upgraded storage; quit and restart snack dash.";
     default:
       return null;
   }
