@@ -60,7 +60,7 @@ import {
   liveByMethod,
   summarizeCalibration,
 } from "./calibration.js";
-import { REPORTED_CAPACITY_POLICY } from "./reported-capacity.js";
+import { REPORTED_CAPACITY_POLICY, walkStatedHistory } from "./reported-capacity.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { renderStats, renderStatus, renderStatusTable } from "./render.js";
@@ -109,6 +109,9 @@ import {
   readReportedCapacity,
   readSourceSummary,
   readStatedTimeline,
+  readStatedBandRows,
+  readStatedBandFrontier,
+  writeStatedBands,
   hasForeignPromptSince,
   rollbackDatabaseInitialization,
   storeObservations,
@@ -572,6 +575,18 @@ export async function run(argv, options = {}) {
             // arrival can move an older prompt, so the whole source is recategorized in
             // chronological order before any forecast reads it.
             recategorizeSource(paths.databaseFile, candidate.alias);
+            // The stated band each prompt began in is the same kind of projection, kept only where
+            // a Codex installation states figures for the source.
+            if (
+              configuredSources.some(
+                (entry) =>
+                  isConfiguredSource(entry) &&
+                  entry.alias === candidate.alias &&
+                  isCodexSource(entry),
+              )
+            ) {
+              restateSource(paths.databaseFile, candidate.alias, { seenSince: now.toISOString() });
+            }
             // Each new outcome is attached to the forecast that preceded it, so live
             // calibration compares a prediction with the future it did not know about.
             linkPrimaryEvaluations(paths.databaseFile, candidate.alias, "stage5-evaluation-v1");
@@ -774,8 +789,16 @@ export async function run(argv, options = {}) {
               synchronization = { performed: true, status: "failed" };
             }
           }
+          // Absent unless a Codex installation feeds this capacity source; a source no Codex
+          // installation feeds never takes the branches below, and its report is the 1.4 one.
+          const quotesCodex = inScope.some(
+            (entry) => entry.alias === source.alias && isCodexSource(entry),
+          );
           if (synchronization.performed) {
             recategorizeSource(paths.databaseFile, source.alias);
+            if (quotesCodex) {
+              restateSource(paths.databaseFile, source.alias, { seenSince: now.toISOString() });
+            }
             linkPrimaryEvaluations(paths.databaseFile, source.alias, "stage5-evaluation-v1");
           }
           const summary = readSourceSummary(paths.databaseFile, source.alias);
@@ -838,11 +861,7 @@ export async function run(argv, options = {}) {
           );
           // Attached after the forecast is built, and beside it: what Codex states about its own
           // windows is quoted, never an input to the interval, the risk, the evidence or pressure
-          // (ADR-0007). Absent unless a Codex installation feeds this capacity source, and a source
-          // no Codex installation feeds never reaches this branch: its report is the 1.4 one.
-          const quotesCodex = inScope.some(
-            (entry) => entry.alias === source.alias && isCodexSource(entry),
-          );
+          // (ADR-0007).
           /** @type {import("./storage.js").PredictionShadowRow | undefined} */
           let shadowRow;
           if (quotesCodex) {
@@ -856,8 +875,6 @@ export async function run(argv, options = {}) {
               periodStart: summary.active_period_floor,
               foreignPromptAfter: (installationId, since) =>
                 hasForeignPromptSince(paths.databaseFile, source.alias, installationId, since),
-              readTimeline: (from) =>
-                readStatedTimeline(paths.databaseFile, source.alias, { from }),
               outcomes,
               expectedCategory: sourceStatus.expected_prompt_category,
               prior: {
@@ -1105,6 +1122,20 @@ export async function run(argv, options = {}) {
               now,
               ...(commandOptions.preventReimport === true ? { preventReimport: true } : {}),
             });
+      if (commandOptions.dryRun !== true) {
+        // A purged statement no longer binds the prompts after it: the projection is rebuilt from
+        // what remains, for every source in scope a Codex installation feeds.
+        const restated = new Set(
+          (Array.isArray(config.sources) ? config.sources : [])
+            .filter(isConfiguredSource)
+            .filter((entry) => isCodexSource(entry))
+            .filter((entry) => scope.source === undefined || entry.alias === scope.source)
+            .map((entry) => entry.alias),
+        );
+        await withStorageOperationLock(paths, async () => {
+          for (const alias of restated) restateSource(paths.databaseFile, alias);
+        });
+      }
       /** @type {{code: string, message: string}[]} */
       const warnings = [];
       if (commandOptions.dryRun !== true && commandOptions.preventReimport !== true) {
@@ -2684,6 +2715,65 @@ function recategorizeSource(databaseFile, alias) {
 }
 
 /**
+ * Recompute the stated band the prompts of a source's active period began in, and store the ones
+ * that moved.
+ *
+ * The projection the `reported-capacity` shadow reads (migration 018), recomputed in chronological
+ * order as size categories are, because a statement read late -- a rollout file met for the first
+ * time after newer ones -- moves the prompts after it, and so does a purge. Each band is resolved
+ * at its prompt's own start from statements strictly earlier.
+ *
+ * After a synchronization only the suffix that can have moved is recomputed: the prompts from the
+ * earliest prompt never computed, or the earliest statement this invocation
+ * stored, whichever came first. Nothing older than one statement-age limit before that point can
+ * bind a prompt inside it, so the walk starts there. Without `seenSince` -- after a purge -- the
+ * whole active period is recomputed.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ * @param {{seenSince?: string}} [options] the invocation's clock, when it has just synchronized
+ */
+function restateSource(databaseFile, alias, options = {}) {
+  const version = REPORTED_CAPACITY_POLICY.version;
+  const frontier =
+    options.seenSince === undefined
+      ? ""
+      : readStatedBandFrontier(databaseFile, alias, { seenSince: options.seenSince });
+  if (frontier === null) return;
+  const lookback =
+    frontier === ""
+      ? ""
+      : new Date(
+          Date.parse(frontier) - REPORTED_CAPACITY_POLICY.max_age_seconds * 1000,
+        ).toISOString();
+  const floor = readSourceSummary(databaseFile, alias).active_period_floor;
+  const rows = readStatedBandRows(databaseFile, alias, { from: lookback });
+  if (rows.length === 0) return;
+  const timeline = readStatedTimeline(databaseFile, alias, {
+    from: floor !== null && floor > lookback ? floor : lookback,
+  });
+  /** @type {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} */
+  const moved = [];
+  walkStatedHistory(
+    rows.map((row) => ({ ...row, outcome: /** @type {const} */ ("success") })),
+    timeline,
+    { periodStart: floor },
+    (row, state) => {
+      // Before the frontier the lookback is incomplete, and nothing there can have moved.
+      if (row.started_at < frontier) return;
+      if (row.stated_band !== state.band || row.stated_band_policy_version !== version) {
+        moved.push({
+          prompt_execution_id: row.prompt_execution_id,
+          stated_band: state.band,
+          stated_band_policy_version: version,
+        });
+      }
+    },
+  );
+  writeStatedBands(databaseFile, moved);
+}
+
+/**
  * The first configured horizon drives the pressure shown alongside a forecast.
  *
  * @param {Record<string, unknown>} config
@@ -2986,9 +3076,7 @@ function buildCalibrationReport(databaseFile, alias, planProfile, byMethod = fal
   };
   if (!byMethod) return report;
 
-  const periodStart = readSourceSummary(databaseFile, alias).active_period_floor;
-  const timeline = readStatedTimeline(databaseFile, alias, { from: periodStart ?? "" });
-  const shadowReplay = backtestReported(outcomes, timeline, { prior, periodStart });
+  const shadowReplay = backtestReported(outcomes, { prior, baseline: replay.scored });
   const method = REPORTED_CAPACITY_POLICY.method;
   const live = liveByMethod(pairs, method);
   return {

@@ -11,6 +11,21 @@ import {
   summarizeCalibration,
 } from "../src/calibration.js";
 import { buildForecast } from "../src/prediction.js";
+import { labelStatedBands } from "../src/reported-capacity.js";
+
+/**
+ * The replay as `stats` runs it: each prompt labelled with the band it began in, as of its start.
+ *
+ * @param {Parameters<typeof labelStatedBands>[0]} rows
+ * @param {import("../src/reported-capacity.js").Statement[]} timeline
+ * @param {{prior: {strength: number, viability: number}, periodStart: string | null}} options
+ */
+function replayReported(rows, timeline, options) {
+  return backtestReported(labelStatedBands(rows, timeline, { periodStart: options.periodStart }), {
+    prior: options.prior,
+    baseline: backtest(rows, { now: new Date(), prior: options.prior }).scored,
+  });
+}
 
 /**
  * @param {number} point
@@ -306,7 +321,7 @@ test("with no stated timeline the reported replay scores nothing, and the baseli
           (index) => /** @type {"success" | "restricted" | "excluded"} */ (outcomes[index]),
         );
         const before = backtest(rows, { now: new Date(), prior: PRIOR });
-        const shadow = backtestReported(rows, [], { prior: PRIOR, periodStart: null });
+        const shadow = replayReported(rows, [], { prior: PRIOR, periodStart: null });
         assert.equal(shadow.forecasts, 0);
         assert.equal(shadow.paired.sample_size, 0);
         assert.deepEqual(backtest(rows, { now: new Date(), prior: PRIOR }), before);
@@ -331,8 +346,8 @@ test("the reported replay never reads a statement made at or after the prompt it
   for (const length of [15, 30, 45, 60]) {
     const prefix = rows.slice(0, length);
     const last = /** @type {{started_at: string}} */ (prefix.at(-1)).started_at;
-    const everything = backtestReported(prefix, timeline, { prior: PRIOR, periodStart: null });
-    const strictlyEarlier = backtestReported(
+    const everything = replayReported(prefix, timeline, { prior: PRIOR, periodStart: null });
+    const strictlyEarlier = replayReported(
       prefix,
       timeline.filter((statement) => statement.observed_at < last),
       { prior: PRIOR, periodStart: null },
@@ -349,7 +364,7 @@ test("the paired baseline in the reported replay is the baseline backtest at the
     ...stated(0, 50),
     observed_at: new Date(Date.parse(row.started_at) - 60_000).toISOString(),
   }));
-  const replay = backtestReported(rows, timeline, { prior: PRIOR, periodStart: null });
+  const replay = replayReported(rows, timeline, { prior: PRIOR, periodStart: null });
   const baseline = backtest(rows, { now: new Date(), prior: PRIOR });
   assert.equal(replay.forecasts, 40);
   const tail = baseline.scored.slice(-40);

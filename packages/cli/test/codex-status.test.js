@@ -4,11 +4,14 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
+import { labelStatedBands } from "../src/reported-capacity.js";
+import { readStatedBandRows, readStatedTimeline } from "../src/storage.js";
 import {
   cleanupRunFixtures,
   createClaudeHistory,
   createCodexHistory,
   makeRunFixture,
+  plantStatements,
 } from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
@@ -353,4 +356,64 @@ test("another client's prompt after a statement below full supersedes it", async
     [superseded.data.shadow.computed, superseded.data.shadow.reason],
     [false, "superseded"],
   );
+});
+
+test("each prompt's stated band is projected as of its own start, and moves with a late statement or a purge", async () => {
+  const fixture = await makeRunFixture("snack-codex-projection-");
+  const installationId = await codexFixture(fixture);
+  const { databaseFile } = fixture.paths;
+
+  /** The projection, against the as-of labelling of the same stored history. */
+  const compare = () => {
+    const rows = readStatedBandRows(databaseFile, "codex");
+    const expected = labelStatedBands(
+      rows.map((row) => ({ ...row, outcome: /** @type {const} */ ("success") })),
+      readStatedTimeline(databaseFile, "codex", { from: "" }),
+      { periodStart: null },
+    );
+    assert.deepEqual(
+      rows.map((row) => [row.stated_band, row.stated_band_policy_version]),
+      expected.map((row) => [row.stated_band, "reported-capacity-v1"]),
+    );
+    return rows;
+  };
+
+  const synced = compare();
+  assert.ok(synced.length > 1, "vacuous: too few prompts");
+  const first = /** @type {{started_at: string, stated_band: string | null}} */ (synced[0]);
+  assert.equal(first.stated_band, null, "the first prompt had a statement before it");
+
+  // A statement read late, made just before the first prompt: the next synchronization moves it.
+  plantStatements(
+    databaseFile,
+    "codex",
+    installationId,
+    [
+      {
+        observation_key: "e".repeat(64),
+        observed_at: new Date(Date.parse(first.started_at) - 1000).toISOString(),
+        limit_id: "codex",
+        plan_type: "plus",
+        windows: [{ window_minutes: 300, used_percent: 100, resets_at: null }],
+        parser_version: "codex-rate-limits-v1",
+      },
+    ],
+    /** @type {Date} */ (fixture.options.now),
+  );
+  await json(fixture, ["status"]);
+  assert.equal(compare()[0]?.stated_band, "full");
+
+  // Purging that statement moves it back.
+  await json(fixture, [
+    "data",
+    "purge",
+    "--source",
+    "codex",
+    "--since",
+    new Date(Date.parse(first.started_at) - 2000).toISOString(),
+    "--until",
+    new Date(Date.parse(first.started_at) - 500).toISOString(),
+    "--yes",
+  ]);
+  assert.equal(compare()[0]?.stated_band, null);
 });

@@ -105,6 +105,25 @@ export const STATED_REASONS = Object.freeze([
  * @typedef {{band: BindingWindow["band"], reason: null, binding: BindingWindow} | {band: null, reason: string, binding: null}} StatedState
  */
 
+/** @type {Map<string, number>} */
+const instants = new Map();
+
+/**
+ * `Date.parse`, remembered. A replay resolves the binding window once per prompt from the same
+ * handful of statements, and parsing their timestamps again each time was most of what it cost.
+ *
+ * @param {string} timestamp
+ */
+function instantOf(timestamp) {
+  let ms = instants.get(timestamp);
+  if (ms === undefined) {
+    if (instants.size >= 50_000) instants.clear();
+    ms = Date.parse(timestamp);
+    instants.set(timestamp, ms);
+  }
+  return ms;
+}
+
 /**
  * The stated band a figure falls in.
  *
@@ -137,16 +156,16 @@ export function resolveStatedState(input) {
   // 1. Period: a statement made before the active capacity period began describes another regime.
   // `periodStart` is null for a source's first period, which absorbs all earlier history exactly
   // as it absorbs earlier prompts.
-  const periodStartMs = input.periodStart === null ? null : Date.parse(input.periodStart);
+  const periodStartMs = input.periodStart === null ? null : instantOf(input.periodStart);
   const inPeriod =
     periodStartMs === null
       ? input.statements
-      : input.statements.filter((statement) => Date.parse(statement.observed_at) >= periodStartMs);
+      : input.statements.filter((statement) => instantOf(statement.observed_at) >= periodStartMs);
   if (inPeriod.length === 0) return none("before_period");
 
   // 2. Age: exactly `max_age_seconds` old still binds; one second more does not.
   const fresh = inPeriod.filter(
-    (statement) => input.at - Date.parse(statement.observed_at) <= policy.max_age_seconds * 1000,
+    (statement) => input.at - instantOf(statement.observed_at) <= policy.max_age_seconds * 1000,
   );
   if (fresh.length === 0) return none("stale");
 
@@ -159,7 +178,7 @@ export function resolveStatedState(input) {
 
   // 4. Window: only windows of that statement, and only those whose reset has not passed.
   const live = latest.windows.filter(
-    (window) => window.resets_at === null || Date.parse(window.resets_at) > input.at,
+    (window) => window.resets_at === null || instantOf(window.resets_at) > input.at,
   );
   if (live.length === 0) return none("windows_reset");
 
@@ -200,8 +219,8 @@ export function resolveStatedState(input) {
  * @param {Statement} right
  */
 function compareStatements(left, right) {
-  const leftMs = Date.parse(left.observed_at);
-  const rightMs = Date.parse(right.observed_at);
+  const leftMs = instantOf(left.observed_at);
+  const rightMs = instantOf(right.observed_at);
   if (leftMs !== rightMs) return rightMs - leftMs;
   if (left.installation_id !== right.installation_id) {
     return left.installation_id < right.installation_id ? -1 : 1;
@@ -245,7 +264,7 @@ export function walkStatedHistory(outcomes, timeline, options, visit) {
   let cursor = 0;
   /** @param {string} installationId @param {string} statedAt */
   const foreignPromptAfter = (installationId, statedAt) => {
-    const statedMs = Date.parse(statedAt);
+    const statedMs = instantOf(statedAt);
     for (const [installation, start] of lastStart) {
       if (installation !== installationId && start > statedMs) return true;
     }
@@ -255,7 +274,7 @@ export function walkStatedHistory(outcomes, timeline, options, visit) {
     const at = Date.parse(row.started_at);
     while (cursor < timeline.length) {
       const statement = /** @type {Statement} */ (timeline[cursor]);
-      if (!(Date.parse(statement.observed_at) < at)) break;
+      if (!(instantOf(statement.observed_at) < at)) break;
       latest.set(`${statement.installation_id}\u0000${statement.limit_id ?? ""}`, statement);
       cursor += 1;
     }

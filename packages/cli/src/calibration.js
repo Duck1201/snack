@@ -4,11 +4,7 @@ import {
   assembleForecast,
   chooseCell,
 } from "./prediction.js";
-import {
-  REPORTED_CAPACITY_POLICY,
-  REPORTED_EVIDENCE_RELEVANCE,
-  walkStatedHistory,
-} from "./reported-capacity.js";
+import { REPORTED_CAPACITY_POLICY, REPORTED_EVIDENCE_RELEVANCE } from "./reported-capacity.js";
 
 /**
  * Calibration of delivered forecasts against the outcomes that followed them.
@@ -216,36 +212,37 @@ export function backtest(outcomes, options) {
  * Replay the `reported-capacity` shadow method over a history, scoring a forecast only where it
  * would have been computed (spec §7.2).
  *
- * The same walk as `backtest`, with the stated timeline merged in: at each prompt the binding
- * window is resolved at that prompt's own start from statements strictly earlier, and the cells
- * are keyed on the stated band each earlier prompt began in. A prompt where no window bound, or
- * where a `clear`/`near` ladder would have ended at the plan prior, is not scored -- so the sample
- * is smaller than the baseline's, and is reported as what it is.
+ * The same walk as `backtest`, keyed on the stated band each prompt began in: a forecast is scored
+ * at a prompt whose start had a binding window, from the cells of the prompts before it. A prompt
+ * where no window bound, or where a `clear`/`near` ladder would have ended at the plan prior, is
+ * not scored -- so the sample is smaller than the baseline's, and is reported as what it is.
  *
- * At every scored prompt the baseline's replayed forecast is scored too, so `paired` compares the
+ * The stated band each prompt began in arrives on the row (`stated_band`), already resolved as of
+ * that prompt's start from statements strictly earlier -- the projection `labelStatedBands`
+ * computes and storage keeps -- so the replay itself reads nothing from the future either.
+ *
+ * `baseline` is what `backtest` scored over the same outcomes, in its order: one forecast per
+ * eligible prompt from the tenth on. At every prompt the shadow scores, the baseline's forecast for
+ * that same prompt is taken from it rather than replayed a second time, so `paired` compares the
  * two methods on exactly the same outcomes. Nothing here changes `backtest`.
  *
- * @param {(import("./prediction.js").OutcomeRow & {installation_id?: string | null})[]} outcomes
- * @param {import("./reported-capacity.js").Statement[]} timeline chronological, oldest first
- * @param {{prior: {strength: number, viability: number}, periodStart: string | null}} options
+ * @param {import("./prediction.js").StatedOutcomeRow[]} outcomes
+ * @param {{prior: {strength: number, viability: number}, baseline: ScoredForecast[]}} options
  * @returns {{forecasts: number, scored: ScoredForecast[], calibration: ReturnType<typeof summarizeCalibration>, paired: PairedComparison, policy_version: string}}
  */
-export function backtestReported(outcomes, timeline, options) {
+export function backtestReported(outcomes, options) {
   const policy = REPORTED_PREDICTION_POLICY;
-  const baselinePolicy = PREDICTION_POLICY;
   const ordered = [...outcomes].sort((left, right) =>
     left.started_at.localeCompare(right.started_at),
   );
   /** @type {Map<string, ReturnType<typeof createAccumulator>>} */
   const stated = new Map();
-  /** @type {Map<string, ReturnType<typeof createAccumulator>>} */
-  const baseline = new Map();
-  /** @param {Map<string, ReturnType<typeof createAccumulator>>} levels @param {string} key */
-  const accumulatorFor = (levels, key) => {
-    const existing = levels.get(key);
+  /** @param {string} key */
+  const accumulatorFor = (key) => {
+    const existing = stated.get(key);
     if (existing) return existing;
     const created = createAccumulator();
-    levels.set(key, created);
+    stated.set(key, created);
     return created;
   };
 
@@ -253,73 +250,51 @@ export function backtestReported(outcomes, timeline, options) {
   const scored = [];
   /** @type {ScoredForecast[]} */
   const baselineScored = [];
-  let index = 0;
-  walkStatedHistory(ordered, timeline, { periodStart: options.periodStart }, (row, state) => {
+  // The position of the current prompt among those `backtest` scored.
+  let eligible = 0;
+  for (const [index, row] of ordered.entries()) {
+    const band = row.stated_band ?? null;
     const at = Date.parse(row.started_at);
     const category = row.size_category ?? "typical";
-    const pressureBand = row.pressure_band ?? "unknown";
 
-    if (
-      index >= CALIBRATION_POLICY.minimum_backtest_history &&
-      row.outcome !== "excluded" &&
-      state.band !== null
-    ) {
-      const band = state.band;
-      const full = band === "full";
-      const candidates = [
-        { level: "period_stated_category", key: `${band}\u0000${category}` },
-        { level: "period_stated", key: band },
-        ...(full ? [] : [{ level: "period", key: "" }]),
-      ].map(({ level, key }) => ({
-        level,
-        cell: readAccumulator(accumulatorFor(stated, key), at, policy.decay_half_life_seconds),
-      }));
-      const chosen = chooseCell(candidates, policy);
-      if (chosen.level !== "prior" || full) {
-        const forecast = assembleForecast({
-          cell: chosen.cell,
-          level: chosen.level === "prior" ? "stated_full_prior" : chosen.level,
-          prior: full ? REPORTED_CAPACITY_POLICY.full_prior : options.prior,
-          policy,
-          dataCompleteness: "unknown",
-          method: REPORTED_CAPACITY_POLICY.method,
-          relevance: REPORTED_EVIDENCE_RELEVANCE,
-        });
-        scored.push(scoredOf(forecast, row.outcome));
-        const baselineForecast = assembleForecast({
-          ...chooseCell(
-            [
-              { level: "period_band_category", key: `${pressureBand}\u0000${category}` },
-              { level: "period_band", key: pressureBand },
-              { level: "period", key: "" },
-            ].map(({ level, key }) => ({
-              level,
-              cell: readAccumulator(
-                accumulatorFor(baseline, key),
-                at,
-                baselinePolicy.decay_half_life_seconds,
-              ),
-            })),
-            baselinePolicy,
-          ),
-          prior: options.prior,
-          policy: baselinePolicy,
-          dataCompleteness: "unknown",
-        });
-        baselineScored.push(scoredOf(baselineForecast, row.outcome));
+    if (index >= CALIBRATION_POLICY.minimum_backtest_history && row.outcome !== "excluded") {
+      if (band !== null) {
+        const full = band === "full";
+        const candidates = [
+          { level: "period_stated_category", key: `${band}\u0000${category}` },
+          { level: "period_stated", key: band },
+          ...(full ? [] : [{ level: "period", key: "" }]),
+        ].map(({ level, key }) => ({
+          level,
+          cell: readAccumulator(accumulatorFor(key), at, policy.decay_half_life_seconds),
+        }));
+        const chosen = chooseCell(candidates, policy);
+        if (chosen.level !== "prior" || full) {
+          const forecast = assembleForecast({
+            cell: chosen.cell,
+            level: chosen.level === "prior" ? "stated_full_prior" : chosen.level,
+            prior: full ? REPORTED_CAPACITY_POLICY.full_prior : options.prior,
+            policy,
+            dataCompleteness: "unknown",
+            method: REPORTED_CAPACITY_POLICY.method,
+            relevance: REPORTED_EVIDENCE_RELEVANCE,
+          });
+          scored.push(scoredOf(forecast, row.outcome));
+          const paired = options.baseline[eligible];
+          if (paired === undefined) {
+            throw new Error("The baseline replay does not cover the shadow's prompts.");
+          }
+          baselineScored.push(paired);
+        }
       }
+      eligible += 1;
     }
 
     // Every prompt is history for the period aggregate; only a prompt that began in a stated band
     // is history for that band's cells.
-    const statedKeys =
-      state.band === null ? [""] : [`${state.band}\u0000${category}`, state.band, ""];
-    for (const key of statedKeys) observe(accumulatorFor(stated, key), row.outcome, at, policy);
-    for (const key of [`${pressureBand}\u0000${category}`, pressureBand, ""]) {
-      observe(accumulatorFor(baseline, key), row.outcome, at, baselinePolicy);
-    }
-    index += 1;
-  });
+    const keys = band === null ? [""] : [`${band}\u0000${category}`, band, ""];
+    for (const key of keys) observe(accumulatorFor(key), row.outcome, at, policy);
+  }
 
   return {
     forecasts: scored.length,

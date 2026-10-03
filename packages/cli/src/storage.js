@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 
 import { ExitCode, SnackError } from "./errors.js";
 import { acquirePrivateLock } from "./file-lock.js";
+import { REPORTED_CAPACITY_POLICY } from "./reported-capacity.js";
 
 export const migrationDirectory = fileURLToPath(new URL("../migrations", import.meta.url));
 
@@ -1602,6 +1603,9 @@ export function readSourceSummary(databaseFile, sourceAlias) {
  * @property {string | null} installation_id Which client produced the prompt, where that is known.
  *   The baseline never reads it; the reported-capacity shadow method reads it to tell another
  *   client's prompt from the stating client's own.
+ * @property {"clear" | "near" | "full" | null} stated_band The stated band the prompt began in, as
+ *   last projected; null where no window bound, or where the band was never computed. Only the
+ *   reported-capacity shadow method reads it.
  */
 
 /**
@@ -1710,19 +1714,25 @@ export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
            prompt_execution.started_at AS started_at,
            prompt_source_outcome.outcome AS outcome,
            prompt_execution.size_category AS size_category,
-           prompt_execution.installation_id AS installation_id
+           prompt_execution.installation_id AS installation_id,
+           CASE WHEN prompt_execution.stated_band_policy_version = @policy
+                THEN prompt_execution.stated_band END AS stated_band
          FROM prompt_execution
          JOIN capacity_period
            ON capacity_period.id = prompt_execution.capacity_period_id
           AND capacity_period.ended_at IS NULL
          JOIN prompt_source_outcome
            ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
-         WHERE prompt_execution.source_alias = ?
+         WHERE prompt_execution.source_alias = @source
          ORDER BY prompt_execution.started_at ${options.limit === undefined ? "ASC" : "DESC"},
                   prompt_execution.id ${options.limit === undefined ? "ASC" : "DESC"}
-         ${options.limit === undefined ? "" : "LIMIT ?"}`,
+         ${options.limit === undefined ? "" : "LIMIT @limit"}`,
       )
-      .all(...(options.limit === undefined ? [sourceAlias] : [sourceAlias, options.limit]));
+      .all({
+        source: sourceAlias,
+        policy: REPORTED_CAPACITY_POLICY.version,
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      });
     if (options.limit !== undefined) rows.reverse();
     return rows.map((row) => {
       if (
@@ -1745,6 +1755,10 @@ export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
         installation_id:
           "installation_id" in row && row.installation_id !== null
             ? String(row.installation_id)
+            : null,
+        stated_band:
+          "stated_band" in row && typeof row.stated_band === "string"
+            ? /** @type {"clear" | "near" | "full"} */ (row.stated_band)
             : null,
       };
     });
@@ -1779,40 +1793,131 @@ export function readStatedTimeline(databaseFile, sourceAlias, options) {
         WHERE reported.source_alias = ? AND reported.observed_at >= ?
         ORDER BY reported.observed_at, reported.id`,
     );
+    // Raw rows: tens of thousands of them on a busy history, and an object per row is most of
+    // what reading them costs.
+    const rows =
+      /** @type {[string, string, string, string | null, number, number, string | null][]} */ (
+        query.raw().all(sourceAlias, options.from)
+      );
     /** @type {import("./reported-capacity.js").Statement[]} */
     const timeline = [];
     /** @type {Map<string, import("./reported-capacity.js").Statement>} */
     let atInstant = new Map();
     let instant = "";
-    for (const raw of query.iterate(sourceAlias, options.from)) {
-      const row =
-        /** @type {{installation_id: string, observation_key: string, observed_at: string, limit_id: string | null, window_minutes: number, used_percent: number, resets_at: string | null}} */ (
-          raw
-        );
-      if (row.observed_at !== instant) {
-        timeline.push(...atInstant.values());
+    for (const [installationId, key, observedAt, limitId, minutes, usedPercent, resetsAt] of rows) {
+      if (observedAt !== instant) {
+        for (const statement of atInstant.values()) timeline.push(statement);
         atInstant = new Map();
-        instant = row.observed_at;
+        instant = observedAt;
       }
-      const key = `${row.installation_id}\u0000${row.observation_key}`;
-      let statement = atInstant.get(key);
+      const group = `${installationId}\u0000${key}`;
+      let statement = atInstant.get(group);
       if (statement === undefined) {
         statement = {
-          installation_id: row.installation_id,
-          limit_id: row.limit_id,
-          observed_at: row.observed_at,
+          installation_id: installationId,
+          limit_id: limitId,
+          observed_at: observedAt,
           windows: [],
         };
-        atInstant.set(key, statement);
+        atInstant.set(group, statement);
       }
       statement.windows.push({
-        window_minutes: row.window_minutes,
-        used_percent: row.used_percent,
-        resets_at: row.resets_at,
+        window_minutes: minutes,
+        used_percent: usedPercent,
+        resets_at: resetsAt,
       });
     }
-    timeline.push(...atInstant.values());
+    for (const statement of atInstant.values()) timeline.push(statement);
     return timeline;
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * The prompts of a source's active capacity period, oldest first, with the stated band each one
+ * was last projected into: what `writeStatedBands` recomputes from.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{from?: string}} [options] only prompts that started at or after `from`
+ * @returns {{prompt_execution_id: number, started_at: string, installation_id: string | null, stated_band: string | null, stated_band_policy_version: string | null}[]}
+ */
+export function readStatedBandRows(databaseFile, sourceAlias, options = {}) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    return /** @type {ReturnType<typeof readStatedBandRows>} */ (
+      database
+        .prepare(
+          `SELECT prompt_execution.id AS prompt_execution_id, prompt_execution.started_at,
+                  prompt_execution.installation_id, prompt_execution.stated_band,
+                  prompt_execution.stated_band_policy_version
+             FROM prompt_execution
+             JOIN capacity_period
+               ON capacity_period.id = prompt_execution.capacity_period_id
+              AND capacity_period.ended_at IS NULL
+            WHERE prompt_execution.source_alias = ? AND prompt_execution.started_at >= ?
+            ORDER BY prompt_execution.started_at, prompt_execution.id`,
+        )
+        .all(sourceAlias, options.from ?? "")
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * The earliest instant from which a source's stated-band projection may be out of date: the start
+ * of the first prompt whose band was never computed, or the instant of the first statement stored
+ * at or after `seenSince`, whichever is earlier. Null when neither exists, so a synchronization
+ * that brought nothing new recomputes nothing. Both are index lookups (migration 018).
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{seenSince: string}} options
+ * @returns {string | null}
+ */
+export function readStatedBandFrontier(databaseFile, sourceAlias, options) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const row = /** @type {{prompt: string | null, statement: string | null}} */ (
+      database
+        .prepare(
+          `SELECT
+             (SELECT MIN(started_at) FROM prompt_execution
+               WHERE source_alias = @source AND stated_band_policy_version IS NULL) AS prompt,
+             (SELECT MIN(observed_at) FROM reported_capacity_observation
+               WHERE source_alias = @source AND first_seen_at >= @seen) AS statement`,
+        )
+        .get({ source: sourceAlias, seen: options.seenSince })
+    );
+    const candidates = [row.prompt, row.statement].filter((value) => value !== null);
+    return candidates.length === 0 ? null : /** @type {string} */ (candidates.sort()[0]);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Persist recomputed stated bands in one transaction. Only rows whose band or policy moved are
+ * handed in, so a synchronization that changed nothing writes nothing.
+ *
+ * @param {string} databaseFile
+ * @param {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} rows
+ * @returns {number} rows written
+ */
+export function writeStatedBands(databaseFile, rows) {
+  if (rows.length === 0) return 0;
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    const update = database.prepare(
+      `UPDATE prompt_execution
+          SET stated_band = @stated_band, stated_band_policy_version = @stated_band_policy_version
+        WHERE id = @prompt_execution_id`,
+    );
+    return database.transaction((/** @type {typeof rows} */ batch) =>
+      batch.reduce((written, row) => written + update.run(row).changes, 0),
+    )(rows);
   } finally {
     database.close();
   }

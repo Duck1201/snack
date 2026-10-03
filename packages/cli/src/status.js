@@ -1,11 +1,7 @@
 import { assignPressureBands } from "./analytics.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { assessSequence, buildForecast, buildReportedForecast } from "./prediction.js";
-import {
-  REPORTED_CAPACITY_POLICY,
-  labelStatedBands,
-  resolveStatedState,
-} from "./reported-capacity.js";
+import { REPORTED_CAPACITY_POLICY, resolveStatedState } from "./reported-capacity.js";
 
 /**
  * Assemble the status document for one capacity source.
@@ -202,13 +198,12 @@ export function describeReportedCapacity(rows, now) {
  * reads, and nothing it returns is written into, the report `createSourceStatus` built; the one
  * place the two meet is `attachShadow`, which adds and never replaces.
  *
- * The stated timeline is read only when a window binds now -- a stale or absent statement costs
- * one row read and nothing else.
+ * The band each earlier prompt began in comes with the outcome rows: storage keeps it as a
+ * projection recomputed after every synchronization (migration 018), so `status` replays nothing.
  *
  * @param {{now: Date, latest: {installation_id: string, limit_id: string | null, observed_at: string, windows: {window_minutes: number, used_percent: number, resets_at: string | null}[]}[],
  *   periodStart: string | null, foreignPromptAfter: (installationId: string, since: string) => boolean,
- *   readTimeline: (from: string) => import("./reported-capacity.js").Statement[],
- *   outcomes: import("./reported-capacity.js").StatedOutcome[], expectedCategory: string,
+ *   outcomes: import("./prediction.js").StatedOutcomeRow[], expectedCategory: string,
  *   prior: {strength: number, viability: number}, dataCompleteness: "complete" | "partial" | "unknown"}} input
  * @returns {{view: ShadowView, row: import("./storage.js").PredictionShadowRow | undefined}}
  */
@@ -237,21 +232,12 @@ export function createShadowStatus(input) {
   if (state.band === null) return notComputed(state.reason, null);
 
   const { used_percent: usedPercent, ...binding } = state.binding;
-  const oldest = input.outcomes[0]?.started_at;
-  const timeline =
-    oldest === undefined
-      ? []
-      : input.readTimeline(
-          new Date(
-            Date.parse(oldest) - REPORTED_CAPACITY_POLICY.max_age_seconds * 1000,
-          ).toISOString(),
-        );
   const forecast = buildReportedForecast({
     now: input.now,
     band: state.band,
     prior: input.prior,
     expectedCategory: input.expectedCategory,
-    outcomes: labelStatedBands(input.outcomes, timeline, { periodStart: input.periodStart }),
+    outcomes: input.outcomes,
     dataCompleteness: input.dataCompleteness,
   });
   if (forecast === null) return notComputed("no_local_outcomes", binding);
