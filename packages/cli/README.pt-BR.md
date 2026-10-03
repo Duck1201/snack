@@ -20,7 +20,7 @@ instala pacotes.
 
 ```bash
 npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # compila o driver SQLite; o npm 12 pula sem isso
-snack setup opencode    # ou: snack setup claude
+snack setup opencode    # ou: snack setup claude, snack setup codex
 snack status
 ```
 
@@ -77,6 +77,11 @@ Então o SNACK mostra o que ele consegue de fato enxergar: o seu uso, uma faixa 
 evidência sustenta ela, e qual método a produziu. Quando sabe pouco, ele diz alto e claro, e uma
 instalação nova recebe faixa larga e evidência `very_low` em vez de um conforto falso.
 
+Um cliente declara, sim, um número próprio. O Codex CLI registra, para cada janela que acompanha,
+uma fração, a duração da janela e quando ela reinicia. O SNACK cita isso como declaração do cliente
+— numa linha `reported` ao lado da estimativa, nunca dentro dela — e não transforma isso em
+afirmação sobre capacidade nenhuma, nem mesmo sobre aquela de que o Codex está falando.
+
 Nada do que você escreve é guardado. Nem texto de prompt, nem resposta, nem credencial, nem os
 caminhos dos seus projetos. Isso não é uma nota de política — é um teste que empurra strings-canário
 por todos os comandos e quebra o build se uma única delas aparecer em qualquer byte que o SNACK
@@ -84,26 +89,26 @@ escreve.
 
 ## Os comandos
 
-| Comando                                       | O que faz                                                                                                                                                                                 |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Mapeia um cliente para uma fonte de capacidade. Mostra cada mudança antes, faz backup, não escreve nada sem sua confirmação.                                                              |
-| `snack status`                                | A avaliação do próximo prompt: faixa, risco, evidência, pressão e o que a puxou, atualidade dos dados. `--verbose` acrescenta os portões de evidência, o método e as versões de política. |
-| `snack stats`                                 | Como o seu uso realmente é ao longo de horizontes móveis, e como as previsões passadas se saíram.                                                                                         |
-| `snack sync`                                  | Importa histórico novo. `--full` relê e reconcilia tudo sem duplicar nada.                                                                                                                |
-| `snack export`                                | Exporta tudo em JSON ou CSV com schema e proveniência. Os dados continuam seus.                                                                                                           |
-| `snack data purge`                            | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                                                                              |
-| `snack config`                                | Lê e edita a configuração local.                                                                                                                                                          |
-| `snack doctor`                                | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                                                                                  |
-| `snack update`                                | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                                                                                  |
+| Comando                                     | O que faz                                                                                                                                                                                 |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Mapeia um cliente para uma fonte de capacidade. Mostra cada mudança antes, faz backup, não escreve nada sem sua confirmação.                                                              |
+| `snack status`                              | A avaliação do próximo prompt: faixa, risco, evidência, pressão e o que a puxou, atualidade dos dados. `--verbose` acrescenta os portões de evidência, o método e as versões de política. |
+| `snack stats`                               | Como o seu uso realmente é ao longo de horizontes móveis, e como as previsões passadas se saíram.                                                                                         |
+| `snack sync`                                | Importa histórico novo. `--full` relê e reconcilia tudo sem duplicar nada.                                                                                                                |
+| `snack export`                              | Exporta tudo em JSON ou CSV com schema e proveniência. Os dados continuam seus.                                                                                                           |
+| `snack data purge`                          | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                                                                              |
+| `snack config`                              | Lê e edita a configuração local.                                                                                                                                                          |
+| `snack doctor`                              | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                                                                                  |
+| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                                                                                  |
 
 Todo comando aceita `--json` e responde com um documento versionado, então automatizar nunca
 significa fazer parsing de prosa. Todo comando também está no `man snack`, que vem no pacote e é
 gerado a partir da própria superfície de flags do CLI — uma flag não documentada reprova o build em
 vez de chegar até você.
 
-Dois clientes podem dividir uma fonte de capacidade. Se OpenCode e Claude Code cobram da mesma
-conta, mapeie ambos para o mesmo alias e o SNACK vai tratar o uso deles como o pote único que ele de
-fato é.
+Dois clientes podem dividir uma fonte de capacidade. Se OpenCode, Claude Code ou Codex CLI cobram da
+mesma conta, mapeie todos para o mesmo alias e o SNACK vai tratar o uso deles como o pote único que
+ele de fato é.
 
 ---
 
@@ -276,12 +281,59 @@ snack setup opencode --non-interactive \
   allowlist sobre o tamanho do prompt. O texto em si nunca é armazenado, e nenhuma opção o aceita
   pela linha de comando, onde outros processos poderiam lê-lo.
 
+`snack setup claude` e `snack setup codex` aceitam as mesmas flags, sem `--install-plugin`: os dois
+clientes são lidos do histórico que já escrevem, e nada é registrado em nenhum deles.
+
+## Codex CLI
+
+```bash
+snack setup codex --non-interactive --source work --provider openai --profile default --plan plus
+```
+
+O SNACK procura em `$CODEX_HOME` quando está definido — um valor relativo é resolvido do jeito que o
+Codex resolve, e o setup registra o caminho resolvido — e em `~/.codex` caso contrário. Ele lê
+`sessions/**/rollout-*.jsonl` e `archived_sessions/rollout-*.jsonl`, e nada mais nesse diretório. O
+setup confere o fingerprint do histórico antes de perguntar qualquer coisa e sai com `4` quando não
+existe diretório de sessões.
+
+Cada linha de rollout é projetada numa lista explícita de campos permitidos, e o resto é descartado
+sem ser lido: mensagens, raciocínio, chamadas de ferramenta e a saída delas, diretórios de trabalho,
+metadados de git, identificadores de conta e mensagens de erro nunca saem do parser. O
+`~/.codex/history.jsonl`, que guarda o histórico bruto de prompts do Codex, nunca é aberto. O Codex
+`0.145`–`0.147` e o `0.159` escrevem duas famílias de schema diferentes, e uma sessão iniciada por
+um e retomada pelo outro guarda as duas no mesmo arquivo; cada turno é lido pela própria família.
+Uma recusa é observada pelo `codex_error_info` além do `rate_limit_reached_type`, porque a única
+recusa real registrada foi escrita só no primeiro.
+
+O número que o Codex declara sobre as próprias janelas é citado na linha `reported` do
+`snack status`:
+
+```text
+codex
+  next prompt  35-99% chance it goes through · risk high
+  evidence     very_low — barely any history yet — mostly a starting assumption
+  pressure     unknown · no baseline to compare against yet · typical prompt
+  drivers      nothing to compare against yet
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Fri UTC · 20m ago
+  as of        20m ago · sync ok · period since 2026-10-03
+```
+
+As janelas são nomeadas pela duração, nunca pelo slot `primary`/`secondary` do Codex, que mudou de
+significado entre versões. Uma janela cujo reinício já passou não é repetida. A linha não faz parte
+do intervalo de `next prompt`, do nível de evidência nem da pressão de uso, e nada na previsão a lê.
+No `--json` ela é o array opcional `reported_capacity` no relatório daquela fonte. Na `1.3` ela fica
+local: o `export` não a inclui, e o `data purge` a apaga junto com o resto do escopo. O
+`snack doctor` avisa sobre o que um histórico do Codex guarda e o SNACK deliberadamente não conta —
+subagentes bifurcados do Codex `0.147` ou anterior, arquivos comprimidos `rollout-*.jsonl.zst` e
+números declarados que não puderam ser citados.
+
 ## Clientes suportados
 
 O suporte é decidido por fingerprint estrutural, não por string de versão, e um formato não
 reconhecido recusa em vez de chutar. As matrizes publicadas são
-[OpenCode](https://github.com/Duck1201/snack/blob/main/docs/opencode-support.md) e
-[Claude Code](https://github.com/Duck1201/snack/blob/main/docs/claude-support.md); a promessa é a
+[OpenCode](https://github.com/Duck1201/snack/blob/main/docs/opencode-support.md),
+[Claude Code](https://github.com/Duck1201/snack/blob/main/docs/claude-support.md) e
+[Codex CLI](https://github.com/Duck1201/snack/blob/main/docs/codex-support.md); a promessa é a
 família de schema validada mais recente mais uma anterior, por cliente.
 
 Requer Node.js 24 em Linux, macOS ou Windows via WSL2.

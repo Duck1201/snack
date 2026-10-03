@@ -11,7 +11,7 @@ Em português: [README.pt-BR.md](./README.pt-BR.md).
 
 ```bash
 npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli   # builds the SQLite driver; npm 12 skips it otherwise
-snack setup opencode    # or: snack setup claude
+snack setup opencode    # or: snack setup claude, snack setup codex
 snack status
 ```
 
@@ -76,17 +76,17 @@ treat their usage as the single pool it really is.
 
 ## Commands
 
-| Command                                       | What it does                                                                                                              |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `snack setup claude` | Map a capacity source; optionally register the live-capture plugin                                                        |
-| `snack sync`                                  | Import new history; `--full` re-reads and reconciles everything                                                           |
-| `snack status`                                | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates and the method |
-| `snack stats`                                 | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                          |
-| `snack doctor`                                | Diagnose the local installation without changing it                                                                       |
-| `snack config`                                | Inspect or update local configuration                                                                                     |
-| `snack export`                                | Write your observations and predictions to JSON or CSV                                                                    |
-| `snack data purge`                            | Delete stored observations, optionally blocking their re-import                                                           |
-| `snack update`                                | Bring the CLI and the capture plugin to versions that belong together                                                     |
+| Command                                     | What it does                                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Map a capacity source; optionally register the live-capture plugin (OpenCode only)                                        |
+| `snack sync`                                | Import new history; `--full` re-reads and reconciles everything                                                           |
+| `snack status`                              | Assess the next prompt, with usage pressure against your own baseline; `--verbose` adds the evidence gates and the method |
+| `snack stats`                               | Describe observed usage over rolling horizons; `--verbose` adds per-model detail                                          |
+| `snack doctor`                              | Diagnose the local installation without changing it                                                                       |
+| `snack config`                              | Inspect or update local configuration                                                                                     |
+| `snack export`                              | Write your observations and predictions to JSON or CSV                                                                    |
+| `snack data purge`                          | Delete stored observations, optionally blocking their re-import                                                           |
+| `snack update`                              | Bring the CLI and the capture plugin to versions that belong together                                                     |
 
 Every command takes `--json` and emits one versioned document. Every command is also in `man snack`,
 generated from the CLI's own flag surface so it cannot describe a version you are not running.
@@ -123,9 +123,39 @@ open: it never throws into OpenCode and never blocks it. Claude Code needs no pl
 history already records refusals as structured fields, which is why no hook is registered in your
 Claude settings ([ADR-0006](./docs/adr/0006-claude-jsonl-backfill-without-hooks.md)).
 
+## Codex CLI
+
+From `1.3`, `snack setup codex` reads the rollouts Codex CLI already writes under `$CODEX_HOME`
+(`~/.codex` when it is unset): `sessions/**/rollout-*.jsonl` and `archived_sessions/`. Nothing is
+registered in Codex's configuration and no plugin is involved. Each line is projected onto an
+explicit field allowlist and the rest is dropped unread — messages, reasoning, tool calls and their
+output, working directories and git metadata never leave the parser. `~/.codex/history.jsonl`,
+Codex's raw prompt history, is never opened.
+
+Codex also states a figure of its own: a fraction of each window it tracks, how long that window is,
+and when it resets. SNACK quotes it — it is **reported capacity usage**, the client's statement, not
+SNACK's — on a row of its own beside the estimate:
+
+```text
+codex
+  next prompt  35-99% chance it goes through · risk high
+  evidence     very_low — barely any history yet — mostly a starting assumption
+  pressure     unknown · no baseline to compare against yet · typical prompt
+  drivers      nothing to compare against yet
+  reported     Codex states 34% of its 5h window, resets in 3h 10m · 19% of its 7d window, resets Fri UTC · 20m ago
+  as of        20m ago · sync ok · period since 2026-10-03
+```
+
+The `reported` row is never part of the `next prompt` interval, the evidence level or the usage
+pressure; nothing in the forecast reads it, and a test holds the estimate identical with and without
+it ([ADR-0007](./docs/adr/0007-quote-codex-reported-capacity.md)). In `--json` it is the optional
+`reported_capacity` array on that source's report. It stays local in `1.3`: `export` does not carry
+it. The supported Codex versions and what is read are in
+[docs/codex-support.md](./docs/codex-support.md).
+
 ## How it got here
 
-Eleven releases, each with a single job. Nothing shipped until the thing before it was proven.
+Each release had a single job. Nothing shipped until the thing before it was proven.
 
 | Version         | What it added                                                                                                                                                                                                                                                                                                                                 |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -141,6 +171,8 @@ Eleven releases, each with a single job. Nothing shipped until the thing before 
 | `1.0.0`         | First stable release. Strict SemVer on the public contracts, migration chains rehearsed from every published release, artifacts staged on an isolated registry before npm sees them.                                                                                                                                                          |
 | `1.0.1` `1.0.2` | The first releases driven by _using_ the product. Installing the published `1.0.0` from npm and running it against a real history found twelve defects, three of them release-blocking, every one invisible to a green test suite.                                                                                                            |
 | `1.1.0`–`1.1.3` | Made to be read. `snack update` puts the CLI and the capture plugin on versions that belong together, and is the only command that reaches the network. `status` became a panel and `stats` a pair of tables, both written in words rather than lines to decode. Three patches came out of racing the published build against a real history. |
+| `1.2.0` `1.2.1` | `status --verbose` gives the method and the evidence gates a human route, `man snack` is generated from the CLI's own flag surface and gated by the build, and a SQLite driver that fails to load is named rather than reported as damaged storage.                                                                                           |
+| `1.3.0`         | Codex CLI, the third client, read from its rollouts by field allowlist. The figure Codex states about its own windows is quoted beside the estimate, never inside it.                                                                                                                                                                         |
 
 The full staged plan, with per-wave exit criteria and everything deliberately left out, is in
 [PLAN.md](./PLAN.md).
@@ -151,8 +183,9 @@ The full staged plan, with per-wave exit criteria and everything deliberately le
 behavior · [docs/architecture.md](./docs/architecture.md) for modules and data flow ·
 [docs/compatibility.md](./docs/compatibility.md) for what the published contracts promise ·
 [CONTEXT.md](./CONTEXT.md) for the domain vocabulary ·
-[docs/opencode-support.md](./docs/opencode-support.md) and
-[docs/claude-support.md](./docs/claude-support.md) for supported schema families ·
+[docs/opencode-support.md](./docs/opencode-support.md),
+[docs/claude-support.md](./docs/claude-support.md) and
+[docs/codex-support.md](./docs/codex-support.md) for supported schema families ·
 [docs/troubleshooting.md](./docs/troubleshooting.md) when something refuses.
 
 Contributions: [CONTRIBUTING.md](./CONTRIBUTING.md). Security: [SECURITY.md](./SECURITY.md).

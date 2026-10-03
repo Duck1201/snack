@@ -19,8 +19,9 @@
   is a minimal capture plugin and must not import the CLI or open SQLite.
 - The CLI source is intentionally flat. `cli.js` delegates to `main.js`; `opencode-adapter.js` reads
   OpenCode SQLite in read-only/query-only mode; `claude-adapter.js` backfills from Claude Code's
-  JSONL history; `spool.js` validates NDJSON; `storage.js` owns SNACK SQLite and transactions;
-  `status.js` consumes query results rather than SQLite.
+  JSONL history; `codex-adapter.js` backfills from Codex CLI's rollouts by field allowlist;
+  `spool.js` validates NDJSON; `storage.js` owns SNACK SQLite and transactions; `status.js` consumes
+  query results rather than SQLite.
 - Source is JavaScript with JSDoc types, not TypeScript. `jsconfig.json` runs strict `checkJs` with
   NodeNext resolution.
 
@@ -77,7 +78,9 @@ assertions, and delivery principle 9 rejects those.
   user state.
 - OpenCode compatibility is structural, not version-string based. To support a new schema family,
   add a sanitized SQL fixture under `packages/cli/test/fixtures/opencode/` and update
-  `docs/opencode-support.md`.
+  `docs/opencode-support.md`. Claude Code and Codex CLI follow the same rule with JSONL fixtures
+  under `packages/cli/test/fixtures/claude/` and `packages/cli/test/fixtures/codex/`, recorded in
+  `docs/claude-support.md` and `docs/codex-support.md`.
 
 ## Repository Workflow
 

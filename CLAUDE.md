@@ -65,8 +65,10 @@ process. No daemon, no event bus, no DI container. Layering intent (files are fl
   thresholds here.
 - `claude-adapter.js`: read-only backfill from the JSONL transcripts Claude Code already writes, no
   hook installed (ADR-0006). `opencode-adapter.js`: read-only SQLite backfill from OpenCode's own
-  DB. Both are gated on schema fingerprints. `spool.js`: reads/validates the plugin's NDJSON spool
-  segments.
+  DB. `codex-adapter.js`: read-only backfill from Codex CLI's rollouts by field allowlist, never
+  `history.jsonl`; it also yields the reported capacity figures `status` quotes beside the estimate
+  (ADR-0007). All three are gated on schema fingerprints. `spool.js`: reads/validates the plugin's
+  NDJSON spool segments.
 - `storage.js`: better-sqlite3, migrations, transactions, repository queries. Does not classify
   errors or compute pressure.
 - `status.js` / prediction code: consumes domain-shaped query results, never touches SQLite.
@@ -112,7 +114,10 @@ in `packages/cli/test/fixtures/run-fixture.js` is the pattern. OpenCode adapter 
 overlays layered on top of it. Add a sanitized fixture when claiming support for a new OpenCode
 schema family and record it in `docs/opencode-support.md`. Claude adapter tests read JSONL from
 `packages/cli/test/fixtures/claude/`; a new Claude schema family needs a `version-*.jsonl` fixture
-and a row in `docs/claude-support.md`, which `contracts.test.js` asserts against.
+and a row in `docs/claude-support.md`, which `contracts.test.js` asserts against. Codex adapter
+tests read synthetic rollouts from `packages/cli/test/fixtures/codex/`; a Codex family is decided
+per turn, so a new one needs a `version-*.jsonl` fixture, a resumed-across-families fixture, and a
+row in `docs/codex-support.md`.
 
 ## Release
 

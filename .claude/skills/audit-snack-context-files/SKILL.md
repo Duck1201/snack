@@ -46,7 +46,7 @@ in a sister skill all rotted because the file grew under them.
 
 | Claim about                                           | Grep for                                                                                  | In                                    |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------- |
-| supported schema families / support-matrix docs exist | the loop over `"opencode-support.md", "claude-support.md", "compatibility.md"`            | `packages/cli/test/contracts.test.js` |
+| supported schema families / support-matrix docs exist | the loop over `"opencode-support.md", "claude-support.md", "codex-support.md"`            | `packages/cli/test/contracts.test.js` |
 | command + flag surface                                | `commandSurface(fixture)` and the literal it is `deepEqual`'d against, read from `--help` | same file                             |
 | exit codes                                            | `export const ExitCode = Object.freeze`                                                   | `packages/cli/src/errors.js`          |
 | `--json` envelope fields, `schema_version`            | `export function createEnvelope`                                                          | `packages/cli/src/output.js`          |
