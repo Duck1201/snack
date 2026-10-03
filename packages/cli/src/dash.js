@@ -29,10 +29,10 @@ import { readStorageReadiness, withStorageOperationLock } from "./storage.js";
  *
  * **Snapshots.** One per rendered forecast (ADR-0008): an attempt is recorded only when a source's
  * key (`snapshotKey`) differs from the key last delivered in this session, and confirmed delivered
- * only once a frame actually drew it. An identical reading writes nothing. A sequence shown in the
- * `next N` row is display-only and records nothing: its length is the person's, stepped by a key,
- * and recording each length passed through would write rows about key presses, not about forecasts
- * the person received.
+ * only once a frame actually drew it. An identical reading writes nothing. The `next N` row on screen
+ * rides with each attempt the dash records, as a `prediction_sequence` row in its transaction; a key
+ * press records nothing, so the record holds the sequence shown with each recorded forecast, not
+ * every N that passed across the screen (spec decision D7).
  */
 
 /** Seconds between the end of one synchronization and the start of the next (decision D2). */

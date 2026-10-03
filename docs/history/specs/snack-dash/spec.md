@@ -685,7 +685,8 @@ records `prediction_sequence` with each snapshot. As built now: while the row is
 records carries the sequence for the `N` on screen — `assessSequence` of the very answer recorded —
 as a `prediction_sequence` row in the attempt's transaction, through `recordAttempt`, the path
 `status --sequence` takes. No write per key press: stepping `N` changes no snapshot key, so it
-records nothing until the reading itself changes. With the row off, no sequence is recorded.
+records nothing until the reading itself changes. With the row off, no sequence is recorded. The
+granularity is per attempt, by decision D7: what the record cannot show is stated there.
 
 ---
 
@@ -952,3 +953,20 @@ the reader's own data. Alternative: document only (§7.2) and leave the panel as
 - D5 delivery format: `format: "dash"` in `prediction_delivery` (spec recommendation).
 - D6 prior-tail diagnostic: ship in 1.6.0 as a caveat in `status --sequence` (and the dash sequence
   row), under versioned `sequence-prior-tail-v1`, no new JSON member.
+- D7 sequence recording granularity (orchestrator decision, documented after review of `06340e7`):
+  **per attempt**. The record holds the sequence shown with each forecast the dash records — one
+  `prediction_sequence` row, for the `N` on screen, in the transaction of an attempt the dash writes
+  because the snapshot key changed (§4.3, §7.4) — and not every `N` that passed across the screen.
+  Consequences, stated so nobody reads more into the record than it holds: an `N` the person steps
+  through between two attempts is never recorded; a row shown, hidden or moved after an attempt is
+  not recorded until the next one; and **a row turned on after the session's attempt was recorded,
+  with a reading whose key never changes again, leaves no sequence in the record for the whole
+  session**, although one was on screen throughout. The one exception is §4.3 item 4: an attempt
+  still undelivered when the row changes is dropped and recorded again with the row on screen.
+  Why: recording on an `N` change would need an attempt per change, and those attempts would be
+  delivered snapshots of an unchanged single-prompt forecast, counted again by live calibration
+  (ADR-0008 records one snapshot per rendered forecast); carrying a second sequence on the same
+  attempt is impossible without rebuilding released migration `016`, whose `prediction_sequence`
+  has `prediction_attempt_id` as its primary key and immutability triggers. Alternative, not taken:
+  a sequence-only record keyed apart from attempts, which is a new table and a new contract for
+  a row the person steps by a key.
