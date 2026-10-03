@@ -7,6 +7,7 @@ import { compareOutcomeGroups } from "../src/analytics.js";
 import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
+  createCodexHistory,
   createOpenCodeDatabase,
   makeRunFixture,
 } from "./fixtures/run-fixture.js";
@@ -35,6 +36,13 @@ const forbidden = [
 test("no command calls observed usage a quota percentage or a remaining balance", async () => {
   const fixture = await makeRunFixture("snack-vocabulary-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  // A Codex source whose rollouts state capacity figures, so the `reported` row and the
+  // `reported_capacity` field -- the one place SNACK quotes a percentage of a provider's window --
+  // are on the surface this test polices.
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+    "version-0-147-0.jsonl",
+  ]);
 
   /** @type {string[][]} */
   const invocations = [
@@ -51,8 +59,22 @@ test("no command calls observed usage a quota percentage or a remaining balance"
       "--plan",
       "pro",
     ],
+    [
+      "setup",
+      "codex",
+      "--non-interactive",
+      "--source",
+      "codex",
+      "--provider",
+      "openai",
+      "--profile",
+      "default",
+      "--plan",
+      "plus",
+    ],
     ["sync", "--full"],
     ["status"],
+    ["status", "--source", "codex"],
     // The verbose panel is where the pressure percentiles reach a human surface, which is the one
     // number in this product most likely to be read as a share of a capacity.
     ["status", "--verbose"],
@@ -89,6 +111,8 @@ test("no command calls observed usage a quota percentage or a remaining balance"
   const transcript = outputs.map((output) => output.text).join("\n");
   assert.match(transcript, /usage pressure/iu);
   assert.match(transcript, /viability/iu);
+  assert.match(transcript, /Codex states \d+% of its \w+ window/u);
+  assert.match(transcript, /"reported_capacity"/u);
 
   for (const output of outputs) {
     for (const term of forbidden) {

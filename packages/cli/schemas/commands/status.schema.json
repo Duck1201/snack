@@ -136,7 +136,56 @@
           "description": "What the estimate does not claim. Present and possibly empty, never absent.",
           "type": "array",
           "items": { "type": "string" }
+        },
+        "reported_capacity": {
+          "description": "Added in 1.3.0, optional. What Codex CLI itself stated about its own capacity windows, quoted beside the estimate and never an input to it: viability, risk, evidence and pressure are identical with or without it (ADR-0007). Present only when a Codex CLI installation feeds this capacity source; one entry per installation and limit, its latest statement.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/reportedCapacity" }
         }
+      }
+    },
+    "reportedCapacity": {
+      "type": "object",
+      "required": [
+        "client",
+        "installation_id",
+        "limit_id",
+        "plan_type",
+        "stated_at",
+        "age_seconds",
+        "windows",
+        "parser_version"
+      ],
+      "properties": {
+        "client": { "const": "codex" },
+        "installation_id": { "type": "string" },
+        "limit_id": { "type": ["string", "null"] },
+        "plan_type": {
+          "description": "The plan Codex named. Shown, never used to rotate the capacity period.",
+          "type": ["string", "null"]
+        },
+        "stated_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "age_seconds": { "type": "number", "minimum": 0 },
+        "windows": {
+          "description": "Each stated window, identified by its length rather than by the slot Codex wrote it in.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["window_minutes", "used_percent", "resets_at", "reset_passed"],
+            "properties": {
+              "window_minutes": { "type": "integer", "minimum": 1 },
+              "used_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+              "resets_at": { "type": ["string", "null"] },
+              "reset_passed": { "type": "boolean" }
+            }
+          }
+        },
+        "parser_version": { "type": "string" }
       }
     },
     "planProfile": {

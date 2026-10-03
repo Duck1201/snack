@@ -8,6 +8,7 @@ import { run } from "../src/main.js";
 import {
   cleanupRunFixtures,
   createClaudeCanaryHistory,
+  createCodexCanaryHistory,
   createOpenCodeDatabase,
   executeOpenCodeSql,
   makeRunFixture,
@@ -308,6 +309,93 @@ test("no command writes or prints what a Claude history says about the user", as
     for (const file of snackFiles) {
       assert.doesNotMatch(file.content, pattern, `${name} reached ${file.path}`);
     }
+  }
+});
+
+test("no command writes or prints what a Codex rollout says about the user", async () => {
+  const fixture = await makeRunFixture("snack-privacy-codex-");
+  const codexHome = await createCodexCanaryHistory(fixture.root, privacyCanaries);
+  fixture.options.env.CODEX_HOME = codexHome;
+
+  /** @type {string[][]} */
+  const invocations = [
+    [
+      "setup",
+      "codex",
+      "--non-interactive",
+      "--source",
+      "codex",
+      "--provider",
+      "openai",
+      "--profile",
+      "default",
+      "--plan",
+      "plus",
+    ],
+    ["sync", "--full"],
+    ["status"],
+    ["status", "--source", "codex", "--verbose"],
+    ["stats", "--verbose"],
+    ["doctor"],
+    ["config", "get"],
+    ["export", "--format", "json", "--output", "-"],
+    ["export", "--format", "csv", "--output", join(fixture.root, "codex-csv-out")],
+    ["data", "purge", "--source", "codex", "--prevent-reimport", "--yes"],
+    ["sync", "--full"],
+  ];
+
+  /** @type {string[]} */
+  const transcript = [];
+  for (const argv of invocations) {
+    for (const json of [false, true]) {
+      fixture.stdout.value = "";
+      fixture.stderr.value = "";
+      await run(["node", "snack", ...argv, ...(json ? ["--json"] : [])], fixture.options);
+      transcript.push(fixture.stdout.value, fixture.stderr.value);
+    }
+  }
+
+  // Guard against a vacuous pass: the canaries have to really be in the history SNACK read, and
+  // SNACK has to really have read it -- including the stated figure, which travels a path of its
+  // own into storage and onto the status surface.
+  const history = await readEveryByte(codexHome);
+  assert.ok(history.some((file) => file.content.includes(privacyCanaries.prompt)));
+  assert.ok(
+    history.some(
+      (file) => file.path.endsWith("history.jsonl") && file.content.includes(privacyCanaries.title),
+    ),
+  );
+  assert.ok(transcript.join("").includes("codex"), "no command named the configured source");
+  assert.ok(
+    transcript.join("").includes("Codex states 34% of its 5h window"),
+    "the stated figure never reached status",
+  );
+
+  const files = await readEveryByte(fixture.root);
+  const snackFiles = files.filter((file) => !file.path.startsWith(codexHome));
+  assert.ok(
+    snackFiles.some((file) => file.path.endsWith("snack.sqlite3")),
+    "the storage database was never created",
+  );
+
+  for (const [name, canary] of Object.entries(privacyCanaries)) {
+    const pattern = new RegExp(String(canary), "u");
+    for (const [index, output] of transcript.entries()) {
+      assert.doesNotMatch(output, pattern, `${name} reached output ${index}`);
+    }
+    for (const file of snackFiles) {
+      assert.doesNotMatch(file.content, pattern, `${name} reached ${file.path}`);
+    }
+  }
+});
+
+test("no source file names the Codex prompt-history file", async () => {
+  // The adapter never lists CODEX_HOME itself, which is what keeps that file out of reach. A source
+  // file that named it would be the first step towards opening it, so naming it is refused here.
+  const directory = new URL("../src/", import.meta.url);
+  for (const name of await readdir(directory)) {
+    const source = await readFile(new URL(name, directory), "utf8");
+    assert.ok(!source.includes("history.jsonl"), `src/${name} names the Codex prompt history`);
   }
 });
 

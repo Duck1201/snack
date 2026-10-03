@@ -724,3 +724,94 @@ test("an ordinary rank still reads as a rank against your own history", () => {
   const text = renderStatus([statusFor()], { color: false });
   assert.match(text, /above 90% of your own history/u);
 });
+
+/**
+ * What Codex stated, shaped as `describeReportedCapacity` builds it: stated at 03:01:05, read three
+ * minutes later.
+ *
+ * @param {{window_minutes: number, used_percent: number, resets_at: string | null, reset_passed: boolean}[]} windows
+ */
+function reportedFor(windows) {
+  return [
+    {
+      client: "codex",
+      installation_id: "00000000-0000-4000-8000-000000000001",
+      limit_id: "codex",
+      plan_type: "plus",
+      stated_at: "2026-01-02T03:01:05.000Z",
+      age_seconds: 180,
+      windows,
+      parser_version: "codex-rate-limits-v1",
+    },
+  ];
+}
+
+test("what Codex states sits on its own row, after the estimate and before as of", () => {
+  const text = renderStatus(
+    [
+      statusFor({
+        reported_capacity: reportedFor([
+          {
+            window_minutes: 300,
+            used_percent: 34,
+            resets_at: "2026-01-02T05:34:05.000Z",
+            reset_passed: false,
+          },
+          {
+            window_minutes: 10080,
+            used_percent: 19,
+            resets_at: "2026-01-09T09:00:00.000Z",
+            reset_passed: false,
+          },
+        ]),
+      }),
+    ],
+    { color: false },
+  );
+  const lines = text.split("\n");
+
+  const reported = lines.findIndex((line) => line.startsWith("  reported "));
+  assert.ok(reported > lines.findIndex((line) => line.startsWith("  drivers ")));
+  assert.equal(
+    reported + 1,
+    lines.findIndex((line) => line.startsWith("  as of ")),
+  );
+  assert.equal(
+    lines[reported],
+    "  reported     Codex states 34% of its 5h window, resets in 2h 30m · 19% of its 7d window, resets Fri · 3m ago",
+  );
+  // The estimate's own rows are untouched by it.
+  assert.equal(lines[1], "  next prompt  95-100% chance it goes through · risk low");
+});
+
+test("a window whose reset has passed is not repeated", () => {
+  const text = renderStatus(
+    [
+      statusFor({
+        reported_capacity: reportedFor([
+          {
+            window_minutes: 300,
+            used_percent: 98,
+            resets_at: "2026-01-02T02:30:00.000Z",
+            reset_passed: true,
+          },
+        ]),
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.match(
+    text,
+    / {2}reported {5}Codex's 5h window reset 02:30; no figure stated since · 3m ago/u,
+  );
+  assert.doesNotMatch(text, /98%/u);
+});
+
+test("a source no Codex installation feeds has no reported row; one that stated nothing says so", () => {
+  assert.doesNotMatch(renderStatus([statusFor()], { color: false }), /reported/u);
+  assert.match(
+    renderStatus([statusFor({ reported_capacity: [] })], { color: false }),
+    / {2}reported {5}no figure stated by Codex yet/u,
+  );
+});
