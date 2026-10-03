@@ -572,7 +572,11 @@ terminal has 58×20. q quits.`
 - **Designed for 80 × 24.** Minimum **64 columns** — the longest `next prompt` row
   (`100-100% chance it goes through · risk elevated`, 47 columns) after the 15-column label indent
   fits with a margin — and **`sources + 12` rows** (header, list header, the rows, rule, five
-  detail rows, one caveat, key bar). Nine sources fit 24 rows.
+  detail rows, one caveat, key bar). Nine sources fit 24 rows. With the `next N` row on, four more,
+  whether or not it informs (after review of `3978a85`: the informative row's assumption qualifier
+  now has the row's priority and is reserved, where the build trimmed it first at 64 columns). A
+  short terminal gives up, in order, the other caveats, the drivers, the scale and the plot, then
+  the prior-tail line, then `as of`, and "Real provider capacity is unknown." last of all.
 - **64-79 columns:** the list drops columns by `fit()`'s sacrifice order; detail rows truncate their
   explanatory tail with `…` (the interval, the risk word, the evidence word and the band word are
   never truncated); the plot narrows (§5.3).

@@ -107,9 +107,11 @@ export const MINIMUM_COLUMNS = 64;
 
 /**
  * Rows a frame needs: the header, a banner, the list header, one row per source, the rule, the
- * detail's essential rows, the key bar. The `next N` row reserves its widest form (a caveat
- * wrapped over three lines) whenever it is on, informative or not -- a terminal that turned too
- * small at one length and not at the next would mark exactly the edge the row must not reveal.
+ * detail's essential rows, the key bar. The `next N` row reserves its widest form whenever it is
+ * on, informative or not -- a terminal that turned too small at one length and not at the next
+ * would mark exactly the edge the row must not reveal. At 64 columns that is an informative row
+ * whose risk wraps to a second line, with its three-line assumption qualifier; a too-wide row's
+ * three-line statement fits inside it.
  *
  * @param {DashState} state
  */
@@ -117,8 +119,8 @@ export function minimumRows(state) {
   return state.sources.length + 12 + (state.sequenceLength === null ? 0 : SEQUENCE_EXTRA_LINES);
 }
 
-/** The continuation lines a `next N` row may take beyond its first. */
-const SEQUENCE_EXTRA_LINES = 2;
+/** The lines a `next N` row and its qualifier may take beyond the row's first. */
+const SEQUENCE_EXTRA_LINES = 4;
 
 /** Where a detail row's value starts: one margin column, two of indent, the label column. */
 const VALUE = 16;
@@ -468,7 +470,7 @@ function detailLines(source, state, width, nowMs, paint) {
     state.reading.stale && state.reading.computedAt !== null
       ? ` · showing the reading from ${age(since(state.reading.computedAt, nowMs))} ago`
       : "";
-  const caveats = [...report.caveats, ...(sequence.qualifier === null ? [] : [sequence.qualifier])];
+  const caveats = report.caveats;
   return [
     { text: ` ${paint(report.source.alias, "bold")}`, priority: 9 },
     {
@@ -530,15 +532,34 @@ function detailLines(source, state, width, nowMs, paint) {
           undefined,
         ],
       ]),
-      priority: stale === "" ? 5 : 8,
+      // Above the scale and the plot, which a short terminal gives up first.
+      priority: stale === "" ? 7 : 8,
     },
     ...caveats.map((caveat, index) => ({
-      text: wrap(caveat, width - 5)
-        .map((text, at) => (at === 0 ? `   ${paint("!", "gray")} ${text}` : `     ${text}`))
-        .join("\n"),
-      priority: caveat === "Real provider capacity is unknown." ? 6 : index === 0 ? 2 : 1,
+      text: caveatText(caveat, width, paint),
+      // What SNACK cannot claim outlasts every other caveat and the `as of` row: it is the last
+      // thing a short terminal may give up.
+      priority: caveat === "Real provider capacity is unknown." ? 8 : index === 0 ? 2 : 1,
     })),
+    // The assumption that qualifies the `next N` numbers goes with them: it has the row's priority,
+    // and `minimumRows` reserves its height.
+    ...(sequence.qualifier === null
+      ? []
+      : [{ text: caveatText(sequence.qualifier, width, paint), priority: 9 }]),
   ];
+}
+
+/**
+ * One `!` caveat, wrapped under its marker.
+ *
+ * @param {string} caveat
+ * @param {number} width
+ * @param {Paint} paint
+ */
+function caveatText(caveat, width, paint) {
+  return wrap(caveat, width - 5)
+    .map((text, at) => (at === 0 ? `   ${paint("!", "gray")} ${text}` : `     ${text}`))
+    .join("\n");
 }
 
 /**

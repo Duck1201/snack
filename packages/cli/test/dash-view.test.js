@@ -186,7 +186,48 @@ test("the sequence row's height is reserved whether or not it informs", () => {
   const informative = sequenceStateFor(10, { tooWide: false });
   const wide = sequenceStateFor(10, { tooWide: true, priorTail: true });
   assert.equal(minimumRows(informative), minimumRows(wide));
-  assert.equal(minimumRows(informative), minimumRows(stateFor()) + 2);
+  assert.equal(minimumRows(informative), minimumRows(stateFor()) + 4);
+});
+
+test("at the minimum size the next N row keeps its qualifier, and nothing essential goes first", () => {
+  // The terminal's smallest frame: 64 columns, the rows `minimumRows` asks for. An informative row
+  // keeps the assumption that qualifies its numbers, a too-wide one its whole statement, and either
+  // way `as of` and "Real provider capacity is unknown." outlast the scale, the plot and the
+  // prior-tail line.
+  /** @param {string[]} lines */
+  const prose = (lines) =>
+    lines
+      .map((line) => line.replace(/^\s*!?\s*/u, ""))
+      .join(" ")
+      .replace(/\s+/gu, " ");
+  for (const selected of [0, 1, 2]) {
+    for (const length of [2, 10, 100]) {
+      for (const tooWide of [false, true]) {
+        const state = { ...sequenceStateFor(length, { tooWide, priorTail: true }), selected };
+        const { lines, drawn } = renderDash(
+          state,
+          { columns: MINIMUM_COLUMNS, rows: minimumRows(state) },
+          { color: false },
+        );
+        const name = `source ${selected}, next ${length}, ${tooWide ? "too wide" : "informative"}`;
+        assert.ok(drawn.length > 0, name);
+        const text = prose(lines);
+        assert.ok(
+          lines.some((line) => /^ {3}as of /u.test(line)),
+          `${name}: as of was trimmed`,
+        );
+        assert.ok(text.includes("Real provider capacity is unknown."), `${name}: capacity`);
+        if (tooWide) {
+          assert.ok(text.includes(`The ${length}-prompt interval is too wide to say much`), name);
+        } else {
+          assert.ok(
+            text.includes(`The ${length}-prompt estimate assumes each prompt meets the conditions`),
+            `${name}: the qualifier was trimmed`,
+          );
+        }
+      }
+    }
+  }
 });
 
 test("a tiny terminal still gets the sentence, cut to what fits", () => {
