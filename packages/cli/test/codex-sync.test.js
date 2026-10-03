@@ -106,3 +106,44 @@ test("a 0.147 rollout resumed by 0.159 keeps its old turns' slices across syncs"
   await json(fixture, ["sync", "--full"]);
   assert.deepEqual(slicesByPrompt(fixture.paths.databaseFile), after);
 });
+
+/** @param {string} databaseFile */
+function reportedAliases(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT DISTINCT source_alias AS alias FROM reported_capacity_observation ORDER BY 1",
+      )
+      .all()
+      .map((row) => /** @type {{alias: string}} */ (row).alias);
+  } finally {
+    database.close();
+  }
+}
+
+for (const order of [
+  ["az", "oa"],
+  ["oa", "az"],
+]) {
+  test(`a stated figure reaches only the source of its provider (${order.join(" then ")})`, async () => {
+    const fixture = await makeRunFixture("snack-codex-two-providers-");
+    // One Codex installation, two capacity sources told apart by provider. Every rollout here
+    // names `openai`, so every figure Codex stated belongs to `oa` and none to `az`.
+    fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+      "version-0-159-3.jsonl",
+      "version-0-147-0.jsonl",
+    ]);
+    const providers = /** @type {Record<string, string>} */ ({ az: "azure", oa: "openai" });
+    for (const alias of order) {
+      await json(fixture, ["setup", "codex", ...setupFlags(alias, String(providers[alias]))]);
+    }
+    await json(fixture, ["sync", "--full"]);
+
+    assert.deepEqual(reportedAliases(fixture.paths.databaseFile), ["oa"]);
+    const status = await json(fixture, ["status", "--no-sync", "--source", "az"]);
+    assert.deepEqual(status.data.reported_capacity ?? [], []);
+    const stated = await json(fixture, ["status", "--no-sync", "--source", "oa"]);
+    assert.ok(stated.data.reported_capacity.length > 0);
+  });
+}

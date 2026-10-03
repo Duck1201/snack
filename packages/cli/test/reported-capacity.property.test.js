@@ -51,6 +51,7 @@ const statedSnapshot = fc.record({
     selector: (window) => window.window_minutes,
   }),
   parser_version: fc.constant("codex-rate-limits-v1"),
+  provider: fc.constant(codexOnWork.provider),
 });
 
 /**

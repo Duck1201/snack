@@ -176,3 +176,9 @@ Setup checks the fingerprint before asking anything, reads the history once as a
 exits `4` with `source_unavailable` when there is no sessions directory. A Codex source can share a
 capacity source with OpenCode or Claude Code on the same lineage; nothing Codex-specific is added to
 the binding, the prompts or the export.
+
+One Codex installation can also feed two capacity sources told apart by provider (`--provider
+azure` on one alias, `--provider openai` on another). Each thread's `model_provider` decides
+where its prompts go, and the figures that thread stated follow the same rule: they are stored only
+for the source whose provider matches, and not at all while that provider maps to more than one
+source of the installation.

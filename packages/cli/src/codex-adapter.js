@@ -165,6 +165,7 @@ export function isCodexSource(source) {
  * @property {string | null} plan_type
  * @property {ReportedCapacityWindow[]} windows  1..2 entries, distinct window_minutes
  * @property {string} parser_version   "codex-rate-limits-v1"
+ * @property {string} provider         the thread's `model_provider`, which routes the snapshot
  */
 /**
  * @typedef {{files: Record<string, number>, threads: Record<string, {thread: string, parent: string | null}>}} CodexCursor
@@ -1169,6 +1170,7 @@ function readSnapshots(file) {
       plan_type: limits.plan_type,
       windows,
       parser_version: RATE_LIMITS_PARSER_VERSION,
+      provider: file.provider,
     };
     if (signature !== previousSignature) emitted.push(latest);
     previousSignature = signature;

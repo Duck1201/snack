@@ -679,3 +679,20 @@ links them in that family), so it is **skipped** — its token counts and comple
 counted in `health().skipped_subagent_turns`, which `doctor` reports as a
 `source_coverage:<alias>:codex:subagent_turns` warning, the same treatment as legacy forks (§3.1).
 Fixture `subagent-0-147-0.jsonl`.
+
+### R3 — a stated figure is routed by its thread's provider (amends §3.5, §8)
+
+`ReportedCapacitySnapshot` gains `provider: string` — the stating thread's
+`session_meta.payload.model_provider`. `storeObservations` stores a snapshot only for the source
+whose provider matches, and only when that provider maps to one source of the installation (the rule
+§3.3 already applies to prompts through `pending_mapping` / `ambiguous_profile_mapping`). Others
+are counted in the new `reported_capacity.pending_mapping` count and not stored; a snapshot without
+a provider is `rejected`. Before this, with one installation behind `az` (azure) and `oa` (openai),
+the first source synced stored every figure, because `UNIQUE (installation_id, observation_key,
+window_minutes)` let it claim the row.
+
+No migration: `mergeConfiguredSource` refuses two aliases on one installation only when adapter,
+location, provider **and profile** all match. So two aliases may also share a provider and differ
+by profile — the claim that "providers always differ" is not quite true — but that pairing is the
+ambiguous mapping, where prompts already wait and the figure now waits with them. Provider plus the
+ambiguity count is therefore enough to route every snapshot to at most one source.

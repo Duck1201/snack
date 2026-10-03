@@ -87,6 +87,8 @@ const OUTCOME_POLICY_VERSION = "opencode-outcome-v1";
  * @property {string | null} plan_type
  * @property {ReportedCapacityWindow[]} windows  1..2 entries, distinct window_minutes
  * @property {string} parser_version   "codex-rate-limits-v1"
+ * @property {string} provider         the provider of the thread that stated it; routes the
+ *   snapshot to a capacity source exactly as an observation's provider routes the observation
  */
 
 /**
@@ -95,6 +97,8 @@ const OUTCOME_POLICY_VERSION = "opencode-outcome-v1";
  * @property {number} unchanged  snapshots already stored in full
  * @property {number} rejected   snapshots refused as malformed; nothing of them is stored
  * @property {number} tombstoned snapshots a `--prevent-reimport` purge covers
+ * @property {number} pending_mapping snapshots stated for a provider this source is not, or one
+ *   that maps to more than one source of this installation; they belong to no source here
  */
 
 /**
@@ -1019,6 +1023,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           batch.reported_capacity,
           tombstones,
           timestamp,
+          options.providerMappingCounts,
         );
       }
 
@@ -1115,12 +1120,26 @@ const REPORTED_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
  * @param {Database.Database} database
  * @param {ConfiguredSource} source
  * @param {unknown[]} snapshots
+ * One installation can feed several capacity sources, told apart by provider. A snapshot is the
+ * statement of one thread, so it belongs to the source whose provider that thread used, under the
+ * same rule that routes the thread's prompts: a provider this source is not, or one that maps to
+ * more than one source of the installation, attributes nothing here. Without it the first source
+ * to store a snapshot would own it, whichever provider it was.
+ *
  * @param {{from_at: string | null, until_at: string | null}[]} tombstones
  * @param {string} timestamp
+ * @param {Map<string, number>} [providerMappingCounts]
  * @returns {ReportedCapacityCounts}
  */
-function storeReportedCapacity(database, source, snapshots, tombstones, timestamp) {
-  const counts = { inserted: 0, unchanged: 0, rejected: 0, tombstoned: 0 };
+function storeReportedCapacity(
+  database,
+  source,
+  snapshots,
+  tombstones,
+  timestamp,
+  providerMappingCounts,
+) {
+  const counts = { inserted: 0, unchanged: 0, rejected: 0, tombstoned: 0, pending_mapping: 0 };
   const insert = database.prepare(
     `INSERT INTO reported_capacity_observation
        (source_alias, installation_id, observation_key, observed_at, limit_id, plan_type,
@@ -1131,6 +1150,13 @@ function storeReportedCapacity(database, source, snapshots, tombstones, timestam
   for (const snapshot of snapshots) {
     if (!isValidReportedSnapshot(snapshot)) {
       counts.rejected += 1;
+      continue;
+    }
+    const mappedCount =
+      providerMappingCounts?.get(snapshot.provider) ??
+      Number(snapshot.provider === source.provider);
+    if (snapshot.provider !== source.provider || mappedCount > 1) {
+      counts.pending_mapping += 1;
       continue;
     }
     if (tombstones.length > 0 && isTombstoned(tombstones, snapshot.observed_at)) {
@@ -1178,6 +1204,7 @@ function isValidReportedSnapshot(value) {
   }
   if (typeof snapshot.parser_version !== "string") return false;
   if (!REPORTED_IDENTIFIER_PATTERN.test(snapshot.parser_version)) return false;
+  if (typeof snapshot.provider !== "string" || snapshot.provider === "") return false;
   const windows = snapshot.windows;
   if (!Array.isArray(windows) || windows.length < 1 || windows.length > 2) return false;
   const lengths = new Set();

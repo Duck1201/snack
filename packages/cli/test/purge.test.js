@@ -408,6 +408,7 @@ function statedFigure(n, observedAt) {
       { window_minutes: 10080, used_percent: 19, resets_at: null },
     ],
     parser_version: "codex-rate-limits-v1",
+    provider: "openai",
   };
 }
 
@@ -486,6 +487,7 @@ test("a --prevent-reimport tombstone refuses the stated figures it covers, and o
     unchanged: 1,
     rejected: 0,
     tombstoned: 2,
+    pending_mapping: 0,
   });
   assert.equal(count(databaseFile, "reported_capacity_observation"), 4);
 });

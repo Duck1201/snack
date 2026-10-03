@@ -1320,6 +1320,7 @@ function snapshot(n, observedAt, overrides = {}) {
       { window_minutes: 10080, used_percent: 19, resets_at: null },
     ],
     parser_version: "codex-rate-limits-v1",
+    provider: "openai",
     ...overrides,
   };
 }
@@ -1351,16 +1352,51 @@ test("a stated figure is stored once per window, and storing it again changes no
     unchanged: 0,
     rejected: 0,
     tombstoned: 0,
+    pending_mapping: 0,
   });
   assert.deepEqual(second.reported_capacity, {
     inserted: 0,
     unchanged: 2,
     rejected: 0,
     tombstoned: 0,
+    pending_mapping: 0,
   });
   assert.equal(tableCounts(paths.databaseFile).reported_capacity_observation, 4);
   // Written in the transaction that advances the cursor, so the two cannot disagree.
   assert.deepEqual(readIngestionCursor(paths.databaseFile, "codex"), { files: {} });
+});
+
+test("a stated figure is stored only for the source its provider maps to, unambiguously", async () => {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+
+  // Another provider's statement belongs to another capacity source of this installation.
+  const foreign = storeReported(paths.databaseFile, [
+    snapshot(1, "2026-01-02T01:00:00.000Z", { provider: "azure" }),
+  ]);
+  assert.equal(foreign.reported_capacity?.pending_mapping, 1);
+  // Two sources of one installation on the same provider (told apart only by profile) are the
+  // ambiguous mapping: prompts wait for the user to say which, and so does the figure.
+  const ambiguous = storeObservations(
+    paths.databaseFile,
+    codexSource(),
+    {
+      observations: [],
+      cursor: { files: {} },
+      reported_capacity: [snapshot(2, "2026-01-02T01:00:00.000Z")],
+    },
+    now,
+    { providerMappingCounts: new Map([["openai", 2]]), mappedProviders: new Set(["openai"]) },
+  );
+  assert.equal(ambiguous.reported_capacity?.pending_mapping, 1);
+  // A snapshot that names no provider cannot be routed at all.
+  const unnamed = storeReported(paths.databaseFile, [
+    /** @type {import("../src/storage.js").ReportedCapacitySnapshot} */ (
+      /** @type {unknown} */ ({ ...snapshot(3, "2026-01-02T01:00:00.000Z"), provider: undefined })
+    ),
+  ]);
+  assert.equal(unnamed.reported_capacity?.rejected, 1);
+  assert.equal(tableCounts(paths.databaseFile).reported_capacity_observation, 0);
 });
 
 test("a batch without stated figures reports exactly what it reported before 1.3", async () => {
@@ -1417,6 +1453,7 @@ test("a stated figure that is not a figure is counted and refused, never stored 
     unchanged: 0,
     rejected: invalid.length,
     tombstoned: 0,
+    pending_mapping: 0,
   });
   assert.equal(tableCounts(paths.databaseFile).reported_capacity_observation, 2);
 });
