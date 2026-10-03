@@ -49,7 +49,7 @@ const allowlistedPaths = [...new Set(Object.values(CODEX_FIELD_ALLOWLIST).flat()
  * Every slot the reader must never look at, by record kind. A value planted in one of these must
  * not reach anything the adapter returns.
  *
- * @type {[(record: Record<string, any>) => boolean, string[]][]}
+ * @type {[(record: {type?: unknown, payload?: {type?: unknown}}) => boolean, string[]][]}
  */
 const neverRead = [
   [(r) => r.type === "session_meta", ["payload", "cwd"]],
@@ -70,25 +70,25 @@ const neverRead = [
   [(r) => r.payload?.type === "token_count", ["payload", "info", "model_context_window"]],
 ];
 
-/** @param {Record<string, any>} record @param {string[]} path @param {unknown} value */
+/** @param {Record<string, unknown>} record @param {string[]} path @param {unknown} value */
 function setPath(record, path, value) {
   let target = record;
   for (const key of path.slice(0, -1)) {
-    if (typeof target[key] !== "object" || target[key] === null) return false;
-    target = target[key];
+    const next = target[key];
+    if (typeof next !== "object" || next === null) return false;
+    target = /** @type {Record<string, unknown>} */ (next);
   }
   const last = /** @type {string} */ (path.at(-1));
   target[last] = value;
   return true;
 }
 
-/** @param {Record<string, any>} record @param {string[]} path */
+/** @param {unknown} record @param {string[]} path */
 function getPath(record, path) {
-  /** @type {any} */
   let value = record;
   for (const key of path) {
     if (typeof value !== "object" || value === null) return undefined;
-    value = value[key];
+    value = /** @type {Record<string, unknown>} */ (value)[key];
   }
   return value;
 }

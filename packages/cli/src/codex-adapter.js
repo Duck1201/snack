@@ -117,7 +117,7 @@ const errorRestrictions = new Set(["usage_limit_exceeded", "rate_limit_exceeded"
 const codePattern = /^[a-z0-9_]{1,64}$/u;
 
 /** A limit or plan label: stored and shown, so it is held to an identifier's shape. */
-const labelPattern = /^[A-Za-z0-9_.:-]{1,64}$/u;
+const labelPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
 const CLASSIFIER_VERSION = "codex-error-v1";
 const PARSER_VERSION = "codex-rollout-v1";
