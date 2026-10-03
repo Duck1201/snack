@@ -41,7 +41,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.data.value, true);
   assert.deepEqual(
     document.data.storage.applied,
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
   );
   // Every other payload SNACK publishes is snake_case. This one carried the storage layer's own
   // JavaScript names straight into the document, so a consumer had to know which command it was
@@ -2651,12 +2651,12 @@ test("human stats describe the same calibration the JSON document reports", asyn
 
   // The default reading says how much has been checked, which is what decides whether to trust the
   // estimate; the score itself is a modeller's question and lives with the other statistics.
-  assert.match(concise, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.match(concise, new RegExp(`${calibration.snapshots} forecasts? checked`, "u"));
   assert.doesNotMatch(concise, /brier/iu);
 
   // Under `--verbose` both renderings must state the same facts: how many snapshots exist, what the
   // live score is with its sample size, and that backtesting is a separate stream.
-  assert.match(human, new RegExp(`${calibration.snapshots} forecasts checked`, "u"));
+  assert.match(human, new RegExp(`${calibration.snapshots} forecasts? checked`, "u"));
   assert.match(human, new RegExp(`brier ${calibration.live.brier.value}`, "u"));
   assert.match(human, new RegExp(`sample ${calibration.live.brier.sample_size}`, "u"));
   assert.match(human, /backtest/iu);

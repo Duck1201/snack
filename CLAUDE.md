@@ -29,7 +29,7 @@ npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs 
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
 npm run release:prepare  # changeset version + plugin pin + man page + release evidence, one PR
 npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
-                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0; argv narrows
+                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0 1.4.0; argv narrows
                        # to one) with the candidate. Needs the network; not part of `check`.
 ```
 

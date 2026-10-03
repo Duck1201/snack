@@ -418,6 +418,10 @@ test("stats states what calibration is worth without stating a Brier score", () 
   assert.match(plain, /30 forecasts checked/u);
   assert.match(verbose, /brier 0\.002/u);
   assert.match(verbose, /stage5-calibration-v1/u);
+
+  const one = statsFor();
+  one.calibration = { ...one.calibration, snapshots: 1 };
+  assert.match(renderStats(one, { verbose: false }), /\b1 forecast checked\b/u);
 });
 
 test("--verbose breaks each window down by model", () => {
@@ -1071,4 +1075,162 @@ test("a too-wide sequence interval always shows even odds strictly inside it", (
     const [low = NaN, high = NaN] = shownIntervals(text)[1] ?? [];
     assert.ok(low < 50 && high > 50, `${low}-${high}% for ${lower}-${upper}`);
   }
+});
+
+/**
+ * A Codex-fed source: the stated figure quoted, and the shadow it informed.
+ *
+ * @param {Record<string, unknown>} shadow
+ */
+function codexStatusFor(shadow) {
+  return statusFor({
+    source: {
+      alias: "codex",
+      provider: "openai",
+      profile: "default",
+      plan: "plus",
+      active_period: { started_at: "2026-01-02T03:05:00.000Z" },
+      plan_profile: { id: "generic", version: "1.0.0", provenance: "bundled", as_of: null },
+    },
+    reported_capacity: [
+      {
+        limit_id: "codex",
+        stated_at: "2026-01-02T03:04:00.000Z",
+        age_seconds: 50,
+        windows: [{ window_minutes: 300, used_percent: 86, resets_at: null, reset_passed: false }],
+      },
+    ],
+    shadow: {
+      method: { id: "reported-capacity", version: "1" },
+      policy_version: "reported-capacity-v1",
+      ...shadow,
+    },
+  });
+}
+
+const COMPUTED = {
+  computed: true,
+  reason: null,
+  binding: { window_minutes: 300, band: "near" },
+  viability: { lower: 0.41, point: 0.8, upper: 0.97, coverage_target: 0.8 },
+  risk: { label: "high" },
+  evidence: { level: "low" },
+  contributors: { backoff_level: "period_stated" },
+};
+
+test("the shadow is a verbose line that says what it would say, and that it is not the answer", () => {
+  const verbose = renderStatus([codexStatusFor(COMPUTED)], { color: false, verbose: true });
+  const lines = verbose.split("\n");
+  const shadow = lines.findIndex((line) => line.startsWith("  shadow"));
+  assert.ok(shadow > 0, verbose);
+  assert.equal(
+    lines[shadow],
+    "  shadow       reported-capacity@1 would say 41-97% · risk high · evidence low — recorded to compare, not the answer above",
+  );
+  assert.equal(
+    lines[shadow + 1],
+    "               reads what Codex states about its 5h window — in the near band · reported-capacity-v1",
+  );
+  // After the figure it read, never above the answer it is not.
+  assert.ok(shadow > lines.findIndex((line) => line.startsWith("  reported")));
+  assert.ok(shadow > lines.findIndex((line) => line.startsWith("  next prompt")));
+  // The answer is untouched: the panel's `next prompt` is the report's own interval.
+  assert.match(verbose, /next prompt {2}95-100% chance it goes through · risk low/u);
+
+  // The default panel and the overview never show it.
+  const plain = renderStatus([codexStatusFor(COMPUTED)], { color: false });
+  assert.doesNotMatch(plain, /shadow|reported-capacity|41-97/u);
+  const overview = renderStatusTable([codexStatusFor(COMPUTED)], { color: false, columns: 120 });
+  assert.doesNotMatch(overview, /shadow|reported-capacity|41-97/u);
+});
+
+test("each band, and the starting assumption, is worded on the shadow's second line", () => {
+  /** @param {Record<string, unknown>} shadow */
+  const second = (shadow) => {
+    const lines = renderStatus([codexStatusFor({ ...COMPUTED, ...shadow })], {
+      color: false,
+      verbose: true,
+    }).split("\n");
+    return lines[lines.findIndex((line) => line.startsWith("  shadow")) + 1]?.trim();
+  };
+  assert.equal(
+    second({ binding: { window_minutes: 10080, band: "clear" } }),
+    "reads what Codex states about its 7d window · reported-capacity-v1",
+  );
+  assert.equal(
+    second({ binding: { window_minutes: 300, band: "full" } }),
+    "reads what Codex states about its 5h window — Codex stated it full · reported-capacity-v1",
+  );
+  assert.equal(
+    second({
+      binding: { window_minutes: 300, band: "full" },
+      contributors: { backoff_level: "stated_full_prior" },
+    }),
+    "a starting assumption — Codex states its 5h window is full, and no prompt of yours has been seen in that state yet · reported-capacity-v1",
+  );
+});
+
+test("a shadow that was not computed says why, in words", () => {
+  /** @param {string} reason */
+  const line = (reason) =>
+    renderStatus([codexStatusFor({ computed: false, reason, binding: null })], {
+      color: false,
+      verbose: true,
+    })
+      .split("\n")
+      .find((text) => text.startsWith("  shadow"));
+  assert.equal(
+    line("stale"),
+    "  shadow       reported-capacity@1 not computed — stale, stated 50s ago",
+  );
+  assert.equal(
+    line("superseded"),
+    "  shadow       reported-capacity@1 not computed — another client sent a prompt since",
+  );
+  assert.equal(
+    line("no_local_outcomes"),
+    "  shadow       reported-capacity@1 not computed — no outcome of yours to read yet",
+  );
+});
+
+test("stats --verbose gives each method its own line, and the shadow its comparison", () => {
+  const stream = (/** @type {number | null} */ value, /** @type {number} */ sample) => ({
+    brier: { value, sample_size: sample },
+    interval: { coverage: null, sample_size: sample },
+  });
+  const base = statsFor();
+  const report = {
+    ...base,
+    calibration: {
+      ...base.calibration,
+      by_method: [
+        {
+          id: "bayesian-pressure-band",
+          version: "1",
+          role: "answer",
+          live: stream(0.0104, 40),
+          backtest: stream(0.0168, 84),
+        },
+        {
+          id: "reported-capacity",
+          version: "1",
+          role: "shadow",
+          live: stream(null, 0),
+          backtest: stream(0.0191, 71),
+          paired: {
+            live: { sample_size: 0, restrictions: 0, brier: null, baseline_brier: null },
+            backtest: { sample_size: 71, restrictions: 1, brier: 0.0191, baseline_brier: 0.0172 },
+          },
+        },
+      ],
+    },
+  };
+  const verbose = renderStats(report, { verbose: true });
+  assert.match(
+    verbose,
+    / {2}by method\n {4}bayesian-pressure-band@1 {2}answer · live brier 0\.010, sample 40 · backtest brier 0\.017, sample 84\n {4}reported-capacity@1 {7}shadow · live not available yet · backtest brier 0\.019, sample 71\n {4}\s+same outcomes as the baseline · live not available yet · backtest brier 0\.019 against 0\.017, sample 71, 1 restricted/u,
+  );
+  // The default report is unchanged by a second method.
+  assert.equal(renderStats(report, { verbose: false }), renderStats(base, { verbose: false }));
+  assert.doesNotMatch(verbose, /accuracy/iu);
 });

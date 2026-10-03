@@ -25,6 +25,94 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.5.0
+
+- Date: 2026-10-03
+- Commit: `release/1.5.0` at `04a697d`, after migration 018 was redesigned around the per-source
+  `stated_band_projection` frontier and `betaQuantile` computed its normalizer once per quantile
+- Machine: Linux 6.12.111+deb13-rt-amd64, 12 cores
+- Toolchain: Node `24.18.1`, npm `11.16.0` for the packaging scripts
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`; the Codex rows from a synthetic
+  history of 1,000 rollouts in the 0.159.3 shape, 100 turns each, one stated rate-limit snapshot per
+  turn with two windows (200,000 reported capacity rows)
+- Baseline: every `1.4.0` figure below was measured the same hour, on the same machine, against the
+  published `@snack-ai/cli@1.4.0`, interleaved sample by sample with this tree on copies of the same
+  database, so the column compares versions rather than days
+
+| Budget | PLAN.md | Measured | `1.4.0`, same session |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **209-227 ms** (p50 197-201 ms), four batches | 210-221 ms (p50 197-201 ms) |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **205-225 ms** (p50 196-206 ms), five batches | 208-252 ms (p50 198-208 ms) |
+| `status --no-sync` p95, Codex, 200,000 reported capacity rows | under 250 ms | **227-232 ms** best of two batches (p50 218-225 ms); single batches up to 268 ms | 221-241 ms (p50 214-219 ms) |
+| `status --no-sync --sequence 100` p95, Codex | under 250 ms | **222-237 ms** best of two batches (p50 217-224 ms); single batches up to 267 ms | 217-237 ms (p50 213-219 ms) |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **442-447 ms** (categorize 46-47 ms + write 394-401 ms) | 436-447 ms |
+| Incremental synchronisation, Codex, one turn appended, spawned | under 2 s | **1.12 s** p50 of 7 (1.05-1.17 s) | 0.99 s (0.93-1.15 s) |
+| No-op synchronisation, Codex, two capacity periods, in process | under 2 s | **762-829 ms** p50 | 737-781 ms |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **15.2-15.9 s** | 15.0-15.1 s |
+| Initial backfill, 100,000 prompts, Claude Code, spawned | under 30 s | **13.6 s** | 13.5 s |
+| Initial backfill, 100,000 prompts, Codex CLI, spawned | under 30 s | **18.3 s** | 16.8-17.0 s |
+| Steady-state memory | under 150 MB | **passes the heap cap for all three clients** | — |
+
+**What was asserted and what was only reported.** `performance.test.js` ran with `CI` unset and
+passed 11 of 11. Its two `status` assertions did not assert: the load average read 11.4 over 12
+cores, over the half-the-cores line, and this real-time kernel's load average stayed between 9.4
+and 11.9 for the whole session, even with `vmstat` reading 95-98% idle. The OpenCode backfill's
+wall-clock assertion is behind the same guard and was skipped too. The recategorization budget, the
+Claude Code backfill and every heap cap did assert, and passed. Every other figure in the table is
+reported, not asserted. The p95 figures are spawned `status --no-sync --json` runs, interleaved with
+`1.4.0`, 20 samples per batch, each batch started at 95-98% idle; the box read 76-87% idle during
+the batches themselves, the measured process included.
+
+**The tail belongs to the machine, not to the version.** At 20 samples, p95 is the second-slowest
+sample, and three single Codex batches of this tree read 264, 268 and 369 ms. Pooled over 100
+interleaved samples each, this tree read p95 260 ms against `1.4.0`'s 263 on Codex, 267 against 280
+with `--sequence 100`, 242 against 252 on the plain history and 237 against 258 on two clients, at
+74-80% idle. The difference a wall clock can attribute to 1.5.0 is the median, 3-7 ms on Codex
+histories (the shadow forecast and its row in `prediction_reported_capacity`) and none on
+histories without a Codex installation. The `1.4.0` section's 195-211 ms figures came from a quieter
+day; against the same machine today, `1.4.0` reads 210-241 ms.
+
+**`stats` got faster.** `stats --json` on the Codex history took 3.31-3.41 s p50 over two
+interleaved rounds, against 5.01 s for `1.4.0`, even though it now backtests the shadow and the
+baseline over the same outcomes: `betaQuantile` computes its normalizer once per quantile.
+
+**The answer did not move.** With the clock frozen by a `Date` preload, `status` and `status
+--sequence 100` printed byte-identical human output under both versions on the Codex, plain and
+two-client histories, and identical `--json` documents once `data.shadow` was removed; `shadow`
+appears only on the Codex source, `computed: true`.
+
+### What migrations 017 and 018 cost the person upgrading
+
+100,000-prompt histories backfilled by the published `@snack-ai/cli@1.4.0` (schema 016), then
+opened by this tree, three times for Codex and twice for Claude Code:
+
+| | Codex CLI, 200,000 reported capacity rows | Claude Code |
+| --- | --- | --- |
+| First `sync` after the upgrade, spawned, backup included | **2.67-2.74 s** | **1.58-1.72 s** |
+| The `sync` after that | 0.96-1.41 s | 1.14-1.22 s |
+| Database file, before | 156.6 MB | 74.0 MB |
+| Database file, after | 165.2 MB (+8.6 MB) | 74.0 MB (+12 KB) |
+| Where it went (`dbstat`) | `prompt_execution` +8,597,504 B; `stated_band_projection`, `prediction_reported_capacity` and `sqlite_schema` one page each | one page each for `stated_band_projection`, `prediction_reported_capacity` and `sqlite_schema` |
+| Rows in every pre-existing table, before and after | identical (`schema_migration` 16 → 18) | identical (`schema_migration` 16 → 18) |
+| `integrity_check` / `foreign_key_check` | ok / no violations | ok / no violations |
+
+017 creates `prediction_reported_capacity` and its two immutability triggers, empty. 018 adds
+`stated_band` and `stated_band_policy_version` to `prompt_execution` and the one-row-per-source
+`stated_band_projection` frontier. On a source no Codex installation feeds, both columns stay null
+and the upgrade costs three pages and the pre-migration backup. On a Codex source the first sync
+computes the band for every prompt in the active period: that is the 8.6 MB, the same a fresh
+`1.5.0` backfill of the same history writes (165.3 MB), and the second and a half the first sync
+spends beyond `1.4.0`'s 1.0 s no-op. `upgrade:smoke` applies 017 and 018 over a database each
+published floor from `0.6.0` to `1.4.0` wrote, `1.4.0` included.
+
+**What came after `04a697d`.** The review fixes committed after these measurements — the frontier
+cleared only if it still holds the value the restate read, the instants it is lowered to normalized,
+and the tests that pin both — touch no `status` or `stats` path: `git diff 04a697d..HEAD --
+packages/cli/src` changes only `storeObservations`' frontier mark, `restateSource` and
+`writeStatedBands`, which add to the synchronisation and backfill rows one `Date.parse` per instant
+marked and per prompt the restate walks, and one comparison in the write that clears the frontier;
+those rows were not re-measured.
+
 ## 1.4.0
 
 - Date: 2026-10-03

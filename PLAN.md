@@ -63,12 +63,13 @@ SNACK will:
 - expose human-readable and versioned JSON output;
 - learn incrementally and retain historical prediction snapshots;
 - quote a capacity figure a client states, labelled as reported and shown beside the estimate ([ADR-0007](./docs/adr/0007-quote-codex-reported-capacity.md));
+- inform a separately named, separately calibrated shadow method with the figure a client states for that same source ([ADR-0007](./docs/adr/0007-quote-codex-reported-capacity.md), amended for `1.5.0`);
 - support OpenCode, Claude Code, and Codex CLI.
 
 SNACK will not:
 
 - infer, display, or imply a provider's real capacity from observation;
-- display a percentage of unknown capacity, or let a reported figure enter usage pressure, an estimate, or another source's assessment;
+- display a percentage of unknown capacity, or let a reported figure enter usage pressure, the estimate SNACK answers with, or another source's assessment;
 - derive a count of prompts from a probability — the count is always supplied by the user;
 - treat a timeout, cancellation, network fault, or client error as a restriction;
 - store prompt text, response text, project paths, titles, or credentials;
@@ -198,8 +199,9 @@ budgets, and the risks.
 | `1.2.1` | A SQLite driver that fails to load is named; `update` replaces the running copy; npm 12 installs build the driver | shipped |
 | `1.3.0` | Codex CLI adapter | shipped |
 | `1.4.0` | `status --sequence N` | shipped |
-| `1.5.0` | `reported_capacity_v1` prediction method | planned |
-| `1.6.0` | `snack dash` — superseding `status --watch` | planned |
+| `1.5.0` | `reported_capacity_v1` prediction method, shipped as the shadow method `reported-capacity@1` | shipped |
+| `1.5.1` | alternative recency half-lives as shadow methods | planned |
+| `1.6.0` | `snack dash` — superseding `status --watch`; the sequence answer's ceiling, documented | planned |
 
 `snack dash` was specified as part of `1.2.0` and moved to the end of the line rather than pushing
 the three releases behind it down a version each. Renumbering commitments the roadmap has already
@@ -284,7 +286,7 @@ Explicitly not on this roadmap. Each needs its own design and its own release de
 
 - **Sparse restrictions:** evidence remains low and intervals wide. SNACK must not hide this.
 - **Opaque provider behavior:** plan profiles may become stale or wrong. They remain weak, versioned priors.
-- **A reported figure trusted too far:** Codex states its own usage, and the temptation is to let that number stand in for capacity generally. It is quoted for one source, never generalized, and never enters usage pressure.
+- **A reported figure trusted too far:** Codex states its own usage, and the temptation is to let that number stand in for capacity generally. It is quoted for one source, never generalized, and never enters usage pressure. From `1.5` it informs one named method for the source that stated it, run in shadow — recorded and calibrated beside the baseline, never the answer, its evidence capped at `low` — and it answers only in a later minor whose calibration meets the promotion rule in the [`1.5.0` spec](./docs/history/specs/reported-capacity-method/spec.md) (§13.2).
 - **Client schema drift:** fingerprints can break between releases. Latest + previous support and fail-closed behavior contain the risk.
 - **A third client widening the privacy surface:** Codex rollout files carry prompt text and project paths in the same records as the metadata. Allowlist reading and canary assertions are the containment, and they are release gates.
 - **Calibration corrupted by presentation:** a long-running live screen writing snapshots per repaint would silently destroy the calibration stream. See [ADR-0008](./docs/adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md).

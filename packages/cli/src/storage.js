@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 
 import { ExitCode, SnackError } from "./errors.js";
 import { acquirePrivateLock } from "./file-lock.js";
+import { REPORTED_CAPACITY_POLICY } from "./reported-capacity.js";
 
 export const migrationDirectory = fileURLToPath(new URL("../migrations", import.meta.url));
 
@@ -496,6 +497,23 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         bindings !== null &&
         "count" in bindings &&
         Number(bindings.count) > 1;
+      // The earliest instant this batch can have moved a stated band from: the start of a prompt
+      // stored, revised or attributed, or the instant of a statement stored. It is written below,
+      // in this transaction, so the projection's frontier commits with the change that made it.
+      //
+      // The frontier is compared as text, so every instant is normalized to the canonical UTC
+      // spelling first: the Claude Code backfill stores timestamps as the client wrote them, and
+      // the spool accepts an offset and any fraction. One that does not parse fails closed, to the
+      // whole active period.
+      /** @type {string | null} */
+      let staleFrom = null;
+      /** @param {unknown} instant */
+      const stale = (instant) => {
+        if (typeof instant !== "string") return;
+        const ms = Date.parse(instant);
+        const normalized = Number.isNaN(ms) ? "" : new Date(ms).toISOString();
+        if (staleFrom === null || normalized < staleFrom) staleFrom = normalized;
+      };
       for (const observation of batch.observations) {
         if (
           tombstones.length > 0 &&
@@ -588,7 +606,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const existing = database
           .prepare(
             `SELECT id, source_revision, observation_hash, completion, revision_domain,
-                    installation_id
+                    installation_id, started_at
               FROM prompt_execution
              WHERE source_alias = ? AND source_prompt_id = ?`,
           )
@@ -681,12 +699,14 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           // staying unknown forever. Only the gap is filled: an attribution already recorded is
           // never rewritten, so re-reading a history cannot move a prompt from one client to
           // another.
-          database
+          const attributed = database
             .prepare(
               `UPDATE prompt_execution SET installation_id = ?
                 WHERE id = ? AND installation_id IS NULL`,
             )
             .run(source.installation_id, existing.id);
+          // Whose prompt it was decides whether a later statement is superseded by it.
+          if (attributed.changes > 0) stale(storedRow?.started_at);
         }
         const existingRevisionDomain =
           typeof existing === "object" &&
@@ -900,6 +920,9 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               timestamp,
               promptId,
             );
+          // A revision can move the prompt's start: both instants bound what can have moved.
+          stale(storedRow?.started_at);
+          stale(observation.started_at);
           database
             .prepare("DELETE FROM prompt_usage_slice WHERE prompt_execution_id = ?")
             .run(promptId);
@@ -961,6 +984,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             );
           promptId = Number(inserted.lastInsertRowid);
           counts.inserted += 1;
+          stale(observation.started_at);
         }
 
         const insertSlice = database.prepare(
@@ -1024,8 +1048,10 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           tombstones,
           timestamp,
           options.providerMappingCounts,
+          stale,
         );
       }
+      if (staleFrom !== null) markStatedBandsStale(database, source.alias, staleFrom);
 
       // Records the backfill adapter could not parse are ingestion issues of the backfill path,
       // the same way an invalid spool event is one of the spool path. Counting them is what keeps
@@ -1129,6 +1155,7 @@ const REPORTED_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
  * @param {{from_at: string | null, until_at: string | null}[]} tombstones
  * @param {string} timestamp
  * @param {Map<string, number>} [providerMappingCounts]
+ * @param {(instant: string) => void} [stale] told the instant of every statement stored
  * @returns {ReportedCapacityCounts}
  */
 function storeReportedCapacity(
@@ -1138,6 +1165,7 @@ function storeReportedCapacity(
   tombstones,
   timestamp,
   providerMappingCounts,
+  stale,
 ) {
   const counts = { inserted: 0, unchanged: 0, rejected: 0, tombstoned: 0, pending_mapping: 0 };
   const insert = database.prepare(
@@ -1209,6 +1237,7 @@ function storeReportedCapacity(
         newestRow,
       );
       counts.inserted += 1;
+      stale?.(snapshot.observed_at);
     } else counts.unchanged += 1;
   }
   return counts;
@@ -1541,6 +1570,7 @@ export function readSourceSummary(databaseFile, sourceAlias) {
             WHERE source_alias = ? AND ended_at IS NULL) AS active_period_started_at,
            (SELECT id FROM capacity_period
             WHERE source_alias = ? AND ended_at IS NULL) AS active_period_id,
+           (SELECT MIN(id) FROM capacity_period WHERE source_alias = ?) AS first_period_id,
            COUNT(prompt_execution.id) AS prompts,
            COALESCE(SUM(prompt_source_outcome.outcome = 'success'), 0) AS successes,
            COALESCE(SUM(prompt_source_outcome.outcome = 'restricted'), 0) AS restrictions,
@@ -1553,7 +1583,7 @@ export function readSourceSummary(databaseFile, sourceAlias) {
            ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
          WHERE prompt_execution.source_alias = ?`,
       )
-      .get(sourceAlias, sourceAlias, sourceAlias);
+      .get(sourceAlias, sourceAlias, sourceAlias, sourceAlias);
     if (
       typeof row !== "object" ||
       row === null ||
@@ -1576,6 +1606,15 @@ export function readSourceSummary(databaseFile, sourceAlias) {
       active_period_started_at:
         typeof row.active_period_started_at === "string" ? row.active_period_started_at : null,
       active_period_id: row.active_period_id === null ? null : Number(row.active_period_id),
+      // Where the active period's history begins. The first period a source ever had absorbs
+      // everything before its own start -- a backfill files earlier prompts into it -- so it has no
+      // floor; a later one begins at its start, as `storeObservations` files prompts.
+      active_period_floor:
+        typeof row.active_period_started_at === "string" &&
+        "first_period_id" in row &&
+        row.first_period_id !== row.active_period_id
+          ? row.active_period_started_at
+          : null,
     };
   } finally {
     database.close();
@@ -1589,6 +1628,12 @@ export function readSourceSummary(databaseFile, sourceAlias) {
  * @property {string} started_at
  * @property {"success" | "restricted" | "excluded"} outcome
  * @property {string | null} size_category Null while the prompt has not been categorized.
+ * @property {string | null} installation_id Which client produced the prompt, where that is known.
+ *   The baseline never reads it; the reported-capacity shadow method reads it to tell another
+ *   client's prompt from the stating client's own.
+ * @property {"clear" | "near" | "full" | null} stated_band The stated band the prompt began in, as
+ *   last projected; null where no window bound, or where the band was never computed. Only the
+ *   reported-capacity shadow method reads it.
  */
 
 /**
@@ -1696,19 +1741,26 @@ export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
            prompt_execution.capacity_period_id AS capacity_period_id,
            prompt_execution.started_at AS started_at,
            prompt_source_outcome.outcome AS outcome,
-           prompt_execution.size_category AS size_category
+           prompt_execution.size_category AS size_category,
+           prompt_execution.installation_id AS installation_id,
+           CASE WHEN prompt_execution.stated_band_policy_version = @policy
+                THEN prompt_execution.stated_band END AS stated_band
          FROM prompt_execution
          JOIN capacity_period
            ON capacity_period.id = prompt_execution.capacity_period_id
           AND capacity_period.ended_at IS NULL
          JOIN prompt_source_outcome
            ON prompt_source_outcome.prompt_execution_id = prompt_execution.id
-         WHERE prompt_execution.source_alias = ?
+         WHERE prompt_execution.source_alias = @source
          ORDER BY prompt_execution.started_at ${options.limit === undefined ? "ASC" : "DESC"},
                   prompt_execution.id ${options.limit === undefined ? "ASC" : "DESC"}
-         ${options.limit === undefined ? "" : "LIMIT ?"}`,
+         ${options.limit === undefined ? "" : "LIMIT @limit"}`,
       )
-      .all(...(options.limit === undefined ? [sourceAlias] : [sourceAlias, options.limit]));
+      .all({
+        source: sourceAlias,
+        policy: REPORTED_CAPACITY_POLICY.version,
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      });
     if (options.limit !== undefined) rows.reverse();
     return rows.map((row) => {
       if (
@@ -1728,8 +1780,257 @@ export function readOutcomeRows(databaseFile, sourceAlias, options = {}) {
         started_at: String(row.started_at),
         outcome: /** @type {"success" | "restricted" | "excluded"} */ (String(row.outcome)),
         size_category: row.size_category === null ? null : String(row.size_category),
+        installation_id:
+          "installation_id" in row && row.installation_id !== null
+            ? String(row.installation_id)
+            : null,
+        stated_band:
+          "stated_band" in row && typeof row.stated_band === "string"
+            ? /** @type {"clear" | "near" | "full"} */ (row.stated_band)
+            : null,
       };
     });
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Every statement a Codex installation made for one capacity source since an instant, oldest
+ * first: the stated timeline the reported-capacity shadow method replays its history against.
+ *
+ * One streamed pass over `reported_capacity_observation_source_observed_idx`, folding the rows of
+ * one snapshot -- one per stated window -- into one statement. Rows of one statement share their
+ * instant, so a statement is complete when the instant moves on.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{from: string}} options
+ * @returns {import("./reported-capacity.js").Statement[]}
+ */
+export function readStatedTimeline(databaseFile, sourceAlias, options) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const query = database.prepare(
+      `SELECT reported.installation_id, reported.observation_key, reported.observed_at,
+              reported.limit_id, reported.window_minutes, reported.used_percent, reported.resets_at
+         FROM reported_capacity_observation AS reported
+         JOIN client_installation
+           ON client_installation.id = reported.installation_id
+          AND client_installation.client_kind = 'codex'
+        WHERE reported.source_alias = ? AND reported.observed_at >= ?
+        ORDER BY reported.observed_at, reported.id`,
+    );
+    // Raw rows: tens of thousands of them on a busy history, and an object per row is most of
+    // what reading them costs.
+    const rows =
+      /** @type {[string, string, string, string | null, number, number, string | null][]} */ (
+        query.raw().all(sourceAlias, options.from)
+      );
+    /** @type {import("./reported-capacity.js").Statement[]} */
+    const timeline = [];
+    /** @type {Map<string, import("./reported-capacity.js").Statement>} */
+    let atInstant = new Map();
+    let instant = "";
+    for (const [installationId, key, observedAt, limitId, minutes, usedPercent, resetsAt] of rows) {
+      if (observedAt !== instant) {
+        for (const statement of atInstant.values()) timeline.push(statement);
+        atInstant = new Map();
+        instant = observedAt;
+      }
+      const group = `${installationId}\u0000${key}`;
+      let statement = atInstant.get(group);
+      if (statement === undefined) {
+        statement = {
+          installation_id: installationId,
+          limit_id: limitId,
+          observed_at: observedAt,
+          windows: [],
+        };
+        atInstant.set(group, statement);
+      }
+      statement.windows.push({
+        window_minutes: minutes,
+        used_percent: usedPercent,
+        resets_at: resetsAt,
+      });
+    }
+    for (const statement of atInstant.values()) timeline.push(statement);
+    return timeline;
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * The prompts of a source's active capacity period, oldest first, with the stated band each one
+ * was last projected into: what `writeStatedBands` recomputes from.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{from?: string}} [options] only prompts that started at or after `from`
+ * @returns {{prompt_execution_id: number, started_at: string, installation_id: string | null, stated_band: string | null, stated_band_policy_version: string | null}[]}
+ */
+export function readStatedBandRows(databaseFile, sourceAlias, options = {}) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    return /** @type {ReturnType<typeof readStatedBandRows>} */ (
+      database
+        .prepare(
+          `SELECT prompt_execution.id AS prompt_execution_id, prompt_execution.started_at,
+                  prompt_execution.installation_id, prompt_execution.stated_band,
+                  prompt_execution.stated_band_policy_version
+             FROM prompt_execution
+             JOIN capacity_period
+               ON capacity_period.id = prompt_execution.capacity_period_id
+              AND capacity_period.ended_at IS NULL
+            WHERE prompt_execution.source_alias = ? AND prompt_execution.started_at >= ?
+            ORDER BY prompt_execution.started_at, prompt_execution.id`,
+        )
+        .all(sourceAlias, options.from ?? "")
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Lower a source's stated-band frontier to `from`, inside the caller's transaction: the ingestion
+ * that stored what moved a band, or the purge that removed it. A source never projected keeps no
+ * policy version, which already means "recompute everything", so its row records only the instant.
+ *
+ * @param {Database.Database} database
+ * @param {string} sourceAlias
+ * @param {string} from an instant, or the empty string for the whole active period
+ */
+function markStatedBandsStale(database, sourceAlias, from) {
+  database
+    .prepare(
+      `INSERT INTO stated_band_projection (source_alias, policy_version, stale_from)
+       VALUES (?, NULL, ?)
+       ON CONFLICT (source_alias) DO UPDATE
+          SET stale_from = excluded.stale_from
+        WHERE stated_band_projection.stale_from IS NULL
+           OR excluded.stale_from < stated_band_projection.stale_from`,
+    )
+    .run(sourceAlias, from);
+}
+
+/**
+ * The earliest instant from which a source's stated-band projection may be out of date, or null
+ * when it is current: one primary-key read of `stated_band_projection` (migration 018).
+ *
+ * The empty string -- recompute the whole active period -- when the source was never projected,
+ * or was projected under a policy version other than `policyVersion`: an upgraded database and a
+ * policy that moved in code are caught up by the same rule, with nothing to reset by hand.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {string} policyVersion the policy the caller computes under
+ * @returns {string | null}
+ */
+export function readStatedBandFrontier(databaseFile, sourceAlias, policyVersion) {
+  return readStatedBandProjection(databaseFile, sourceAlias, policyVersion).frontier;
+}
+
+/**
+ * The frontier `readStatedBandFrontier` returns, beside the stored `stale_from` it was derived
+ * from -- null when there is no row -- which `writeStatedBands` clears only if it still holds.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {string} policyVersion the policy the caller computes under
+ * @returns {{frontier: string | null, stale_from: string | null}}
+ */
+export function readStatedBandProjection(databaseFile, sourceAlias, policyVersion) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const row =
+      /** @type {{policy_version: string | null, stale_from: string | null} | undefined} */ (
+        database
+          .prepare(
+            `SELECT policy_version, stale_from FROM stated_band_projection WHERE source_alias = ?`,
+          )
+          .get(sourceAlias)
+      );
+    if (row === undefined) return { frontier: "", stale_from: null };
+    return {
+      frontier: row.policy_version !== policyVersion ? "" : row.stale_from,
+      stale_from: row.stale_from,
+    };
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Persist recomputed stated bands and mark the source's projection current under `policyVersion`,
+ * in one transaction, so a projection is never recorded as current without the bands that make it
+ * so. Only rows whose band or policy moved are handed in.
+ *
+ * The frontier is cleared only if it is still the `stale_from` the restate read. The restate runs
+ * under the storage operation lock, but a lock judged stale can be taken over, and an ingestion
+ * that commits in between lowers a frontier this write must not clear: compare and clear, so its
+ * mark survives for the next restate to find.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} rows
+ * @param {string} policyVersion
+ * @param {string | null} read the `stale_from` read when the restate began (`readStatedBandProjection`)
+ * @returns {number} rows written
+ */
+export function writeStatedBands(databaseFile, sourceAlias, rows, policyVersion, read) {
+  const database = new Database(databaseFile, { fileMustExist: true });
+  try {
+    const update = database.prepare(
+      `UPDATE prompt_execution
+          SET stated_band = @stated_band, stated_band_policy_version = @stated_band_policy_version
+        WHERE id = @prompt_execution_id`,
+    );
+    const current = database.prepare(
+      `INSERT INTO stated_band_projection (source_alias, policy_version, stale_from)
+       VALUES (@source, @policy, NULL)
+       ON CONFLICT (source_alias) DO UPDATE
+          SET policy_version = excluded.policy_version,
+              stale_from = CASE WHEN stale_from IS @read THEN NULL ELSE stale_from END`,
+    );
+    return database.transaction((/** @type {typeof rows} */ batch) => {
+      const written = batch.reduce((total, row) => total + update.run(row).changes, 0);
+      current.run({ source: sourceAlias, policy: policyVersion, read });
+      return written;
+    })(rows);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Whether a prompt from an installation other than `installationId` started on this capacity
+ * source after `since`. A prompt whose client is unknown is not counted: nobody knows it was
+ * another client's.
+ *
+ * Reads the source's prompts through `prompt_execution_source_started_idx` from `since` onward
+ * only, so its cost is the prompts sent since a statement at most six hours old.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @param {string} installationId
+ * @param {string} since
+ * @returns {boolean}
+ */
+export function hasForeignPromptSince(databaseFile, sourceAlias, installationId, since) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const found = database
+      .prepare(
+        `SELECT 1 FROM prompt_execution
+          WHERE source_alias = ? AND started_at > ?
+            AND installation_id IS NOT NULL AND installation_id <> ?
+          LIMIT 1`,
+      )
+      .get(sourceAlias, since, installationId);
+    return found !== undefined;
   } finally {
     database.close();
   }
@@ -2274,16 +2575,69 @@ async function pathExists(path) {
  */
 
 /**
- * Store one immutable prediction attempt, and the sequence answer the same invocation gave when
- * one was asked for -- in one transaction, so an attempt never exists without the sequence the
- * user was shown beside it.
+ * The `reported-capacity` shadow forecast one `status` invocation computed beside its attempt, and
+ * the binding window it read.
+ *
+ * @typedef {object} PredictionShadowRow
+ * @property {string} method_id
+ * @property {string} method_version
+ * @property {string} model_policy_version
+ * @property {string} evidence_policy_version
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ * @property {number} coverage_target
+ * @property {string} risk_label
+ * @property {string} evidence_level
+ * @property {string} backoff_level
+ * @property {number} posterior_alpha
+ * @property {number} posterior_beta
+ * @property {string} installation_id
+ * @property {string | null} limit_id
+ * @property {number} window_minutes
+ * @property {number} used_percent
+ * @property {string | null} resets_at
+ * @property {string} stated_at
+ * @property {"clear" | "near" | "full"} band
+ * @property {string} policy_version
+ */
+
+const SHADOW_COLUMNS = [
+  "method_id",
+  "method_version",
+  "model_policy_version",
+  "evidence_policy_version",
+  "lower",
+  "point",
+  "upper",
+  "coverage_target",
+  "risk_label",
+  "evidence_level",
+  "backoff_level",
+  "posterior_alpha",
+  "posterior_beta",
+  "installation_id",
+  "limit_id",
+  "window_minutes",
+  "used_percent",
+  "resets_at",
+  "stated_at",
+  "band",
+  "policy_version",
+];
+
+/**
+ * Store one immutable prediction attempt, the sequence answer the same invocation gave when one
+ * was asked for, and the shadow forecast it computed when it computed one -- in one transaction,
+ * so an attempt never exists without what the same invocation computed beside it.
  *
  * @param {string} databaseFile
  * @param {Record<string, unknown>} attempt
  * @param {PredictionSequenceRow} [sequence]
+ * @param {PredictionShadowRow} [shadow]
  * @returns {number} attempt id
  */
-export function recordPredictionAttempt(databaseFile, attempt, sequence) {
+export function recordPredictionAttempt(databaseFile, attempt, sequence, shadow) {
   const database = new Database(databaseFile, { fileMustExist: true });
   try {
     database.pragma("foreign_keys = ON");
@@ -2336,6 +2690,15 @@ export function recordPredictionAttempt(databaseFile, attempt, sequence) {
                 @width_policy_version, @posterior_alpha, @posterior_beta)`,
           )
           .run({ ...sequence, prediction_attempt_id: id });
+      }
+      if (shadow !== undefined) {
+        database
+          .prepare(
+            `INSERT INTO prediction_reported_capacity
+               (prediction_attempt_id, ${SHADOW_COLUMNS.join(", ")})
+             VALUES (@prediction_attempt_id, ${SHADOW_COLUMNS.map((column) => `@${column}`).join(", ")})`,
+          )
+          .run({ ...shadow, prediction_attempt_id: id });
       }
       return id;
     });
@@ -2524,6 +2887,13 @@ export function linkPrimaryEvaluations(databaseFile, sourceAlias, policyVersion)
  * @property {string} model_policy_version
  * @property {string | null} installation_id Which client produced the prompt the forecast was
  *   scored against, where that is known.
+ * @property {string} method_id The method that answered: the attempt's own.
+ * @property {string} method_version
+ * @property {string | null} shadow_method_id The method computed in shadow beside it, if any.
+ * @property {string | null} shadow_method_version
+ * @property {number | null} shadow_lower
+ * @property {number | null} shadow_point
+ * @property {number | null} shadow_upper
  */
 
 /**
@@ -2546,10 +2916,19 @@ export function readCalibrationPairs(databaseFile, sourceAlias) {
            prediction_attempt.evidence_level AS evidence_level,
            prediction_attempt.model_policy_version AS model_policy_version,
            prompt_execution.installation_id AS installation_id,
-           prompt_source_outcome.outcome AS outcome
+           prompt_source_outcome.outcome AS outcome,
+           prediction_attempt.method_id AS method_id,
+           prediction_attempt.method_version AS method_version,
+           shadow.method_id AS shadow_method_id,
+           shadow.method_version AS shadow_method_version,
+           shadow.lower AS shadow_lower,
+           shadow.point AS shadow_point,
+           shadow.upper AS shadow_upper
          FROM prediction_evaluation
          JOIN prediction_attempt
            ON prediction_attempt.id = prediction_evaluation.prediction_attempt_id
+         LEFT JOIN prediction_reported_capacity AS shadow
+           ON shadow.prediction_attempt_id = prediction_attempt.id
          JOIN prompt_execution
            ON prompt_execution.id = prediction_evaluation.prompt_execution_id
          JOIN prompt_source_outcome
@@ -2667,14 +3046,17 @@ function purgeScopeLocked(paths, scope, options) {
               SELECT id FROM prediction_attempt WHERE ${attemptFilter})`,
         )
         .run(parameters);
-      // A sequence answer rides with its attempt: it goes with it, and is counted with it.
-      database
-        .prepare(
-          `DELETE FROM prediction_sequence
-            WHERE prediction_attempt_id IN (
-              SELECT id FROM prediction_attempt WHERE ${attemptFilter})`,
-        )
-        .run(parameters);
+      // A sequence answer and a shadow forecast ride with their attempt: they go with it, and are
+      // counted with it.
+      for (const table of ["prediction_sequence", "prediction_reported_capacity"]) {
+        database
+          .prepare(
+            `DELETE FROM ${table}
+              WHERE prediction_attempt_id IN (
+                SELECT id FROM prediction_attempt WHERE ${attemptFilter})`,
+          )
+          .run(parameters);
+      }
       const deletedPredictions = database
         .prepare(`DELETE FROM prediction_attempt WHERE ${attemptFilter}`)
         .run(parameters).changes;
@@ -2687,6 +3069,16 @@ function purgeScopeLocked(paths, scope, options) {
         .prepare(`DELETE FROM reported_capacity_observation WHERE ${reportedFilter}`)
         .run(parameters).changes;
       if (deletedReported > 0) recomputeReportedLatest(database, parameters.source);
+      // A purged prompt or statement no longer binds the prompts after it. The whole active period
+      // of every source in scope is recomputed, and the marker commits with the purge.
+      if (deletedPrompts > 0 || deletedReported > 0) {
+        database
+          .prepare(
+            `UPDATE stated_band_projection SET stale_from = ''
+              WHERE @source IS NULL OR source_alias = @source`,
+          )
+          .run({ source: parameters.source });
+      }
 
       if (
         deletedPrompts !== counted.prompts ||

@@ -1,0 +1,27 @@
+{
+  "schema_version": "2",
+  "command": "setup codex",
+  "generated_at": "2026-01-02T03:04:05.000Z",
+  "status": "ok",
+  "data": {
+    "source": {
+      "alias": "codex",
+      "installation_id": "3fa3d0fc-71ed-412d-bfee-a3822f82d6dd",
+      "adapter": "codex",
+      "provider": "openai",
+      "profile": "default",
+      "plan": "plus",
+      "plan_profile": "generic"
+    },
+    "fingerprint": {
+      "family": "cx-rollout-usagerecord-v1",
+      "supported": true
+    },
+    "dry_run": {
+      "observations": 1,
+      "applied": true
+    }
+  },
+  "warnings": [],
+  "errors": []
+}

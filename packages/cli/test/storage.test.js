@@ -530,22 +530,22 @@ test("a database still at an older schema is refused rather than half-read", asy
     // Actionable, or it is no better than the crash it replaces: the message names the command
     // that fixes it.
     assert.match(document.errors[0].message, /snack sync/u);
-    assert.match(document.errors[0].message, /: 7 migrations have not been applied\./u);
+    assert.match(document.errors[0].message, /: 9 migrations have not been applied\./u);
   }
   // Refusing means refusing: nothing was read, so nothing was written either.
   assert.deepEqual(tableCounts(fixture.paths.databaseFile), before);
 });
 
 test("one pending migration is counted in the singular", async () => {
-  // Every 1.3.0 installation meets this on its first read-only command after upgrading to 1.4.0:
-  // one migration, `016`, is pending.
+  // A database one migration behind -- the newest one, `018`, pending -- the case an installation
+  // meets on its first read-only command after an upgrade that adds a single migration.
   const fixture = await makeRunFixture("snack-unmigrated-one-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
   const migrations = await readdir(new URL("../migrations/", import.meta.url));
   const newest = Math.max(...migrations.map((name) => Number.parseInt(name, 10)));
   await initializeDatabase(fixture.paths, {
     migrationsDir: await copyMigrationsThrough(newest - 1),
-    applicationVersion: "1.3.0",
+    applicationVersion: "1.4.0",
     now,
   });
   await writeZeroSixConfig(fixture);
@@ -602,7 +602,7 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // follows is measuring the upgrade rather than an upgrade plus an ingestion.
   const upgrade = await document("config", "set", "analysis.horizons", '["PT1H"]');
   assert.equal(upgrade.exitCode, 0, JSON.stringify(upgrade.document.errors));
-  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12, 13, 14, 15, 16]);
+  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12, 13, 14, 15, 16, 17, 18]);
   assert.equal(upgrade.document.data.storage.backup_created, true);
 
   const status = await document("status", "--no-sync");
@@ -628,15 +628,19 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // two prediction tables grow by exactly that one -- growing is the command working, and any other
   // table moving at all would be the upgrade losing or inventing history.
   const after = tableCounts(fixture.paths.databaseFile);
-  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 7);
-  // The tables the upgrade adds arrive empty: a 0.6 install stated no figures to quote, and the
-  // `status` above asked for no sequence.
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 9);
+  // The tables the upgrade adds arrive empty: a 0.6 install stated no figures to quote, the
+  // `status` above asked for no sequence, and no Codex installation feeds it, so no shadow ran.
   assert.equal(after.reported_capacity_observation, 0);
   delete after.reported_capacity_observation;
   assert.equal(after.reported_capacity_latest, 0);
   delete after.reported_capacity_latest;
   assert.equal(after.prediction_sequence, 0);
   delete after.prediction_sequence;
+  assert.equal(after.prediction_reported_capacity, 0);
+  delete after.prediction_reported_capacity;
+  assert.equal(after.stated_band_projection, 0);
+  delete after.stated_band_projection;
   assert.equal(after.prediction_attempt, (before.prediction_attempt ?? 0) + 1);
   assert.equal(after.prediction_delivery, (before.prediction_delivery ?? 0) + 1);
   const unchanged = (/** @type {Record<string, number>} */ counts) => ({
@@ -1208,7 +1212,7 @@ test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client
 
   const upgrade = await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
 
-  assert.deepEqual(upgrade.applied, [14, 15, 16]);
+  assert.deepEqual(upgrade.applied, [14, 15, 16, 17, 18]);
   assert.equal(upgrade.backupCreated, true);
   const after = tableContents(paths.databaseFile);
   // The new tables arrive empty; every other table holds exactly the bytes it held.
@@ -1218,6 +1222,18 @@ test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client
   delete after.reported_capacity_latest;
   assert.deepEqual(after.prediction_sequence, []);
   delete after.prediction_sequence;
+  assert.deepEqual(after.prediction_reported_capacity, []);
+  delete after.prediction_reported_capacity;
+  // No source has been projected yet: the first synchronization recomputes each one whole.
+  assert.deepEqual(after.stated_band_projection, []);
+  delete after.stated_band_projection;
+  // 018 adds the stated-band projection to every prompt, empty until a synchronization computes
+  // it; every other byte of every prompt is the one 1.2 wrote.
+  after.prompt_execution = (after.prompt_execution ?? []).map((row) => {
+    const { stated_band: band, stated_band_policy_version: version, ...rest } = JSON.parse(row);
+    assert.deepEqual([band, version], [null, null]);
+    return JSON.stringify(rest);
+  });
   assert.deepEqual(after, before);
   // No stash survives the migration.
   assert.equal(
@@ -1226,10 +1242,19 @@ test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client
   );
   // The rebuilt tables differ from their 1.2 definition in the widened constraint and nothing else,
   // and the table the migration only borrowed a column of is not redefined at all.
+  // `prompt_execution` also gains 018's two projection columns, appended in place by ADD COLUMN.
   for (const [table, sql] of Object.entries(ddlBefore)) {
     assert.equal(
       tableSql(paths.databaseFile, table),
-      sql.replace("IN ('opencode', 'claude')", "IN ('opencode', 'claude', 'codex')"),
+      sql
+        .replace("IN ('opencode', 'claude')", "IN ('opencode', 'claude', 'codex')")
+        .replace(
+          "  installation_id TEXT REFERENCES client_installation(id),\n",
+          table === "prompt_execution"
+            ? "  installation_id TEXT REFERENCES client_installation(id), stated_band TEXT\n" +
+                "  CHECK (stated_band IS NULL OR stated_band IN ('clear', 'near', 'full')), stated_band_policy_version TEXT,\n"
+            : "  installation_id TEXT REFERENCES client_installation(id),\n",
+        ),
       table,
     );
   }
@@ -1300,8 +1325,8 @@ test("after 1.3 a Codex installation can be bound, and a client SNACK does not s
 test("each published schema level upgrades straight to the newest without losing a row", async () => {
   // An install can skip releases. Every floor the upgrade smoke covers has to reach the newest
   // schema in one step, not only from the release immediately before it. 15 is where 1.3.0 left a
-  // database, and 016 is the 1.4.0 leg.
-  for (const floor of [9, 11, 12, 13, 15]) {
+  // database, 16 is where 1.4.0 left one, and 017 and 018 are the 1.5.0 leg.
+  for (const floor of [9, 11, 12, 13, 15, 16]) {
     const { paths } = await makeStorage();
     await initializeDatabase(paths, {
       migrationsDir: await copyMigrationsThrough(floor),
@@ -1311,9 +1336,9 @@ test("each published schema level upgrades straight to the newest without losing
     seedZeroSixDatabase(paths.databaseFile);
     const before = tableCounts(paths.databaseFile);
 
-    const upgrade = await initializeDatabase(paths, { applicationVersion: "1.4.0", now });
+    const upgrade = await initializeDatabase(paths, { applicationVersion: "1.5.0", now });
 
-    assert.equal(upgrade.applied.at(-1), 16, `floor ${floor}`);
+    assert.equal(upgrade.applied.at(-1), 18, `floor ${floor}`);
     const after = tableCounts(paths.databaseFile);
     if (floor < 15) {
       assert.equal(after.reported_capacity_observation, 0, `floor ${floor}`);
@@ -1321,8 +1346,14 @@ test("each published schema level upgrades straight to the newest without losing
       assert.equal(after.reported_capacity_latest, 0, `floor ${floor}`);
       delete after.reported_capacity_latest;
     }
-    assert.equal(after.prediction_sequence, 0, `floor ${floor}`);
-    delete after.prediction_sequence;
+    if (floor < 16) {
+      assert.equal(after.prediction_sequence, 0, `floor ${floor}`);
+      delete after.prediction_sequence;
+    }
+    assert.equal(after.prediction_reported_capacity, 0, `floor ${floor}`);
+    delete after.prediction_reported_capacity;
+    assert.equal(after.stated_band_projection, 0, `floor ${floor}`);
+    delete after.stated_band_projection;
     assert.deepEqual(
       { ...after, schema_migration: 0 },
       { ...before, schema_migration: 0 },

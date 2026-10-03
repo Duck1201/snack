@@ -1,6 +1,7 @@
 import { assignPressureBands } from "./analytics.js";
 import { resolvePlanProfile } from "./plan-profile.js";
-import { assessSequence, buildForecast } from "./prediction.js";
+import { assessSequence, buildForecast, buildReportedForecast } from "./prediction.js";
+import { REPORTED_CAPACITY_POLICY, resolveStatedState } from "./reported-capacity.js";
 
 /**
  * Assemble the status document for one capacity source.
@@ -146,7 +147,8 @@ function sequenceCaveats(sequence) {
  *
  * Kept apart from `createSourceStatus` on purpose: nothing here reaches the forecast, the risk
  * label, the evidence level, or usage pressure. A figure the client states is quoted beside the
- * estimate and never folded into it (ADR-0007).
+ * estimate and never folded into it (ADR-0007). From 1.5 it informs one estimate only: the
+ * `reported-capacity` shadow, which `createShadowStatus` computes and never shows as the answer.
  *
  * @param {{installation_id: string, limit_id: string | null, plan_type: string | null, observed_at: string, windows: {window_minutes: number, used_percent: number, resets_at: string | null}[], parser_version: string}[]} rows
  *   one per installation and limit: its latest snapshot
@@ -170,6 +172,131 @@ export function describeReportedCapacity(rows, now) {
     })),
     parser_version: row.parser_version,
   }));
+}
+
+/**
+ * @typedef {object} ShadowView
+ * @property {{id: string, version: string}} method
+ * @property {boolean} computed
+ * @property {string | null} reason Why it was not computed; null when it was.
+ * @property {{installation_id: string, limit_id: string | null, window_minutes: number, resets_at: string | null, stated_at: string, band: "clear" | "near" | "full"} | null} binding
+ *   The window it read, never with the stated figure: that is quoted once, in `reported_capacity`.
+ * @property {string} policy_version
+ * @property {import("./prediction.js").Forecast["viability"]} [viability]
+ * @property {import("./prediction.js").Forecast["risk"]} [risk]
+ * @property {import("./prediction.js").Forecast["evidence"]} [evidence]
+ * @property {string} [model_policy_version]
+ * @property {import("./prediction.js").Forecast["contributors"]} [contributors]
+ */
+
+/**
+ * The `reported-capacity` shadow forecast for one capacity source a Codex installation feeds.
+ *
+ * Computed beside the baseline and never instead of it: in 1.5 the baseline is the answer for every
+ * source, and this is what the figure-informed method would have said, recorded so its calibration
+ * can be compared with the baseline's on the same prompts (ADR-0007, amended 1.5.0). Nothing here
+ * reads, and nothing it returns is written into, the report `createSourceStatus` built; the one
+ * place the two meet is `attachShadow`, which adds and never replaces.
+ *
+ * The band each earlier prompt began in comes with the outcome rows: storage keeps it as a
+ * projection recomputed after every synchronization (migration 018), so `status` replays nothing.
+ *
+ * @param {{now: Date, latest: {installation_id: string, limit_id: string | null, observed_at: string, windows: {window_minutes: number, used_percent: number, resets_at: string | null}[]}[],
+ *   periodStart: string | null, foreignPromptAfter: (installationId: string, since: string) => boolean,
+ *   outcomes: import("./prediction.js").StatedOutcomeRow[], expectedCategory: string,
+ *   prior: {strength: number, viability: number}, dataCompleteness: "complete" | "partial" | "unknown"}} input
+ * @returns {{view: ShadowView, row: import("./storage.js").PredictionShadowRow | undefined}}
+ */
+export function createShadowStatus(input) {
+  const method = { ...REPORTED_CAPACITY_POLICY.method };
+  const nowMs = input.now.getTime();
+  const state = resolveStatedState({
+    // A statement stamped after the clock -- a test's injected `now`, or a skewed client -- has not
+    // been made yet as far as this invocation knows.
+    statements: input.latest.filter((entry) => Date.parse(entry.observed_at) <= nowMs),
+    at: nowMs,
+    periodStart: input.periodStart,
+    foreignPromptAfter: input.foreignPromptAfter,
+  });
+  /** @param {string} reason @param {ShadowView["binding"]} binding */
+  const notComputed = (reason, binding) => ({
+    view: {
+      method,
+      computed: false,
+      reason,
+      binding,
+      policy_version: REPORTED_CAPACITY_POLICY.version,
+    },
+    row: undefined,
+  });
+  if (state.band === null) return notComputed(state.reason, null);
+
+  const { used_percent: usedPercent, ...binding } = state.binding;
+  const forecast = buildReportedForecast({
+    now: input.now,
+    band: state.band,
+    prior: input.prior,
+    expectedCategory: input.expectedCategory,
+    outcomes: input.outcomes,
+    dataCompleteness: input.dataCompleteness,
+  });
+  if (forecast === null) return notComputed("no_local_outcomes", binding);
+
+  return {
+    view: {
+      method,
+      computed: true,
+      reason: null,
+      binding,
+      policy_version: REPORTED_CAPACITY_POLICY.version,
+      viability: forecast.viability,
+      risk: forecast.risk,
+      evidence: forecast.evidence,
+      model_policy_version: forecast.model_policy_version,
+      contributors: forecast.contributors,
+    },
+    row: {
+      method_id: forecast.method.id,
+      method_version: forecast.method.version,
+      model_policy_version: forecast.model_policy_version,
+      evidence_policy_version: forecast.evidence.policy_version,
+      lower: forecast.viability.lower,
+      point: forecast.viability.point,
+      upper: forecast.viability.upper,
+      coverage_target: forecast.viability.coverage_target,
+      risk_label: forecast.risk.label,
+      evidence_level: forecast.evidence.level,
+      backoff_level: forecast.contributors.backoff_level,
+      posterior_alpha: forecast.contributors.evidence_window.alpha,
+      posterior_beta: forecast.contributors.evidence_window.beta,
+      installation_id: binding.installation_id,
+      limit_id: binding.limit_id,
+      window_minutes: binding.window_minutes,
+      used_percent: usedPercent,
+      resets_at: binding.resets_at,
+      stated_at: binding.stated_at,
+      band: binding.band,
+      policy_version: REPORTED_CAPACITY_POLICY.version,
+    },
+  };
+}
+
+/**
+ * Add what a Codex installation states, and the shadow it informed, to a finished report.
+ *
+ * The one place a stated figure meets the report, and it only ever adds two members. Every member
+ * `createSourceStatus` produced -- the interval, the risk, the evidence, the method, the sequence,
+ * the caveats -- is passed through untouched, so the answer is the baseline's whether or not a
+ * figure was stated (shadow mode, ADR-0007 amended 1.5.0).
+ *
+ * @template {object} T
+ * @param {T} status
+ * @param {ReturnType<typeof describeReportedCapacity>} reported
+ * @param {ShadowView} shadow
+ * @returns {T & {reported_capacity: ReturnType<typeof describeReportedCapacity>, shadow: ShadowView}}
+ */
+export function attachShadow(status, reported, shadow) {
+  return { ...status, reported_capacity: reported, shadow };
 }
 
 /** @param {import("./prediction.js").Forecast["contributors"]} contributors */

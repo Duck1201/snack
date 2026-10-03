@@ -114,6 +114,36 @@ function requirePositive(value, name) {
 export function regularizedIncompleteBeta(x, alpha, beta) {
   requirePositive(alpha, "alpha");
   requirePositive(beta, "beta");
+  return incompleteBeta(x, alpha, beta, undefined, undefined);
+}
+
+/**
+ * `log(Gamma(alpha + beta) / (Gamma(alpha) * Gamma(beta)))`, subtracted in the order the incomplete
+ * Beta function has always subtracted it, so a caller that computes it once gets the same double as
+ * one that computes it on every call. It depends on the shapes alone.
+ *
+ * @param {number} alpha
+ * @param {number} beta
+ */
+function logNormalizer(alpha, beta) {
+  return logGamma(alpha + beta) - logGamma(alpha) - logGamma(beta);
+}
+
+/**
+ * The regularized incomplete Beta function with its normalizers supplied: `forward` for
+ * (alpha, beta) and `backward` for the swapped shapes the symmetry identity evaluates. Undefined
+ * computes one where it is needed. The quantile's Newton loop calls this with fixed shapes up to
+ * hundreds of times per quantile, and recomputing three log-gammas on every call was most of what
+ * replaying a six-figure history cost.
+ *
+ * @param {number} x
+ * @param {number} alpha
+ * @param {number} beta
+ * @param {number | undefined} forward
+ * @param {number | undefined} backward
+ * @returns {number}
+ */
+function incompleteBeta(x, alpha, beta, forward, backward) {
   if (!(x > 0)) return 0;
   if (x >= 1) return 1;
 
@@ -121,15 +151,11 @@ export function regularizedIncompleteBeta(x, alpha, beta) {
   // identity I_x(a, b) = 1 - I_(1-x)(b, a) covers the other side. The comparison stays
   // strict: at exactly (alpha + 1) / (alpha + beta + 2) both sides would swap forever.
   if (x > (alpha + 1) / (alpha + beta + 2)) {
-    return 1 - regularizedIncompleteBeta(1 - x, beta, alpha);
+    return 1 - incompleteBeta(1 - x, beta, alpha, backward, forward);
   }
 
   const front = Math.exp(
-    logGamma(alpha + beta) -
-      logGamma(alpha) -
-      logGamma(beta) +
-      alpha * Math.log(x) +
-      beta * Math.log1p(-x),
+    (forward ?? logNormalizer(alpha, beta)) + alpha * Math.log(x) + beta * Math.log1p(-x),
   );
   return (front * continuedFraction(x, alpha, beta)) / alpha;
 }
@@ -158,12 +184,14 @@ export function betaQuantile(probability, alpha, beta) {
   if (probability >= 1) return 1;
 
   const logBeta = logGamma(alpha) + logGamma(beta) - logGamma(alpha + beta);
+  const forward = logNormalizer(alpha, beta);
+  const backward = logNormalizer(beta, alpha);
   let low = 0;
   let high = 1;
   let guess = alpha / (alpha + beta);
 
   for (let iteration = 0; iteration < QUANTILE_ITERATIONS; iteration += 1) {
-    const error = regularizedIncompleteBeta(guess, alpha, beta) - probability;
+    const error = incompleteBeta(guess, alpha, beta, forward, backward) - probability;
     if (error > 0) high = guess;
     else low = guess;
     // The true quantile can sit below the smallest representable double, or above the

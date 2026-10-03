@@ -12,6 +12,7 @@ import {
 } from "../src/storage.js";
 import {
   cleanupRunFixtures,
+  createCodexHistory,
   createOpenCodeDatabase,
   makeRunFixture,
 } from "./fixtures/run-fixture.js";
@@ -142,6 +143,67 @@ test("recorded sequence answers stay immutable outside a purge", async () => {
     assert.throws(() => database.prepare("DELETE FROM prediction_sequence").run(), /immutable/u);
     assert.throws(
       () => database.prepare("UPDATE prediction_sequence SET risk_label = 'low'").run(),
+      /immutable/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+/** A Codex source whose fresh statement made `status` record a shadow beside its attempt. */
+async function makeShadowHistory() {
+  const fixture = await makeRunFixture("snack-purge-shadow-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+    "version-0-147-0.jsonl",
+  ]);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "codex",
+      "--non-interactive",
+      "--source",
+      "codex",
+      "--provider",
+      "openai",
+      "--profile",
+      "default",
+      "--plan",
+      "plus",
+    ],
+    fixture.options,
+  );
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+  await run(["node", "snack", "status", "--no-sync"], fixture.options);
+  return fixture;
+}
+
+test("purge deletes the shadow forecasts recorded with the attempts it removes", async () => {
+  const fixture = await makeShadowHistory();
+  const { databaseFile } = fixture.paths;
+  assert.equal(count(databaseFile, "prediction_attempt"), 1);
+  assert.equal(count(databaseFile, "prediction_reported_capacity"), 1);
+
+  const result = await purgeScope(fixture.paths, { source: "codex" }, { now: new Date() });
+
+  assert.equal(count(databaseFile, "prediction_reported_capacity"), 0);
+  assert.equal(count(databaseFile, "prediction_attempt"), 0);
+  // Counted with its attempt, as a sequence is: the purge payload keeps its frozen shape.
+  assert.equal(result.counts.predictions, 1);
+});
+
+test("recorded shadow forecasts stay immutable outside a purge", async () => {
+  const fixture = await makeShadowHistory();
+  const database = new Database(fixture.paths.databaseFile);
+  try {
+    assert.throws(
+      () => database.prepare("DELETE FROM prediction_reported_capacity").run(),
+      /immutable/u,
+    );
+    assert.throws(
+      () => database.prepare("UPDATE prediction_reported_capacity SET band = 'full'").run(),
       /immutable/u,
     );
   } finally {

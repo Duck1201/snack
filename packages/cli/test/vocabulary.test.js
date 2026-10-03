@@ -11,6 +11,7 @@ import {
   createCodexHistory,
   createOpenCodeDatabase,
   makeRunFixture,
+  plantStatements,
 } from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
@@ -32,6 +33,10 @@ const forbidden = [
   { label: "percentage used or consumed", pattern: /\bper\s?cent(?:age)?\s+(?:used|consumed)\b/iu },
   { label: "capacity percentage", pattern: /\bcapacity\s+per\s?cent(?:age)?\b/iu },
   { label: "utilization", pattern: /\butili[sz]ation\b/iu },
+  // Added with the reported-capacity shadow in 1.5.0: a headroom model, or a stated figure turned
+  // into what is left of a window, would be an inference about real capacity by another route.
+  { label: "headroom", pattern: /\bheadroom\b/iu },
+  { label: "a percentage left", pattern: /\b\d+(?:\.\d+)?%\s+(?:left|remaining|free)\b/iu },
 ];
 
 test("no command calls observed usage a quota percentage or a remaining balance", async () => {
@@ -135,6 +140,117 @@ test("no command calls observed usage a quota percentage or a remaining balance"
         term.pattern,
         `\`snack ${output.argv.join(" ")}\`${output.json ? " --json" : ""} says ${term.label}`,
       );
+    }
+  }
+});
+
+test("the shadow never reads as capacity, as the answer, or as a stated figure inside an estimate", async () => {
+  // Codex stating a window nearly full, then full, at the fixture clock: the shadow is computed in
+  // both bands, and in `full` from the starting assumption, so every one of its wordings is on the
+  // surface this test polices.
+  const fixture = await makeRunFixture("snack-vocabulary-shadow-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+    "version-0-147-0.jsonl",
+  ]);
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "codex",
+      "--non-interactive",
+      "--source",
+      "codex",
+      "--provider",
+      "openai",
+      "--profile",
+      "default",
+      "--plan",
+      "plus",
+      "--json",
+    ],
+    fixture.options,
+  );
+  const installationId = JSON.parse(fixture.stdout.value).data.source.installation_id;
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+  const now = /** @type {Date} */ (fixture.options.now);
+
+  /** @type {{argv: string[], json: boolean, text: string}[]} */
+  const outputs = [];
+  for (const [index, usedPercent] of [90, 100].entries()) {
+    plantStatements(
+      fixture.paths.databaseFile,
+      "codex",
+      installationId,
+      [
+        {
+          observation_key: String(index + 1).padStart(64, "0"),
+          observed_at: new Date(now.getTime() - (2 - index) * 60_000).toISOString(),
+          limit_id: "codex",
+          plan_type: "plus",
+          windows: [
+            {
+              window_minutes: 300,
+              used_percent: usedPercent,
+              resets_at: new Date(now.getTime() + 3_600_000).toISOString(),
+            },
+            { window_minutes: 10080, used_percent: 40, resets_at: null },
+          ],
+          parser_version: "codex-rate-limits-v1",
+        },
+      ],
+      now,
+    );
+    for (const argv of [
+      ["status"],
+      ["status", "--verbose"],
+      ["status", "--sequence", "10"],
+      ["status", "--verbose", "--sequence", "10"],
+      ["stats", "--verbose"],
+    ]) {
+      for (const json of [false, true]) {
+        fixture.stdout.value = "";
+        fixture.stderr.value = "";
+        await run(
+          ["node", "snack", ...argv, "--no-sync", ...(json ? ["--json"] : [])].filter(
+            (word) => !(argv[0] === "stats" && word === "--no-sync"),
+          ),
+          fixture.options,
+        );
+        outputs.push({ argv, json, text: `${fixture.stdout.value}\n${fixture.stderr.value}` });
+      }
+    }
+  }
+
+  const transcript = outputs.map((output) => output.text).join("\n");
+  // Vacuity guards: both bands and the starting assumption were really on the surface.
+  assert.match(transcript, /reads what Codex states about its 5h window — in the near band/u);
+  assert.match(transcript, /starting assumption — Codex states its 5h window is full/u);
+  assert.match(transcript, /not the answer above/u);
+  assert.match(transcript, /"reported-capacity"/u);
+  assert.match(transcript, /by method/u);
+  // A stated band is SNACK's grouping, not something Codex said, and a full window can end early
+  // with a plan change: the shadow neither paraphrases the threshold as Codex's words nor promises
+  // how long a window stays full.
+  assert.doesNotMatch(transcript, /nearly full|until it resets/u);
+
+  for (const output of outputs) {
+    const where = `\`snack ${output.argv.join(" ")}\`${output.json ? " --json" : ""}`;
+    for (const term of forbidden) {
+      assert.doesNotMatch(output.text, term.pattern, `${where} says ${term.label}`);
+    }
+    if (output.json) continue;
+    const lines = output.text.split("\n");
+    // The estimate's own lines never carry a stated percentage: not the answer, not the sequence,
+    // and not the shadow, whose figure is quoted once on the `reported` row.
+    for (const line of lines.filter((text) => /^\s{2}(?:next |shadow\b)/u.test(text))) {
+      assert.doesNotMatch(line, /\d+(?:\.\d+)?% of\b/u, `${where}: ${line}`);
+    }
+    // The shadow is a `--verbose` surface only: the default panel never shows it.
+    if (!output.argv.includes("--verbose")) {
+      assert.ok(!lines.some((text) => /^\s{2}shadow\b/u.test(text)), `${where} shows the shadow`);
+      assert.doesNotMatch(output.text, /reported-capacity/u, where);
     }
   }
 });

@@ -14,6 +14,7 @@ import {
   createOpenCodeDatabase,
   executeOpenCodeSql,
   makeRunFixture,
+  plantStatements,
 } from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
@@ -351,6 +352,8 @@ test("no command writes or prints what a Codex rollout says about the user", asy
     ["sync", "--full"],
     ["status"],
     ["status", "--source", "codex", "--verbose"],
+    // After the stated full window planted below: the shadow computes and is recorded.
+    ["status", "--source", "codex", "--verbose", "--sequence", "3"],
     ["stats", "--verbose"],
     ["doctor"],
     ["config", "get"],
@@ -362,6 +365,9 @@ test("no command writes or prints what a Codex rollout says about the user", asy
 
   /** @type {string[]} */
   const transcript = [];
+  /** @type {unknown[]} */
+  let shadowRows = [];
+  let planted = false;
   for (const argv of invocations) {
     for (const json of [false, true]) {
       fixture.stdout.value = "";
@@ -369,6 +375,64 @@ test("no command writes or prints what a Codex rollout says about the user", asy
       await run(["node", "snack", ...argv, ...(json ? ["--json"] : [])], fixture.options);
       transcript.push(fixture.stdout.value, fixture.stderr.value);
     }
+    // The canary history's prompts are not evidence either way, so the figure the rollout states
+    // leaves the shadow nothing to read. Once the verbose panel has quoted that figure, Codex
+    // stating the same limit full a minute before the clock makes the shadow compute from the
+    // starting assumption -- through the identity the rollout's own statement was stored under.
+    if (argv[0] === "status" && argv.includes("--verbose") && !planted) {
+      planted = true;
+      const database = new Database(fixture.paths.databaseFile, { readonly: true });
+      /** @type {{installation_id: string, limit_id: string | null, plan_type: string | null}} */
+      let stated;
+      try {
+        stated = /** @type {typeof stated} */ (
+          database
+            .prepare(
+              "SELECT installation_id, limit_id, plan_type FROM reported_capacity_observation LIMIT 1",
+            )
+            .get()
+        );
+      } finally {
+        database.close();
+      }
+      const now = /** @type {Date} */ (fixture.options.now);
+      plantStatements(
+        fixture.paths.databaseFile,
+        "codex",
+        stated.installation_id,
+        [
+          {
+            observation_key: "f".repeat(64),
+            observed_at: new Date(now.getTime() - 60_000).toISOString(),
+            limit_id: stated.limit_id,
+            plan_type: stated.plan_type,
+            windows: [{ window_minutes: 300, used_percent: 100, resets_at: null }],
+            parser_version: "codex-rate-limits-v1",
+          },
+        ],
+        now,
+      );
+    }
+    // The shadow forecasts `status` recorded, read before the purge below deletes them.
+    if (argv[0] === "stats") {
+      const database = new Database(fixture.paths.databaseFile, { readonly: true });
+      try {
+        shadowRows = database.prepare("SELECT * FROM prediction_reported_capacity").all();
+      } finally {
+        database.close();
+      }
+    }
+  }
+  // The shadow is a capture path of its own -- a stated figure copied beside an attempt -- so it
+  // carries its own canary assertion, and a vacuity guard that it really ran.
+  assert.ok(shadowRows.length > 0, "the shadow was never computed and recorded");
+  assert.ok(transcript.join("").includes("reported-capacity@1 would say"));
+  for (const [name, canary] of Object.entries(privacyCanaries)) {
+    assert.doesNotMatch(
+      JSON.stringify(shadowRows),
+      new RegExp(String(canary), "u"),
+      `${name} reached prediction_reported_capacity`,
+    );
   }
 
   // Guard against a vacuous pass: the canaries have to really be in the history SNACK read, and

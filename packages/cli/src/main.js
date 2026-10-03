@@ -52,7 +52,15 @@ import {
   resolveOpenCodeConfig,
   writePluginRegistration,
 } from "./opencode-config.js";
-import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "./calibration.js";
+import {
+  BASELINE_METHOD_FAMILY,
+  CALIBRATION_POLICY,
+  backtest,
+  backtestReported,
+  liveByMethod,
+  summarizeCalibration,
+} from "./calibration.js";
+import { REPORTED_CAPACITY_POLICY, walkStatedHistory } from "./reported-capacity.js";
 import { ENVELOPE_SCHEMA_VERSION, createEnvelope, formatJson } from "./output.js";
 import { resolvePaths } from "./paths.js";
 import { renderStats, renderStatus, renderStatusTable } from "./render.js";
@@ -69,7 +77,12 @@ import {
   classifyIngestionCompleteness,
 } from "./prediction.js";
 import { analyzePromptText, categorizeHistory, categorizePromptSize } from "./prompt-features.js";
-import { createSourceStatus, describeReportedCapacity } from "./status.js";
+import {
+  attachShadow,
+  createShadowStatus,
+  createSourceStatus,
+  describeReportedCapacity,
+} from "./status.js";
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
   assertReadableStorage,
@@ -95,6 +108,11 @@ import {
   purgeScope,
   readReportedCapacity,
   readSourceSummary,
+  readStatedTimeline,
+  readStatedBandRows,
+  readStatedBandProjection,
+  writeStatedBands,
+  hasForeignPromptSince,
   rollbackDatabaseInitialization,
   storeObservations,
   withStorageOperationLock,
@@ -557,6 +575,18 @@ export async function run(argv, options = {}) {
             // arrival can move an older prompt, so the whole source is recategorized in
             // chronological order before any forecast reads it.
             recategorizeSource(paths.databaseFile, candidate.alias);
+            // The stated band each prompt began in is the same kind of projection, kept only where
+            // a Codex installation states figures for the source.
+            if (
+              configuredSources.some(
+                (entry) =>
+                  isConfiguredSource(entry) &&
+                  entry.alias === candidate.alias &&
+                  isCodexSource(entry),
+              )
+            ) {
+              restateSource(paths.databaseFile, candidate.alias);
+            }
             // Each new outcome is attached to the forecast that preceded it, so live
             // calibration compares a prediction with the future it did not know about.
             linkPrimaryEvaluations(paths.databaseFile, candidate.alias, "stage5-evaluation-v1");
@@ -664,6 +694,11 @@ export async function run(argv, options = {}) {
           now,
           clients:
             commandOptions.byClient === true ? (clientsByAlias.get(source.alias) ?? []) : null,
+          // Per-method calibration exists only where a second method runs: a source a Codex
+          // installation feeds. Every other source's document stays the one 1.4 emitted.
+          byMethod: allConfigured.some(
+            (entry) => entry.alias === source.alias && isCodexSource(entry),
+          ),
         });
       });
       const data = reports.length === 1 ? reports[0] : { sources: reports };
@@ -696,7 +731,7 @@ export async function run(argv, options = {}) {
         commandOptions.sequence === undefined
           ? undefined
           : parseSequenceLength(commandOptions.sequence);
-      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>})[]} */
+      /** @type {(ReturnType<typeof createSourceStatus> & {reported_capacity?: ReturnType<typeof describeReportedCapacity>, shadow?: import("./status.js").ShadowView})[]} */
       const statuses = [];
       /** @type {number[]} */
       const attemptIds = [];
@@ -754,8 +789,16 @@ export async function run(argv, options = {}) {
               synchronization = { performed: true, status: "failed" };
             }
           }
+          // Absent unless a Codex installation feeds this capacity source; a source no Codex
+          // installation feeds never takes the branches below, and its report is the 1.4 one.
+          const quotesCodex = inScope.some(
+            (entry) => entry.alias === source.alias && isCodexSource(entry),
+          );
           if (synchronization.performed) {
             recategorizeSource(paths.databaseFile, source.alias);
+            if (quotesCodex) {
+              restateSource(paths.databaseFile, source.alias);
+            }
             linkPrimaryEvaluations(paths.databaseFile, source.alias, "stage5-evaluation-v1");
           }
           const summary = readSourceSummary(paths.databaseFile, source.alias);
@@ -791,6 +834,9 @@ export async function run(argv, options = {}) {
               });
             }
           }
+          const outcomes = readOutcomeRows(paths.databaseFile, source.alias, {
+            limit: PREDICTION_POLICY.evidence_window_prompts,
+          });
           const sourceStatus = createSourceStatus(
             source,
             summary,
@@ -798,9 +844,7 @@ export async function run(argv, options = {}) {
             synchronization,
             pressure,
             {
-              outcomes: readOutcomeRows(paths.databaseFile, source.alias, {
-                limit: PREDICTION_POLICY.evidence_window_prompts,
-              }),
+              outcomes,
               windowSeconds: parseHorizon(primaryHorizon(current)),
               completeness: classifyIngestionCompleteness({
                 synchronized: readIngestionCursor(paths.databaseFile, source.alias) !== null,
@@ -817,25 +861,40 @@ export async function run(argv, options = {}) {
           );
           // Attached after the forecast is built, and beside it: what Codex states about its own
           // windows is quoted, never an input to the interval, the risk, the evidence or pressure
-          // (ADR-0007). Absent unless a Codex installation feeds this capacity source.
-          const quotesCodex = inScope.some(
-            (entry) => entry.alias === source.alias && isCodexSource(entry),
-          );
-          statuses.push(
-            quotesCodex
-              ? {
-                  ...sourceStatus,
-                  reported_capacity: describeReportedCapacity(
-                    readReportedCapacity(paths.databaseFile, source.alias),
-                    now,
-                  ),
-                }
-              : sourceStatus,
-          );
+          // (ADR-0007).
+          /** @type {import("./storage.js").PredictionShadowRow | undefined} */
+          let shadowRow;
+          if (quotesCodex) {
+            const latest = readReportedCapacity(paths.databaseFile, source.alias);
+            // The `reported-capacity` method, in shadow: computed and recorded beside the
+            // baseline, never the answer (ADR-0007, amended 1.5.0). It reads the same evidence
+            // window the baseline did and none of what the baseline produced.
+            const shadow = createShadowStatus({
+              now,
+              latest,
+              periodStart: summary.active_period_floor,
+              foreignPromptAfter: (installationId, since) =>
+                hasForeignPromptSince(paths.databaseFile, source.alias, installationId, since),
+              outcomes,
+              expectedCategory: sourceStatus.expected_prompt_category,
+              prior: {
+                strength: planProfile.prior_strength,
+                viability: planProfile.prior_viability,
+              },
+              dataCompleteness: sourceStatus.completeness.level,
+            });
+            shadowRow = shadow.row;
+            statuses.push(
+              attachShadow(sourceStatus, describeReportedCapacity(latest, now), shadow.view),
+            );
+          } else {
+            statuses.push(sourceStatus);
+          }
           if (summary.active_period_id !== null) {
             attemptIds.push(
               recordPredictionAttempt(
                 paths.databaseFile,
+                // The baseline's forecast: the answer the user is shown. The shadow never is.
                 toPredictionAttempt(source.alias, summary.active_period_id, sourceStatus, now),
                 // The sequence the same invocation answered rides with its attempt, in its own
                 // table: a `prediction_attempt` row is scored against one prompt, and a sequence
@@ -843,6 +902,7 @@ export async function run(argv, options = {}) {
                 sourceStatus.sequence === undefined
                   ? undefined
                   : toPredictionSequence(sourceStatus),
+                shadowRow,
               ),
             );
           }
@@ -1062,6 +1122,20 @@ export async function run(argv, options = {}) {
               now,
               ...(commandOptions.preventReimport === true ? { preventReimport: true } : {}),
             });
+      if (commandOptions.dryRun !== true) {
+        // A purged statement no longer binds the prompts after it: the projection is rebuilt from
+        // what remains, for every source in scope a Codex installation feeds.
+        const restated = new Set(
+          (Array.isArray(config.sources) ? config.sources : [])
+            .filter(isConfiguredSource)
+            .filter((entry) => isCodexSource(entry))
+            .filter((entry) => scope.source === undefined || entry.alias === scope.source)
+            .map((entry) => entry.alias),
+        );
+        await withStorageOperationLock(paths, async () => {
+          for (const alias of restated) restateSource(paths.databaseFile, alias);
+        });
+      }
       /** @type {{code: string, message: string}[]} */
       const warnings = [];
       if (commandOptions.dryRun !== true && commandOptions.preventReimport !== true) {
@@ -2641,6 +2715,67 @@ function recategorizeSource(databaseFile, alias) {
 }
 
 /**
+ * Recompute the stated band the prompts of a source's active period began in, and store the ones
+ * that moved.
+ *
+ * The projection the `reported-capacity` shadow reads (migration 018), recomputed in chronological
+ * order as size categories are, because a statement read late -- a rollout file met for the first
+ * time after newer ones -- moves the prompts after it, and so does a purge. Each band is resolved
+ * at its prompt's own start from statements strictly earlier.
+ *
+ * Only the suffix that can have moved is recomputed: the prompts from the source's frontier, which
+ * the ingestion and purge transactions lower as they commit, so a process stopped between a commit
+ * and this call leaves the frontier where the next one finds it. Nothing older than one
+ * statement-age limit before the frontier can bind a prompt after it, so the walk starts there. A
+ * source never projected, or projected under another policy version, is recomputed whole; one
+ * whose frontier is clear costs one primary-key read.
+ *
+ * @param {string} databaseFile
+ * @param {string} alias
+ */
+function restateSource(databaseFile, alias) {
+  const version = REPORTED_CAPACITY_POLICY.version;
+  const { frontier, stale_from: read } = readStatedBandProjection(databaseFile, alias, version);
+  if (frontier === null) return;
+  const lookback =
+    frontier === ""
+      ? ""
+      : new Date(
+          Date.parse(frontier) - REPORTED_CAPACITY_POLICY.max_age_seconds * 1000,
+        ).toISOString();
+  // NaN for the whole period, which no start is before.
+  const frontierMs = Date.parse(frontier);
+  const floor = readSourceSummary(databaseFile, alias).active_period_floor;
+  const rows = readStatedBandRows(databaseFile, alias, { from: lookback });
+  const timeline =
+    rows.length === 0
+      ? []
+      : readStatedTimeline(databaseFile, alias, {
+          from: floor !== null && floor > lookback ? floor : lookback,
+        });
+  /** @type {{prompt_execution_id: number, stated_band: string | null, stated_band_policy_version: string}[]} */
+  const moved = [];
+  walkStatedHistory(
+    rows.map((row) => ({ ...row, outcome: /** @type {const} */ ("success") })),
+    timeline,
+    { periodStart: floor },
+    (row, state) => {
+      // Before the frontier the lookback is incomplete, and nothing there can have moved. Compared
+      // as instants: a start stored with an offset can sort before the frontier as text.
+      if (Date.parse(row.started_at) < frontierMs) return;
+      if (row.stated_band !== state.band || row.stated_band_policy_version !== version) {
+        moved.push({
+          prompt_execution_id: row.prompt_execution_id,
+          stated_band: state.band,
+          stated_band_policy_version: version,
+        });
+      }
+    },
+  );
+  writeStatedBands(databaseFile, alias, moved, version, read);
+}
+
+/**
  * The first configured horizon drives the pressure shown alongside a forecast.
  *
  * @param {Record<string, unknown>} config
@@ -2765,7 +2900,7 @@ function summarizeWindow(rows, now) {
 /**
  * Describe observed usage for one capacity source across the requested horizons.
  *
- * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null}} input
+ * @param {{databaseFile: string, source: {alias: string, provider: string, profile: string, plan: string}, planProfile: import("./plan-profile.js").PlanProfile, horizons: string[], now: Date, clients?: {installation_id: string, client: string}[] | null, byMethod?: boolean}} input
  */
 function buildSourceStats(input) {
   /** @type {{groups: {key: string, prompts: number, eligible: number, restricted: number}[], unattributed: number} | null} */
@@ -2819,7 +2954,12 @@ function buildSourceStats(input) {
         includeTrend: true,
       }),
     },
-    calibration: buildCalibrationReport(input.databaseFile, input.source.alias, input.planProfile),
+    calibration: buildCalibrationReport(
+      input.databaseFile,
+      input.source.alias,
+      input.planProfile,
+      input.byMethod === true,
+    ),
     ...(input.clients
       ? {
           by_client: buildClientComparison({
@@ -2914,23 +3054,54 @@ function buildClientComparison(input) {
  * Report predictive quality from the two streams that must never be mixed: forecasts the
  * user actually saw, and forecasts replayed from history.
  *
+ * `byMethod` adds the per-method streams, for a source where the `reported-capacity` shadow runs
+ * beside the baseline. The top-level `live` and `backtest` keep their meaning either way -- every
+ * delivered forecast, every replayed baseline forecast -- and so their numbers.
+ *
  * @param {string} databaseFile
  * @param {string} alias
  * @param {import("./plan-profile.js").PlanProfile} planProfile
+ * @param {boolean} [byMethod]
  */
-function buildCalibrationReport(databaseFile, alias, planProfile) {
+function buildCalibrationReport(databaseFile, alias, planProfile, byMethod = false) {
   const pairs = readCalibrationPairs(databaseFile, alias);
   const snapshots = readPredictionSnapshots(databaseFile, alias);
-  const replay = backtest(readOutcomeRows(databaseFile, alias), {
-    now: new Date(),
-    prior: { strength: planProfile.prior_strength, viability: planProfile.prior_viability },
-  });
-  return {
+  const outcomes = readOutcomeRows(databaseFile, alias);
+  const prior = { strength: planProfile.prior_strength, viability: planProfile.prior_viability };
+  const replay = backtest(outcomes, { now: new Date(), prior });
+  const report = {
     policy_version: CALIBRATION_POLICY.version,
     snapshots: snapshots.length,
     undelivered_attempts: readPredictionAttemptCount(databaseFile, alias) - snapshots.length,
     live: summarizeCalibration(pairs),
     backtest: { ...replay.calibration, forecasts: replay.forecasts },
+  };
+  if (!byMethod) return report;
+
+  const shadowReplay = backtestReported(outcomes, { prior, baseline: replay.scored });
+  const method = REPORTED_CAPACITY_POLICY.method;
+  const live = liveByMethod(pairs, method);
+  return {
+    ...report,
+    by_method: [
+      {
+        id: "bayesian-pressure-band",
+        version: "1",
+        role: "answer",
+        includes: [...BASELINE_METHOD_FAMILY],
+        live: live.baseline,
+        backtest: { ...replay.calibration, forecasts: replay.forecasts },
+      },
+      {
+        id: method.id,
+        version: method.version,
+        role: "shadow",
+        includes: [`${method.id}@${method.version}`],
+        live: live.shadow,
+        backtest: { ...shadowReplay.calibration, forecasts: shadowReplay.forecasts },
+        paired: { live: live.paired, backtest: shadowReplay.paired },
+      },
+    ],
   };
 }
 

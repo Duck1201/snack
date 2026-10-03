@@ -162,17 +162,17 @@ escreve.
 
 ## Os comandos
 
-| Comando                                     | O que faz                                                                                                                                                                                                                                                             |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `snack setup opencode` / `claude` / `codex` | Mapeia um cliente para uma fonte de capacidade. Mostra cada mudança antes, faz backup, não escreve nada sem sua confirmação.                                                                                                                                          |
-| `snack status`                              | A avaliação do próximo prompt: faixa, risco, evidência, pressão e o que a puxou, atualidade dos dados. `--verbose` acrescenta os portões de evidência, o método e as versões de política; `--sequence <n>` acrescenta a chance de que todos os próximos `<n>` passem. |
-| `snack stats`                               | Como o seu uso realmente é ao longo de horizontes móveis, e como as previsões passadas se saíram.                                                                                                                                                                     |
-| `snack sync`                                | Importa histórico novo. `--full` relê e reconcilia tudo sem duplicar nada.                                                                                                                                                                                            |
-| `snack export`                              | Exporta tudo em JSON ou CSV com schema e proveniência. Os dados continuam seus.                                                                                                                                                                                       |
-| `snack data purge`                          | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                                                                                                                                                          |
-| `snack config`                              | Lê e edita a configuração local.                                                                                                                                                                                                                                      |
-| `snack doctor`                              | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                                                                                                                                                              |
-| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                                                                                                                                                              |
+| Comando                                     | O que faz                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `snack setup opencode` / `claude` / `codex` | Mapeia um cliente para uma fonte de capacidade. Mostra cada mudança antes, faz backup, não escreve nada sem sua confirmação.                                                                                                                                                                                     |
+| `snack status`                              | A avaliação do próximo prompt: faixa, risco, evidência, pressão e o que a puxou, atualidade dos dados. `--verbose` acrescenta os portões de evidência, o método, as versões de política e, numa fonte do Codex, a estimativa-sombra; `--sequence <n>` acrescenta a chance de que todos os próximos `<n>` passem. |
+| `snack stats`                               | Como o seu uso realmente é ao longo de horizontes móveis, e como as previsões passadas se saíram — por método numa fonte do Codex, com `--verbose`.                                                                                                                                                              |
+| `snack sync`                                | Importa histórico novo. `--full` relê e reconcilia tudo sem duplicar nada.                                                                                                                                                                                                                                       |
+| `snack export`                              | Exporta tudo em JSON ou CSV com schema e proveniência. Os dados continuam seus.                                                                                                                                                                                                                                  |
+| `snack data purge`                          | Apaga o escopo que você escolher, transacionalmente, depois de mostrar exatamente o que vai.                                                                                                                                                                                                                     |
+| `snack config`                              | Lê e edita a configuração local.                                                                                                                                                                                                                                                                                 |
+| `snack doctor`                              | Diagnostica a instalação sem alterá-la: permissões, fingerprints de schema, integridade.                                                                                                                                                                                                                         |
+| `snack update`                              | Traz o CLI e o plugin de captura para versões que combinam. O único comando que instala.                                                                                                                                                                                                                         |
 
 Todo comando aceita `--json` e responde com um documento versionado, então automatizar nunca
 significa fazer parsing de prosa. Todo comando também está no `man snack`, que vem no pacote e é
@@ -329,6 +329,11 @@ Todo número vem ao lado do seu tamanho de amostra, e nunca como zero quando a a
 `not_available` e `0,000` são afirmações muito diferentes, e confundir as duas é como um painel
 começa a se elogiar sozinho.
 
+Métodos também nunca entram na mesma média. Numa fonte do Codex, onde a estimativa-sombra é
+calculada ao lado da resposta, `calibration.by_method` avalia cada método nomeado nas próprias
+previsões, e avalia a sombra uma segunda vez, `paired`, exatamente nos desfechos em que o método que
+responde foi avaliado — a comparação em que está escrita a regra para algum dia promovê-la.
+
 Em simulação com 1.500 ensaios por taxa, a cobertura empírica mediu 0,911 / 0,880 / 0,863 / 0,864
 contra taxas reais de restrição de 0,02 / 0,05 / 0,10 / 0,25. O alvo declarado de `0,8` é portanto
 um **piso**, não uma afirmação exata, e está documentado como tal.
@@ -428,11 +433,65 @@ codex
 As janelas são nomeadas pela duração, nunca pelo slot `primary`/`secondary` do Codex, que mudou de
 significado entre versões. Uma janela cujo reinício já passou não é repetida. A linha não faz parte
 do intervalo de `next prompt`, do nível de evidência nem da pressão de uso, e nada na previsão a lê.
-No `--json` ela é o array opcional `reported_capacity` no relatório daquela fonte. Na `1.3` ela fica
-local: o `export` não a inclui, e o `data purge` a apaga junto com o resto do escopo. O
-`snack doctor` avisa sobre o que um histórico do Codex guarda e o SNACK deliberadamente não conta —
-subagentes bifurcados do Codex `0.147` ou anterior, arquivos comprimidos `rollout-*.jsonl.zst` e
-números declarados que não puderam ser citados.
+No `--json` ela é o array opcional `reported_capacity` no relatório daquela fonte. Ela fica local: o
+`export` não a inclui, e o `data purge` a apaga junto com o resto do escopo. O `snack doctor` avisa
+sobre o que um histórico do Codex guarda e o SNACK deliberadamente não conta — subagentes bifurcados
+do Codex `0.147` ou anterior, arquivos comprimidos `rollout-*.jsonl.zst` e números declarados que
+não puderam ser citados.
+
+### A estimativa-sombra
+
+A partir da `1.5`, todo `status` numa fonte do Codex também calcula uma **estimativa-sombra**
+(_shadow estimate_) a partir de um segundo método nomeado, `reported-capacity@1`, e a registra ao
+lado da resposta. Ela nunca é a resposta: a linha `next prompt`, o risco, a evidência, o
+`--sequence` e todo membro de `--json` que a `1.4` emitia vêm da linha de base, sem mudança. Ela
+aparece numa linha do `--verbose`, escrita para não ser confundida com a resposta:
+
+```text
+$ snack status --source codex --verbose
+codex
+  next prompt  92-100% chance it goes through · risk low
+  evidence     moderate — some history, but few refusals seen yet
+  ...
+  method       bayesian-pressure-band@1 · model stage5-prediction-v2
+  reported     Codex states 86% of its 5h window, resets in 3h 50m · 30% of its 7d window, resets Mon UTC · 4m ago
+  shadow       reported-capacity@1 would say 96-100% · risk low · evidence very_low — recorded to compare, not the answer above
+               reads what Codex states about its 5h window — in the near band · reported-capacity-v1
+  as of        3m ago · sync ok · period since 2026-10-03
+  ...
+```
+
+no `status --json` como o membro aditivo `shadow` — o método, se foi calculada e por que não, a
+janela determinante sem o número dela e, quando calculada, intervalo, risco e evidência — e no
+`stats --verbose` como um bloco `by method` (`calibration.by_method` no `--json`):
+
+```text
+$ snack stats --verbose
+  ...
+  by method
+    bayesian-pressure-band@1  answer · live not available yet · backtest brier 0.003, sample 333
+    reported-capacity@1       shadow · live not available yet · backtest brier 0.003, sample 333
+                              same outcomes as the baseline · live not available yet · backtest brier 0.003 against 0.003, sample 333, 1 restricted
+```
+
+O método lê a **janela determinante** (_binding window_) — da última declaração do Codex, a janela
+com o número mais alto — e a coloca numa **faixa declarada** (_stated band_): `clear` abaixo de 80,
+`near` a partir de 80, `full` em 100. Cada prompt passado recebe a faixa vigente quando começou, e a
+sombra aprende com os seus próprios desfechos na mesma faixa, em vez de na mesma faixa de pressão.
+Uma declaração com mais de seis horas, feita antes do período de capacidade, cuja janela reiniciou,
+ou uma `clear` ou `near` seguida de um prompt de outro cliente não determina nada, e a linha diz por
+quê: `not computed — stale, stated 7h ago`. `full` parte de uma suposição que pende para a recusa e
+é rotulada como tal. A evidência dela nunca passa de `low`. A faixa de cada prompt é guardada ao
+lado dele, recalculada a cada `sync` e `data purge`, e nunca exportada.
+
+Ela não responde porque o histórico real do Codex a partir do qual foi desenhada não conseguia
+calibrá-la: uma recusa em 65 dias, nenhum número de 100 jamais declarado, e o número em mãos quando
+o prompt recusado começou era 20%. Uma minor futura só a promove se a calibração dela vencer a da
+linha de base sob `reported-capacity-promotion-v1`: num histórico real do Codex, ao menos 200
+previsões ao vivo conferidas, ao menos 5 restrições tanto ao vivo quanto no backtest, e um Brier
+estritamente menor que o da linha de base nos mesmos desfechos, nos dois. Nenhuma configuração a
+liga ou desliga. Uma fonte que nenhuma instalação do Codex alimenta nunca a calcula, e a saída dela
+é a que a `1.4` imprimia.
 
 ## Clientes suportados
 

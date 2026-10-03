@@ -1,8 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { CALIBRATION_POLICY, backtest, summarizeCalibration } from "../src/calibration.js";
+import fc from "fast-check";
+
+import {
+  CALIBRATION_POLICY,
+  backtest,
+  backtestReported,
+  liveByMethod,
+  summarizeCalibration,
+} from "../src/calibration.js";
 import { buildForecast } from "../src/prediction.js";
+import { labelStatedBands } from "../src/reported-capacity.js";
+
+/**
+ * The replay as `stats` runs it: each prompt labelled with the band it began in, as of its start.
+ *
+ * @param {Parameters<typeof labelStatedBands>[0]} rows
+ * @param {import("../src/reported-capacity.js").Statement[]} timeline
+ * @param {{prior: {strength: number, viability: number}, periodStart: string | null}} options
+ */
+function replayReported(rows, timeline, options) {
+  return backtestReported(labelStatedBands(rows, timeline, { periodStart: options.periodStart }), {
+    prior: options.prior,
+    baseline: backtest(rows, { now: new Date(), prior: options.prior }).scored,
+  });
+}
 
 /**
  * @param {number} point
@@ -253,4 +276,178 @@ test("the incremental replay scores exactly what a full recomputation would", ()
       );
     }
   }
+});
+
+const PRIOR = { strength: 1, viability: 0.5 };
+const START = Date.parse("2026-01-01T00:00:00.000Z");
+
+/** @param {number} minutes */
+const minute = (minutes) => new Date(START + minutes * 60_000).toISOString();
+
+/**
+ * @param {number} count
+ * @param {(index: number) => "success" | "restricted" | "excluded"} [outcomeOf]
+ */
+function history(count, outcomeOf = (index) => (index % 9 === 4 ? "restricted" : "success")) {
+  return Array.from({ length: count }, (_, index) => ({
+    started_at: minute(index * 10),
+    outcome: outcomeOf(index),
+    size_category: "typical",
+    installation_id: "codex-installation",
+  }));
+}
+
+/**
+ * @param {number} atMinute
+ * @param {number} usedPercent
+ * @returns {import("../src/reported-capacity.js").Statement}
+ */
+function stated(atMinute, usedPercent) {
+  return {
+    installation_id: "codex-installation",
+    limit_id: "codex",
+    observed_at: minute(atMinute),
+    windows: [{ window_minutes: 300, used_percent: usedPercent, resets_at: null }],
+  };
+}
+
+test("with no stated timeline the reported replay scores nothing, and the baseline's is unchanged", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.constantFrom("success", "restricted", "excluded"), { maxLength: 80 }),
+      (outcomes) => {
+        const rows = history(
+          outcomes.length,
+          (index) => /** @type {"success" | "restricted" | "excluded"} */ (outcomes[index]),
+        );
+        const before = backtest(rows, { now: new Date(), prior: PRIOR });
+        const shadow = replayReported(rows, [], { prior: PRIOR, periodStart: null });
+        assert.equal(shadow.forecasts, 0);
+        assert.equal(shadow.paired.sample_size, 0);
+        assert.deepEqual(backtest(rows, { now: new Date(), prior: PRIOR }), before);
+      },
+    ),
+    { numRuns: 100 },
+  );
+});
+
+test("the reported replay never reads a statement made at or after the prompt it scores", () => {
+  const rows = history(60);
+  // A statement a minute before every prompt, and one stamped exactly at every prompt's start.
+  const timeline = rows
+    .flatMap((row, index) => [
+      {
+        ...stated(0, (index * 13) % 101),
+        observed_at: new Date(Date.parse(row.started_at) - 60_000).toISOString(),
+      },
+      { ...stated(0, 100), observed_at: row.started_at },
+    ])
+    .sort((left, right) => left.observed_at.localeCompare(right.observed_at));
+  for (const length of [15, 30, 45, 60]) {
+    const prefix = rows.slice(0, length);
+    const last = /** @type {{started_at: string}} */ (prefix.at(-1)).started_at;
+    const everything = replayReported(prefix, timeline, { prior: PRIOR, periodStart: null });
+    const strictlyEarlier = replayReported(
+      prefix,
+      timeline.filter((statement) => statement.observed_at < last),
+      { prior: PRIOR, periodStart: null },
+    );
+    assert.ok(everything.forecasts > 0, "vacuous: nothing was scored");
+    assert.deepEqual(everything, strictlyEarlier, `prefix of ${length}`);
+  }
+});
+
+test("the paired baseline in the reported replay is the baseline backtest at the same prompts", () => {
+  const rows = history(80);
+  // Fresh statements at every prompt but the first 40: the shadow replays the second half only.
+  const timeline = rows.slice(40).map((row) => ({
+    ...stated(0, 50),
+    observed_at: new Date(Date.parse(row.started_at) - 60_000).toISOString(),
+  }));
+  const replay = replayReported(rows, timeline, { prior: PRIOR, periodStart: null });
+  const baseline = backtest(rows, { now: new Date(), prior: PRIOR });
+  assert.equal(replay.forecasts, 40);
+  const tail = baseline.scored.slice(-40);
+  assert.equal(replay.paired.sample_size, 40);
+  assert.equal(replay.paired.baseline_brier, summarizeCalibration(tail).brier.value);
+  assert.equal(replay.paired.restrictions, tail.filter((f) => f.outcome === "restricted").length);
+});
+
+test("each method's live stream has its own sample size, and the baseline folds in its heuristic", () => {
+  /**
+   * @param {string} method
+   * @param {number | null} shadow
+   * @param {"success" | "restricted"} outcome
+   */
+  const pair = (method, shadow, outcome) => ({
+    lower: 0.6,
+    point: 0.8,
+    upper: 0.9,
+    outcome,
+    method_id: method,
+    method_version: "1",
+    shadow_method_id: shadow === null ? null : "reported-capacity",
+    shadow_method_version: shadow === null ? null : "1",
+    shadow_lower: shadow === null ? null : Math.max(0, shadow - 0.2),
+    shadow_point: shadow,
+    shadow_upper: shadow === null ? null : Math.min(1, shadow + 0.1),
+  });
+  const pairs = [
+    pair("bayesian-pressure-band", 0.2, "restricted"),
+    pair("initial-generic", null, "success"),
+    pair("bayesian-pressure-band", 0.9, "success"),
+    pair("bayesian-pressure-band", null, "success"),
+    // A later version of the shadow is never pooled with version 1.
+    { ...pair("bayesian-pressure-band", 0.5, "success"), shadow_method_version: "2" },
+  ];
+  const live = liveByMethod(pairs, { id: "reported-capacity", version: "1" });
+  assert.equal(live.baseline.brier.sample_size, 5);
+  assert.deepEqual(live.baseline, summarizeCalibration(pairs));
+  assert.equal(live.shadow.brier.sample_size, 2);
+  assert.equal(live.shadow.brier.value, ((0.2 - 0) ** 2 + (0.9 - 1) ** 2) / 2);
+  assert.deepEqual(live.paired, {
+    sample_size: 2,
+    restrictions: 1,
+    brier: live.shadow.brier.value,
+    baseline_brier: ((0.8 - 0) ** 2 + (0.8 - 1) ** 2) / 2,
+  });
+});
+
+test("the paired comparison scores the shadow and the baseline on the same outcomes", () => {
+  /**
+   * @param {string} method
+   * @param {string} version
+   * @param {number} shadow
+   * @param {"success" | "restricted"} outcome
+   */
+  const pair = (method, version, shadow, outcome) => ({
+    lower: 0.6,
+    point: 0.8,
+    upper: 0.9,
+    outcome,
+    method_id: method,
+    method_version: version,
+    shadow_method_id: "reported-capacity",
+    shadow_method_version: "1",
+    shadow_lower: Math.max(0, shadow - 0.2),
+    shadow_point: shadow,
+    shadow_upper: Math.min(1, shadow + 0.1),
+  });
+  const pairs = [
+    pair("bayesian-pressure-band", "1", 0.9, "success"),
+    pair("bayesian-pressure-band", "1", 0.3, "restricted"),
+    // The shadow was computed beside an attempt no baseline version answered -- a later baseline
+    // version, never pooled with this one. The shadow's own stream keeps it; the paired comparison
+    // cannot, because the baseline has no forecast of its own on that outcome to set beside it.
+    pair("bayesian-pressure-band", "2", 0.1, "restricted"),
+  ];
+  const live = liveByMethod(pairs, { id: "reported-capacity", version: "1" });
+  assert.equal(live.shadow.brier.sample_size, 3);
+  const both = pairs.slice(0, 2);
+  assert.deepEqual(live.paired, {
+    sample_size: 2,
+    restrictions: 1,
+    brier: ((0.9 - 1) ** 2 + (0.3 - 0) ** 2) / 2,
+    baseline_brier: summarizeCalibration(both).brier.value,
+  });
 });
