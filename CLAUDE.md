@@ -75,6 +75,9 @@ process. No daemon, no event bus, no DI container. Layering intent (files are fl
 - `storage.js`: better-sqlite3, migrations, transactions, repository queries. Does not classify
   errors or compute pressure.
 - `status.js` / prediction code: consumes domain-shaped query results, never touches SQLite.
+  `source-report.js` is the one path from storage to a source's report, for `status` and the dash.
+- `screen.js`, `dash-view.js`, `dash.js`, `dash-terminal.js`: `snack dash`, imported only by that
+  command — frame diff, pure widgets, the controller behind ports, and the real terminal ports.
 - `paths.js`: XDG on Linux, `~/Library/...` on macOS; every path is resolved, never created, here.
 - `errors.js`: `SnackError` + frozen `ExitCode` map (usage 2, config 3, unavailable 4, storage 5, io
   6, internal 10). `output.js`: `createEnvelope()` — every `--json` document is

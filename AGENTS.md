@@ -21,7 +21,9 @@
   OpenCode SQLite in read-only/query-only mode; `claude-adapter.js` backfills from Claude Code's
   JSONL history; `codex-adapter.js` backfills from Codex CLI's rollouts by field allowlist;
   `spool.js` validates NDJSON; `storage.js` owns SNACK SQLite and transactions; `status.js` consumes
-  query results rather than SQLite.
+  query results rather than SQLite; `source-report.js` builds each source's report for `status` and
+  `snack dash`. The dash adds `screen.js`, `dash-view.js` (pure widgets), `dash.js` (the controller,
+  behind ports) and `dash-terminal.js` (the real terminal ports), imported only by that command.
 - Source is JavaScript with JSDoc types, not TypeScript. `jsconfig.json` runs strict `checkJs` with
   NodeNext resolution.
 
@@ -34,6 +36,8 @@
   after changing package contents, package manifests, migrations, schemas, or entrypoints.
 - Focus a file with `node --test packages/cli/test/spool.test.js`; focus a test with
   `node --test --test-name-pattern "full sync converges" packages/cli/test/main.test.js`.
+- `npm run collapse:check` prints the collapse test for the answer and each weighting variant (a
+  mandatory promotion condition); it changes nothing and promotes nothing.
 - Focus a package with `npm test --workspace @snack-ai/opencode` (or `@snack-ai/cli`). The packed
   OpenCode host test is skipped unless `SNACK_OPENCODE_HOST_TEST=1`; set `OPENCODE_BIN` when the host
   is not at the test's default path.

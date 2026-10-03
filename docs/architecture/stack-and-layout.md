@@ -30,7 +30,7 @@ No ORM is used. SQL and numbered migrations remain explicit.
 
 ### 3.3 Deferred Choices
 
-- TUI framework is deliberately unselected.
+- No TUI framework is selected, and none was needed: `snack dash` (1.6) is stdlib only — a screen buffer, pure widgets and a per-line frame diff — so the package still publishes `src/` with no build step and no rendering dependency (PLAN.md, "Outside the 1.x Line", item 4).
 - SQLCipher driver/keychain design is deferred to a dedicated post-1.0 phase.
 - Public source-plugin loading is post-1.0 and deferred until native adapters plus a third integration validate the internal port.
 - ML framework is post-1.0 and deferred until a model passes evidence gates.
@@ -92,7 +92,10 @@ viability read from the same posterior),
 categorization), `reported-capacity.js` (from 1.5, the binding window and stated band the
 `reported-capacity` shadow method reads, resolved as of an instant), and `calibration.js` (Brier
 score, reliability, interval coverage, rolling-origin backtesting and, from 1.5, calibration per
-method). `status.js` assembles the domain result for output, and
+method). From 1.6, `prediction.js` also holds the weighting variants' policies
+(`WEIGHTING_VARIANTS`), `status.js` computes them as shadows from the very input the answer read,
+and `calibration.js` replays the answer and every variant in one chronological walk.
+`status.js` assembles the domain result for output, and
 `storage.js` owns every query and write behind them. From 1.6, `source-report.js` is the one path
 from storage to a capacity source's report — the per-source loop `status` runs, and the recompute
 `snack dash` runs once per synchronization — and `snack dash` adds four modules, imported only by
@@ -117,6 +120,11 @@ Responsibilities:
 - format human output or versioned JSON;
 - map operational failures to exit codes;
 - honor TTY, `NO_COLOR`, stdout/stderr, and destructive confirmation rules.
+
+From 1.6, `snack dash` is the one interactive surface. Its widgets (`dash-view.js`) are a pure
+function of the dash state, its controller (`dash.js`) talks only to ports, and the terminal, the
+clock, the signals and the synchronization child are those ports (`dash-terminal.js` in production,
+fakes in tests).
 
 The command layer contains no SQL, source parsing, statistics, or business thresholds.
 

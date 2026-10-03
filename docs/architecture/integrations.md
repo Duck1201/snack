@@ -112,7 +112,7 @@ It never contains provider credentials.
 ## 12. SQLite Design
 
 - The SNACK database is distinct from every client database.
-- WAL mode may be used for SNACK's own DB after platform tests.
+- SNACK's own DB runs in rollback-journal mode (`journal_mode = delete`); WAL was never adopted. `snack dash` (1.6) was designed around that rather than switching: it reads only under the storage operation lock, once per synchronization, so it never reads beside a writer, and WAL would add `-wal`/`-shm` files to the permission and backup surfaces for nothing ([snack-dash spec](../history/specs/snack-dash/spec.md) §3.3).
 - Foreign keys are enabled.
 - Strict tables/check constraints are preferred where supported.
 - Monetary amounts use lossless decimal/minor-unit representation with currency, not floating-point arithmetic.
