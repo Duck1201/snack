@@ -30,7 +30,7 @@ Compatibility policy:
 - `0.1-0.5` test adjacent migrations but may require documented resets;
 - `0.6.0` is the first guaranteed data/config migration baseline through all later pre-1.0 releases and 1.0;
 - stable release tests include direct published-artifact `0.6.0 -> 1.0.0` plus representative adjacent/intermediate chains;
-- stable releases support the latest validated OpenCode/Claude schema family plus one previous validated family, published as an explicit matrix;
+- stable releases support the latest validated OpenCode/Claude Code/Codex CLI schema family plus one previous validated family, published as an explicit matrix;
 - unknown fingerprints fail closed with actionable diagnostics;
 - 1.x follows strict SemVer for documented CLI flags, exit codes, JSON, config, export, and official spool compatibility;
 - SQLite layout, migrations, internal adapters/modules, and human formatting remain internal while preserving supported data/behavior.
@@ -82,7 +82,7 @@ What was given up with the candidate is the only rehearsal of the npm publish pa
 
 New adapters implement the internal `SourceAdapter` and emit the same source-observation contract. Domain, pressure, prediction, and presentation modules must not import client-specific types.
 
-Claude Code is the second adapter and reaches full parity in 0.7 before the 1.0 contract freeze. Codex CLI is post-1.0. Only after real differences from the two native clients and a third integration stabilize the observation contract may a public source-plugin mechanism be designed.
+Claude Code is the second adapter and reaches full parity in 0.7 before the 1.0 contract freeze. Codex CLI is the third, from 1.3; it fit the observation contract unchanged and added one output beside it, reported capacity usage, that no forecasting module reads. Only after real differences from the native clients and that third integration stabilize the observation contract may a public source-plugin mechanism be designed.
 
 ### 19.2 Public Plugins
 

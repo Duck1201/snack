@@ -25,6 +25,8 @@ Commander command
 OpenCode plugin -> append-only NDJSON spool
 OpenCode DB     -> read-only SQLite adapter
 Claude JSONL    -> read-only JSONL adapter (0.7+)
+Codex rollouts  -> read-only JSONL adapter, field allowlist (1.3+)
+                   + reported capacity usage snapshots
 
 snack sync/status
   -> validate source fingerprints and spool schemas
@@ -50,6 +52,8 @@ status command
   -> query rolling usage and eligible outcomes
   -> calculate pressure and forecast
   -> create immutable prediction attempt transactionally
+  -> attach the latest reported capacity usage beside the result (Codex sources, 1.3+);
+     read after the forecast is built and never an input to it
   -> render and flush human/JSON output
   -> append delivery confirmation for successful output
 ```
@@ -72,7 +76,7 @@ Migrations are append-only, transactional, and never edited after release.
 ### 8.2 `client_installation`
 
 - internal ID;
-- client kind (`opencode`, future `claude_code`, `codex_cli`);
+- client kind (`opencode`, `claude` from 0.7, `codex` from 1.3 — migration `014` widened the constraint);
 - local opaque installation fingerprint;
 - detected client version;
 - created/last-seen timestamps.
@@ -253,6 +257,17 @@ This table links future outcomes without mutating attempts. Unique constraints p
 - user-visible reason if supplied.
 
 Tombstones store no deleted content or statistical values.
+
+### 8.16 `reported_capacity_observation` (1.3+)
+
+- capacity-source alias and the client installation that stated it;
+- opaque observation key, stable when Codex moves a rollout to `archived_sessions`;
+- stated-at timestamp;
+- `limit_id` and `plan_type` as stated, or null;
+- one stated window: length in minutes, the fraction stated, reset time;
+- parser version (`codex-rate-limits-v1`) and first-seen timestamp.
+
+One row per stated window per statement, unique by installation, observation key and window length, and never updated. A statement is stored only for the source whose provider the stating thread names. `plan_type` is shown and never rotates the capacity period. Migration `015` adds it with `reported_capacity_latest`, which keeps a pointer to the latest statement per source, installation and limit so `status` reads it without ranking the history. The pointer is derived: it advances in the transaction that inserts a later statement, and `data purge` recomputes it from the remaining rows. Neither table is read by analytics, prediction or export.
 
 ## 9. Reconciliation Rules
 
