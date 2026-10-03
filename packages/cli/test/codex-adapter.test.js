@@ -225,6 +225,63 @@ test("a forked subagent's replay is not counted, and its own turn joins the pare
   );
 });
 
+test("a fork's replay region is not read even where the parent holds no counterpart", async () => {
+  // The replay region of a real fork is a copy of the parent, so dedup by response id alone would
+  // hide it. Here every replayed record is one the parent never wrote: only the ordinal rule can
+  // keep it out.
+  const home = await codexHome(["version-0-159-3.jsonl"]);
+  const original = await readFile(
+    new URL("./fixtures/codex/subagent-0-159-3.jsonl", import.meta.url),
+    "utf8",
+  );
+  const replayOnly = original
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => {
+      const record = JSON.parse(line);
+      if (record.ordinal === 0 || record.ordinal >= 7) return line;
+      // Later than anything the subagent wrote itself, so it would lead the revision if read.
+      record.timestamp = "2026-01-02T03:00:00.000Z";
+      if (record.payload?.turn_id === "00000000-0000-7000-8000-000000000110") {
+        record.payload.turn_id = "00000000-0000-7000-8000-000000000119";
+        record.payload.root_turn_id = "00000000-0000-7000-8000-000000000119";
+      }
+      if (record.type === "token_usage_record") record.payload.response_id = "resp_replay_only";
+      if (record.payload?.rate_limits) record.payload.rate_limits.primary.used_percent = 77;
+      return JSON.stringify(record);
+    })
+    .join("\n");
+  await writeFile(
+    join(home, "sessions", "2026", "01", "02", "rollout-2026-01-02T02-10-00-replay.jsonl"),
+    `${replayOnly}\n`,
+  );
+
+  const { observations, reported_capacity: reported } = adapterFor(home).readAll();
+  const withRealFork = adapterFor(
+    await codexHome(["version-0-159-3.jsonl", "subagent-0-159-3.jsonl"]),
+  ).readAll();
+
+  assert.deepEqual(
+    observations.map((observation) => observation.source_prompt_id),
+    ["00000000-0000-7000-8000-000000000110"],
+    "a replayed turn opened a prompt",
+  );
+  assert.deepEqual(observations[0]?.usage_slices.map((slice) => slice.source_slice_id).sort(), [
+    "resp_test_1",
+    "resp_test_2",
+    "resp_test_3",
+  ]);
+  assert.equal(observations[0]?.revision, withRealFork.observations[0]?.revision);
+  assert.ok(
+    reported.every((snapshot) => snapshot.windows.every((window) => window.used_percent !== 77)),
+    "a replayed token count was quoted",
+  );
+  assert.deepEqual(
+    reported.map((snapshot) => snapshot.observation_key),
+    withRealFork.reported_capacity.map((snapshot) => snapshot.observation_key),
+  );
+});
+
 test("a subagent whose root turn is nowhere is read as a prompt of its own", async () => {
   const { observations } = adapterFor(await codexHome("orphan-subagent-0-159-3.jsonl")).readAll();
 
