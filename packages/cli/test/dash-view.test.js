@@ -602,6 +602,10 @@ test("banners say what storage is doing, under the header", () => {
       { computedAt: ago(60), stale: true, storage: "newer", pendingMigrations: 0 },
       " A newer snack upgraded storage; quit and restart snack dash.",
     ],
+    [
+      { computedAt: ago(60), stale: true, storage: "busy", pendingMigrations: 0 },
+      " Storage keeps answering busy; quit and run snack doctor.",
+    ],
   ];
   for (const [reading, banner] of cases) {
     const { lines } = renderDash(

@@ -91,7 +91,7 @@ export { measure };
  * @property {number} selected
  * @property {"detail" | "help"} pane
  * @property {{phase: "idle" | "running", startedAt: string | null, endedAt: string | null, outcome: "ok" | "failed" | "storage_busy" | "storage_newer" | null, nextAt: string | null}} sync
- * @property {{computedAt: string | null, stale: boolean, storage: "ready" | "missing" | "pending" | "unprepared" | "newer", pendingMigrations: number}} reading
+ * @property {{computedAt: string | null, stale: boolean, storage: "ready" | "missing" | "pending" | "unprepared" | "newer" | "busy", pendingMigrations: number}} reading
  * @property {number | null} sequenceLength The person's N for the `next N` row; null hides it.
  */
 
@@ -294,6 +294,8 @@ function describeBanner(reading) {
       return "Storage could not be prepared; run snack sync to see why.";
     case "newer":
       return "A newer snack upgraded storage; quit and restart snack dash.";
+    case "busy":
+      return "Storage keeps answering busy; quit and run snack doctor.";
     default:
       return null;
   }

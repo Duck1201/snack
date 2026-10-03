@@ -9,7 +9,14 @@ import Database from "better-sqlite3";
 import lockfile from "proper-lockfile";
 
 import { readConfig } from "../src/config.js";
-import { SYNC_DELAY_MS, TICK_MS, classifySync, createStoragePort, runDash } from "../src/dash.js";
+import {
+  SQLITE_BUSY_BANNER_AFTER,
+  SYNC_DELAY_MS,
+  TICK_MS,
+  classifySync,
+  createStoragePort,
+  runDash,
+} from "../src/dash.js";
 import { RESTORE } from "../src/screen.js";
 import {
   SYNC_OK,
@@ -787,6 +794,84 @@ test("SQLite reporting busy while the dash records is a busy lock, retried, neve
   // The next tick retries, and records.
   await clock.advance(TICK_MS);
   await probe.idle();
+  assert.ok(count(source.paths.databaseFile, "SELECT COUNT(*) AS n FROM prediction_attempt") > 0);
+  terminal.press("q");
+  assert.equal(await done, 0);
+});
+
+test("SQLite answering busy time after time is said on a banner, not left a silently old reading", async () => {
+  // Under the dash's own storage lock no snack command can hold SQLite: busy retry after retry is
+  // something outside snack, or a defect of the dash's own, and either is the person's to know.
+  assert.equal(SQLITE_BUSY_BANNER_AFTER, 5);
+  const source = await seeded();
+  const config = await readConfig(source.paths.configFile);
+  const sources = /** @type {never[]} */ (config.sources);
+  const real = createStoragePort({
+    paths: source.paths,
+    config,
+    selected: sources,
+    inScope: sources,
+    invocationId: "00000000-0000-4000-8000-000000000000",
+  });
+  let busy = true;
+  let refused = 0;
+  /** @type {import("../src/dash.js").StoragePort} */
+  const storage = {
+    ...real,
+    session: (work) =>
+      real.session((tx) =>
+        work({
+          ...tx,
+          record: (built, length) => {
+            if (busy) {
+              refused += 1;
+              throw new Database.SqliteError("database is locked", "SQLITE_BUSY");
+            }
+            return tx.record(built, length);
+          },
+        }),
+      ),
+  };
+  const terminal = makeFakeTerminal();
+  const clock = makeFakeClock(start);
+  /** @type {{idle(): Promise<void>, state(): import("../src/dash-view.js").DashState} | null} */
+  let controller = null;
+  const done = runDash({
+    terminal: terminal.port,
+    clock: clock.now,
+    scheduler: clock.scheduler,
+    sync: makeFakeSync(() => new Promise(() => {}), { held: true }).port,
+    signals: makeFakeSignals().port,
+    storage,
+    color: false,
+    probe: (probe) => {
+      controller = probe;
+    },
+  });
+  const probe =
+    /** @type {{idle(): Promise<void>, state(): import("../src/dash-view.js").DashState}} */ (
+      /** @type {unknown} */ (controller)
+    );
+  const banner = /Storage keeps answering busy; quit and run snack doctor\./u;
+  await probe.idle();
+  while (refused < SQLITE_BUSY_BANNER_AFTER - 1) {
+    assert.doesNotMatch(terminal.text(), banner, `after ${refused} busy answers`);
+    await clock.advance(TICK_MS);
+    await probe.idle();
+  }
+  assert.equal(refused, SQLITE_BUSY_BANNER_AFTER - 1);
+  assert.doesNotMatch(terminal.text(), banner);
+  await clock.advance(TICK_MS);
+  await probe.idle();
+  assert.equal(refused, SQLITE_BUSY_BANNER_AFTER);
+  assert.equal(probe.state().reading.storage, "busy");
+  assert.match(terminal.text(), banner);
+  // Still retried, and the banner goes with the first reading that gets through.
+  busy = false;
+  await clock.advance(TICK_MS);
+  await probe.idle();
+  assert.equal(probe.state().reading.storage, "ready");
+  assert.doesNotMatch(terminal.text(), banner);
   assert.ok(count(source.paths.databaseFile, "SELECT COUNT(*) AS n FROM prediction_attempt") > 0);
   terminal.press("q");
   assert.equal(await done, 0);

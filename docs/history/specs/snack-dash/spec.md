@@ -331,6 +331,7 @@ a decision.
 | child fails while preparing | "Storage could not be prepared; run `snack sync` to see why." Keeps trying at the cadence. |
 | lock busy (child exit `5 storage_locked`, or the recompute's own acquire) | "sync skipped — another snack command is using storage" · reading kept, marked stale |
 | `storage_newer_than_application` mid-session | "A newer snack upgraded storage; quit and restart snack dash." Syncs stop; the last reading stays, marked stale. |
+| SQLite answers `SQLITE_BUSY` under the dash's own lock (added after review of `06340e7`) | retried on the next tick like a busy lock, the reading kept and marked stale; after **5 in a row** (`SQLITE_BUSY_BANNER_AFTER`), "Storage keeps answering busy; quit and run snack doctor." — no snack command can hold SQLite under the lock, so a streak is something outside snack or a defect of the dash's own, and a silently old reading would hide it. Any read or write that gets through resets the count and clears the banner. |
 
 ---
 
@@ -551,6 +552,7 @@ and 73 columns, and both were reworded to the lines below):
 - `Preparing storage — the first synchronization creates it.`
 - `Storage could not be prepared; run snack sync to see why.`
 - `A newer snack upgraded storage; quit and restart snack dash.`
+- `Storage keeps answering busy; quit and run snack doctor.` (after 5 `SQLITE_BUSY` in a row, §3.4)
 
 Key bar: ` ↑↓ select   r sync now   ? help   q quit`.
 

@@ -41,6 +41,15 @@ export const SYNC_DELAY_MS = 60_000;
 /** The redraw clock. */
 export const TICK_MS = 1_000;
 
+/**
+ * Consecutive `SQLITE_BUSY` answers after which the screen says so on a banner (spec §3.4). Under the
+ * dash's own storage lock no snack command can hold SQLite, so one busy answer is a moment's
+ * contention, retried quietly on the next tick; five in a row -- each after SQLite's own five-second
+ * wait -- is something outside snack, or a defect of the dash's own, and a reading left silently old
+ * would hide it.
+ */
+export const SQLITE_BUSY_BANNER_AFTER = 5;
+
 /** The `next N` row's length when it is first shown; the person moves it from there. */
 export const DEFAULT_SEQUENCE_LENGTH = 10;
 
@@ -245,6 +254,22 @@ export async function runDash(ports) {
   /** The lock was busy: the next tick tries again. */
   let recomputeOnTick = false;
   let delivering = false;
+  /** `SQLITE_BUSY` answers in a row, reset by any session that gets through. */
+  let sqliteBusy = 0;
+  /**
+   * @param {unknown} caught
+   * @returns {unknown} the error as a storage error, after counting a busy SQLite answer
+   */
+  const busyOrNot = (caught) => {
+    if (!isSqliteBusy(caught)) return asStorageError(caught);
+    sqliteBusy += 1;
+    if (sqliteBusy >= SQLITE_BUSY_BANNER_AFTER) state.reading.storage = "busy";
+    return asStorageError(caught);
+  };
+  const gotThrough = () => {
+    sqliteBusy = 0;
+    if (state.reading.storage === "busy") state.reading.storage = "ready";
+  };
   /** @type {unknown} */
   let tickTimer = null;
   /** @type {unknown} */
@@ -329,9 +354,10 @@ export async function runDash(ports) {
         const { drawn } = draw();
         confirmDrawn(tx, drawn);
       });
+      gotThrough();
     } catch (caught) {
       // Busy storage: the pending snapshot stays pending, and the next frame tries again.
-      const error = asStorageError(caught);
+      const error = busyOrNot(caught);
       if (!isStorageError(error)) throw error;
     } finally {
       delivering = false;
@@ -454,8 +480,9 @@ export async function runDash(ports) {
         const { drawn } = draw();
         confirmDrawn(tx, drawn);
       });
+      gotThrough();
     } catch (caught) {
-      const error = asStorageError(caught);
+      const error = busyOrNot(caught);
       if (!isStorageError(error)) throw error;
       const reason = /** @type {SnackError} */ (error).reason;
       if (reason === "storage_newer_than_application") {
@@ -778,8 +805,7 @@ function failedAliases(envelope) {
  * @param {unknown} error
  */
 function asStorageError(error) {
-  const code = /** @type {{code?: unknown}} */ (error)?.code;
-  if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) {
+  if (isSqliteBusy(error)) {
     return new SnackError("Storage is busy with another operation; retry after it finishes.", {
       code: ExitCode.storage,
       reason: "storage_locked",
@@ -787,6 +813,12 @@ function asStorageError(error) {
     });
   }
   return error;
+}
+
+/** @param {unknown} error */
+function isSqliteBusy(error) {
+  const code = /** @type {{code?: unknown}} */ (error)?.code;
+  return typeof code === "string" && code.startsWith("SQLITE_BUSY");
 }
 
 /** @param {unknown} error */
