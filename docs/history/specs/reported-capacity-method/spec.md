@@ -609,18 +609,21 @@ projection (§9.3) is recomputed for every Codex-fed source in scope. Nothing ne
   `prompt_execution.stated_band` (`clear`/`near`/`full` or null) and `stated_band_policy_version`,
   added in place, and `stated_band_projection (source_alias, policy_version, stale_from)`, one row
   per capacity source; no index. A rebuildable projection like `size_category`. The ingestion
-  transaction lowers `stale_from` to the earliest start of a prompt it stored, revised or
-  attributed and the earliest instant of a statement it stored; a purge sets it to `''` (the whole
-  active period) in its own transaction. After each synchronization and each purge `restateSource`
-  reads the frontier — one primary-key read, null when current — and recomputes, in chronological
-  order, every active-period prompt from there, walking the stated timeline (`readStatedTimeline`)
-  from one age limit earlier; `writeStatedBands` writes the moved rows and clears the frontier in
-  one transaction. Each band is resolved at its prompt's start from statements strictly earlier
+  transaction lowers `stale_from` to the earliest start of a prompt it stored, revised (both its
+  old and its new start) or attributed and the earliest instant of a statement it stored, each
+  normalized to `toISOString()` (one that does not parse lowers it to `''`); a purge sets it to
+  `''` (the whole active period) in its own transaction. After each synchronization and each purge
+  `restateSource` reads the frontier — one primary-key read, null when current — and recomputes, in
+  chronological order, every active-period prompt from there, walking the stated timeline
+  (`readStatedTimeline`) from one age limit earlier; `writeStatedBands` writes the moved rows and
+  clears the frontier in one transaction, only if `stale_from` still holds the value the restate
+  read. Each band is resolved at its prompt's start from statements strictly earlier
   (`walkStatedHistory`). No row, or a `policy_version` other than
   `REPORTED_CAPACITY_POLICY.version`, recomputes the whole active period: an upgraded database and a
   policy version moved in code are caught up by the same rule, with nothing to reset in a
-  migration. Prompts of ended periods and of sources no Codex installation feeds keep both columns
-  null.
+  migration. A prompt is never computed or read once its period ends, and keeps the band it was
+  last given while its period was active; prompts of sources no Codex installation feeds keep both
+  columns null.
 - `hasForeignPromptSince(databaseFile, alias, installationId, since)`: rule 7 at `now`, a range read
   on `prompt_execution_source_started_idx`.
 
@@ -664,7 +667,7 @@ fell from 7.3 s to 3.3 s once the Beta normalizer left the quantile's Newton loo
 | `calibration.test.js` | `backtestReported` never reads a statement at or after the scored prompt's start (mutation-checked); scores nothing on an empty timeline while `backtest` is unchanged (property); the paired baseline is `backtest`'s at the same prompts; `liveByMethod` sample sizes are independent, `paired` covers the same outcomes on both sides, `initial-generic` folds into the baseline, versions never pool |
 | `prediction-storage.test.js` / `storage.test.js` | attempt and shadow row commit or roll back together; a figure above 100 is stored; `readCalibrationPairs` returns method and shadow columns; `017`+`018` apply from every published level, `1.4.0`'s included |
 | `purge.test.js` | purge deletes shadow rows with their attempts, counted as predictions; shadow rows are immutable outside a purge |
-| `codex-status.test.js` | fresh statements ⇒ `shadow.computed`, the attempt is the baseline's and the shadow row matches the document; exactly six hours binds, one second more is `stale` and records no shadow row; at a window's reset instant the next live window binds; another client's prompt ⇒ `superseded`; `--sequence` stays baseline; a Claude Code source never gets a figure, a shadow or `by_method`; the projection equals the as-of labelling and moves with a late statement and with a purge ; the frontier is null after a sync that brought nothing, though an ended period holds prompts never computed; a statement committed without its restate is projected by the next sync; a prompt read incrementally is projected; another policy version recomputes the source whole; a Claude Code source keeps no per-prompt projection state and no index |
+| `codex-status.test.js` | fresh statements ⇒ `shadow.computed`, the attempt is the baseline's and the shadow row matches the document; exactly six hours binds, one second more is `stale` and records no shadow row; at a window's reset instant the next live window binds; another client's prompt ⇒ `superseded`; `--sequence` stays baseline; a Claude Code source never gets a figure, a shadow or `by_method`; the projection equals the as-of labelling and moves with a late statement and with a purge ; the frontier is null after a sync that brought nothing, though an ended period holds prompts never computed; a statement committed without its restate is projected by the next sync; a prompt read incrementally is projected; another policy version recomputes the source whole; a Claude Code source keeps no per-prompt projection state and no index; a frontier hours after its binding statement still reads it and leaves earlier prompts alone; two commits without a restate keep the earlier frontier; a revision lowers it to the earlier of its two starts; attributing an unknown client's prompt on a two-installation source supersedes; `purge --all` and a purge of only another client's prompt restate; a frontier lowered between the restate's read and write survives; an offset start lowers it to its normalized instant |
 | `contracts.test.js` | `1.4` in `FROZEN_VERSIONS`; the computed `shadow` and `by_method` validated on the Codex source only |
 | `render.test.js` | the verbose shadow rows verbatim, each band, the reasons; never on the default panel or the overview; the `by method` block |
 | `vocabulary.test.js` | §8.4 |
@@ -808,8 +811,8 @@ method rather than tuning it in place.
   edits are deferred to the release PR (§3.4).
 - **Review fixes to `018`, before release.** The frontier was first the earliest prompt with a null
   version or the earliest statement whose `first_seen_at` was this invocation's, through a partial
-  index and a `first_seen_at` index. Prompts of an ended period are never computed, so on any source
-  with two periods it never cleared and every sync recomputed the whole active period; a source no
+  index and a `first_seen_at` index. Prompts are never computed once their period ends, so on any
+  source with two periods it never cleared and every sync recomputed the whole active period; a source no
   Codex installation feeds indexed every prompt forever (+4.2 MB on 100,000 Claude Code prompts);
   and a process stopped between the ingestion commit and the restate left bands stale with nothing
   to find them by. Both indexes are gone; `stated_band_projection` holds one durable frontier per
@@ -817,6 +820,14 @@ method rather than tuning it in place.
   `policy_version` that differs from the running one recomputes the source whole — the guard against
   bumping `REPORTED_CAPACITY_POLICY.version` in code alone. Migrations `017`/`018` were unreleased,
   so `018` was edited in place.
+- **Second review of `018`.** `writeStatedBands` compares and clears: it clears `stale_from` only
+  if it still holds the value the restate read, so a mark committed by an ingestion that took over
+  a lock judged stale survives. The ingestion normalizes every instant it lowers the frontier to
+  (`toISOString()`; one that does not parse marks the whole period), because the Claude Code
+  backfill stores timestamps as written and the spool accepts offsets; the restate skips prompts
+  before the frontier by instant, not by text. A local development database that applied an
+  earlier `018` must be restored from its pre-migration backup: the checksum moved, and `open`
+  refuses it.
 - **Paired comparison.** `liveByMethod`'s `paired` keeps the same pairs on both sides — those a
   baseline version answered — rather than every shadow pair against the answered ones.
 - **Wording.** The `full` and `near` second lines read "Codex stated it full" and "in the near band"

@@ -425,10 +425,12 @@ does not move. `018` adds `stated_band` and `stated_band_policy_version` to `pro
 place, and the table `stated_band_projection`, one row per capacity source: a rebuildable projection
 of the band each prompt began in. The ingestion and purge transactions lower that row's `stale_from`
 as they commit; the recomputation after each synchronization and each purge starts there and clears
-it in the transaction that writes the bands, so a process stopped between the two is caught up by
-the next synchronization, and a source never projected, or projected under another policy version,
-is recomputed whole. Only the active period of a source a Codex installation feeds is computed;
-every other prompt keeps both columns null, and no index is added. It exists
+it in the transaction that writes the bands -- only if it is still the value it read -- so a process
+stopped between the two is caught up by the next synchronization, and a source never projected, or
+projected under another policy version, is recomputed whole. Only the active period of a source a
+Codex installation feeds is computed or read: a prompt is never computed or read once its period
+ends, and keeps the band it was last given; a prompt of a source no Codex installation feeds keeps
+both columns null, and no index is added. It exists
 because replaying the stated timeline inside `status` cost the `status --no-sync` budget its margin
 (`docs/history/specs/reported-capacity-method/spec.md` §9.4). Neither the table nor the columns are
 **exported**: a new table or column would fail every version-2 validator. The first `sync` after the

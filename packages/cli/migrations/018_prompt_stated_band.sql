@@ -10,9 +10,11 @@
 --
 -- `stated_band` is null where no window bound at the prompt's start. `stated_band_policy_version`
 -- names the policy that computed it; a null one means the band was never computed, which no
--- forecast trusts. Only the active period of a source a Codex installation feeds is ever computed:
--- every other prompt keeps both columns null, and a column added in place costs nothing on a row
--- that never holds a value. Neither column is exported.
+-- forecast trusts. Only the active period of a source a Codex installation feeds is ever computed
+-- or read: a prompt is never computed or read once its period ends, and keeps the band it was last
+-- given while the period was active. A prompt of a source no Codex installation feeds keeps both
+-- columns null, and a column added in place costs nothing on a row that never holds a value.
+-- Neither column is exported.
 ALTER TABLE prompt_execution ADD COLUMN stated_band TEXT
   CHECK (stated_band IS NULL OR stated_band IN ('clear', 'near', 'full'));
 
@@ -23,7 +25,8 @@ ALTER TABLE prompt_execution ADD COLUMN stated_band_policy_version TEXT;
 -- that instant, and a purge sets it to the empty string -- everything -- in its own transaction,
 -- so the marker commits with the change that made it true and survives a process that stops
 -- before the projection is recomputed. Recomputing clears it, in the transaction that writes the
--- bands, and records the policy version it computed under.
+-- bands, only if it still holds the value read when the recomputation began, and records the
+-- policy version it computed under.
 --
 -- No row, or a `policy_version` other than the running one, means the source was never projected
 -- under this policy, and its whole active period is recomputed: that is how an upgraded database
