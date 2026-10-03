@@ -317,6 +317,32 @@ test("a legacy forked subagent is skipped whole and counted", async () => {
   assert.equal(adapter.health().skipped_fork_files, 1);
 });
 
+test("a legacy forked subagent resumed by 0.159 keeps its new turns and counts its old ones", async () => {
+  const parentOnly = adapterFor(await codexHome("version-0-147-0.jsonl")).readAll().observations;
+  const adapter = adapterFor(
+    await codexHome(["version-0-147-0.jsonl", "fork-0-146-0-resumed-by-0-159-3.jsonl"]),
+  );
+
+  const { observations } = adapter.readAll();
+  // The 0.159 turn names its root, so it joins the parent's prompt with its own usage record.
+  const joined = observations.find(
+    (observation) => observation.source_prompt_id === "00000000-0000-7000-8000-000000000102",
+  );
+  const before = parentOnly.find(
+    (observation) => observation.source_prompt_id === "00000000-0000-7000-8000-000000000102",
+  );
+  assert.equal(
+    (joined?.usage_slices.length ?? 0) - (before?.usage_slices.length ?? 0),
+    1,
+    "the resumed turn's usage record",
+  );
+  // The 0.146 turns sit below a replay boundary that family cannot place, so they are not read;
+  // the file is counted as a skipped fork so doctor still says so.
+  const health = adapter.health();
+  assert.equal(health.skipped_fork_files, 1);
+  assert.equal(health.skipped_subagent_turns, 0);
+});
+
 test("a token-count subagent's turns open no prompt of their own, and are counted", async () => {
   const parentOnly = adapterFor(await codexHome("version-0-147-0.jsonl")).readAll().observations;
   const adapter = adapterFor(await codexHome(["version-0-147-0.jsonl", "subagent-0-147-0.jsonl"]));

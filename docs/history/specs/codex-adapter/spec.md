@@ -667,6 +667,15 @@ path deleted them without replacement (reproduced: 3 slices / 435 tokens became 
   the most recently modified file, which is `cx-rollout-usagerecord-v1` once that file holds any
   usage-record turn.
 - The legacy-fork rule (§3.1) applies to a forked subagent file with no usage-record turn.
+- A legacy fork that `0.159` resumed has usage-record turns, so it is no longer skipped whole: its
+  new turns sit past `subagent_history_start_ordinal` and are read. The token-count turns below the
+  boundary are still not read, and which of them were the subagent's own is as unrecoverable as in
+  §3.1. Such a file — a forked subagent with a token-count `task_started` below its boundary — is
+  counted in `health().skipped_fork_files`, and `doctor`'s `forked_subagents` warning says the
+  turns a later Codex added are read. (Before, it lost those turns with no warning.) The same test
+  also counts a `0.159`-created fork whose parent was itself a resumed `0.147` thread, whose copied
+  replay region holds token-count turns; no structural field tells the two apart, and the warning
+  then overstates by that file. Fixture `fork-0-146-0-resumed-by-0-159-3.jsonl`.
 - Fixture `resumed-0-147-0-by-0-159-3.jsonl`; an end-to-end test syncs `version-0-147-0.jsonl`,
   appends the `0.159` turn, syncs again, and asserts every old prompt keeps its slices.
 

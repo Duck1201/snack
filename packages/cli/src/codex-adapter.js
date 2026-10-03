@@ -264,7 +264,7 @@ function scan(home) {
   }
   return {
     parsed,
-    skippedForkFiles: parsed.filter((file) => file.skippedFork).length,
+    skippedForkFiles: parsed.filter((file) => file.skippedFork || file.partlySkippedFork).length,
     skippedSubagentTurns: parsed.reduce((sum, file) => sum + file.skippedSubagentTurns, 0),
     droppedSnapshots: parsed.reduce(
       (sum, file) => sum + (file.skippedFork ? 0 : file.droppedSnapshots),
@@ -416,6 +416,7 @@ function familyRoots(entries) {
  * @property {string[]} families every family a turn of this file belongs to
  * @property {Set<string>} usageTurns turns whose usage Codex recorded per response
  * @property {boolean} skippedFork
+ * @property {boolean} partlySkippedFork a resumed legacy fork whose token-count turns are not read
  * @property {number} droppedSnapshots token counts whose stated figure was not one, so not quoted
  * @property {number} skippedSubagentTurns subagent turns that name no root, so belong to no prompt
  * @property {Projected[]} records records at or past the fork-replay boundary, in file order
@@ -528,6 +529,17 @@ function parseFile(home, file, rejected) {
   // re-counts the parent. Undercounting a superseded family's subagents is the bounded error.
   const skippedFork = family === TOKENCOUNT && subagent && meta.forked;
   const start = meta.history_start ?? 0;
+  // The same boundary in a legacy fork that a later Codex resumed: the new turns are read, but the
+  // token-count turns below the boundary are not, and nothing here can say which of them were the
+  // subagent's own. Counted with the skipped forks, so doctor does not go quiet about them.
+  const partlySkippedFork =
+    !skippedFork &&
+    subagent &&
+    meta.forked &&
+    records.some(
+      (record) =>
+        record.kind === "task_started" && record.ordinal < start && !usageTurns.has(record.turn_id),
+    );
   // A forked subagent begins with a verbatim copy of its parent's history. Counting it would
   // charge every forked agent with its parent's usage again.
   const kept = records.filter((record) => record.ordinal >= start);
@@ -542,6 +554,7 @@ function parseFile(home, file, rejected) {
     families: [...families].sort(),
     usageTurns,
     skippedFork,
+    partlySkippedFork,
     droppedSnapshots: kept.filter(
       (record) => record.kind === "token_count" && record.rate_limits?.invalid === true,
     ).length,

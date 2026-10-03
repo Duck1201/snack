@@ -414,6 +414,21 @@ test("doctor does not call an empty Codex history unsupported, since sync reads 
   assert.match(String(fingerprint?.message), /no Codex CLI rollouts/iu);
 });
 
+test("doctor still warns about a legacy forked subagent once 0.159 resumes it", async () => {
+  const fixture = await makeRunFixture("snack-doctor-codex-resumed-fork-");
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-147-0.jsonl",
+    "fork-0-146-0-resumed-by-0-159-3.jsonl",
+  ]);
+  assert.equal(await setupCodex(fixture), 0);
+
+  const checks = await doctorChecks(fixture);
+  const forks = checks.find((check) => check.id === "source_coverage:codex:codex:forked_subagents");
+  assert.equal(forks?.status, "warn", JSON.stringify(checks));
+  assert.match(String(forks?.message), /^1 forked subagent/u);
+  assert.match(String(forks?.message), /later Codex/u);
+});
+
 test("doctor fails a drifted Codex history with output that says what to do", async () => {
   const fixture = await makeRunFixture("snack-doctor-codex-drift-");
   const home = await createCodexHistory(fixture.root, "version-0-159-3.jsonl");

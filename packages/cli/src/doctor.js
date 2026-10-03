@@ -537,7 +537,8 @@ function codexCoverageChecks(alias, adapter) {
     checks.push(
       warn(
         `source_coverage:${alias}:codex:forked_subagents`,
-        `${skippedForks} forked subagent rollout(s) from Codex 0.147 or earlier are not counted; ` +
+        `${skippedForks} forked subagent rollout(s) from Codex 0.147 or earlier are not counted, ` +
+          "beyond any turns a later Codex added when it resumed them; " +
           "their history does not say where the copied parent turns end.",
       ),
     );
