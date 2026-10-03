@@ -3352,6 +3352,40 @@ function isTombstoned(tombstones, startedAt) {
 }
 
 /**
+ * Where storage stands for a reader that may wait for a synchronization to prepare it: `snack dash`,
+ * which starts on a database that is missing or a schema behind and lets its first sync child
+ * create or migrate it, saying so on screen meanwhile.
+ *
+ * `missing` and `pending` (with how many migrations) are answers; everything `assertReadableStorage`
+ * refuses beyond those -- a newer schema, an unreadable or uninitialized file -- is thrown as it
+ * throws it.
+ *
+ * @param {string} databaseFile
+ * @returns {Promise<{storage: "missing" | "pending" | "ready", pendingMigrations: number}>}
+ */
+export async function readStorageReadiness(databaseFile) {
+  if (!(await pathExists(databaseFile))) return { storage: "missing", pendingMigrations: 0 };
+  try {
+    await assertReadableStorage(databaseFile);
+    return { storage: "ready", pendingMigrations: 0 };
+  } catch (error) {
+    if (!(error instanceof SnackError) || error.reason !== "storage_migrations_pending")
+      throw error;
+    const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+    try {
+      const applied = readAppliedMigrations(database);
+      const available = await loadMigrations(migrationDirectory);
+      return {
+        storage: "pending",
+        pendingMigrations: available.filter((migration) => !applied.has(migration.number)).length,
+      };
+    } finally {
+      database.close();
+    }
+  }
+}
+
+/**
  * Refuse to read storage this build cannot interpret.
  *
  * `initializeDatabase` verifies the migration history because it is about to write. The paths

@@ -653,6 +653,9 @@ test("the published command and flag surface has not changed", async () => {
       "--json",
       "--help",
     ],
+    // 1.6.0: a live screen with no flags of its own (decision D1). `--json` is a program-level
+    // option, so `dash --json` parses -- and is refused with `dash_json_unsupported`.
+    dash: ["--help"],
     doctor: ["--source", "--json", "--help"],
     export: ["--format", "--output", "--source", "--since", "--until", "--json", "--help"],
     "setup claude": [

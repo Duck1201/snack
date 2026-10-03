@@ -81,6 +81,7 @@ import {
 import { clearSetupJournal, recoverSetupJournal, writeSetupJournal } from "./setup-journal.js";
 import {
   assertReadableStorage,
+  readStorageReadiness,
   ensureCapacityPeriod,
   createSetupDatabaseBackup,
   initializeDatabase,
@@ -121,6 +122,10 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
  * @property {ExecuteCommand | undefined} [execute]
  * @property {(() => void) | undefined} [openSqliteDriver] opens and closes an in-memory database;
  *   injected so a test can stand in for an addon built for another Node.js
+ * @property {Partial<Omit<import("./dash.js").DashPorts, "storage" | "color">> | undefined} [dash]
+ *   the ports `snack dash` runs on -- terminal, clock, scheduler, sync child, signals -- injected so
+ *   a test drives a session with a fake terminal and a virtual clock; left out, `dash-terminal.js`
+ *   builds the real ones
  * @property {typeof WEIGHTING_VARIANTS | undefined} [weightingVariants] the weighting variants
  *   `status` runs in shadow, `WEIGHTING_VARIANTS` by default; injected so a test can run the answer
  *   alone, with none beside it, and hold today's answer to it
@@ -857,6 +862,81 @@ export async function run(argv, options = {}) {
         now,
         format: wantsJson(this, configuredJson) ? "json" : "human",
         invocationId: invocationId,
+      });
+    });
+
+  program
+    .command("dash")
+    .description("watch every capacity source on one live screen; quit with q")
+    .action(async function dash() {
+      // Every refusal before the alternate buffer is entered and before anything is written to
+      // storage or to the screen, in the order `docs/specification/cli.md` §12.12 lists them.
+      if (this.optsWithGlobals().json === true) {
+        throw new SnackError(
+          "snack dash draws a screen and has no JSON form; `snack status --json` gives the same reading as a document.",
+          { code: ExitCode.usage, reason: "dash_json_unsupported" },
+        );
+      }
+      const env = options.env ?? process.env;
+      const screenOut = /** @type {{isTTY?: boolean}} */ (stdout);
+      const keysIn = /** @type {{isTTY?: boolean}} */ (/** @type {unknown} */ (stdin));
+      const term = env.TERM ?? "";
+      if (screenOut.isTTY !== true || keysIn.isTTY !== true || term === "" || term === "dumb") {
+        throw new SnackError(
+          "snack dash needs an interactive terminal; `snack status` gives the same reading through a pipe.",
+          { code: ExitCode.usage, reason: "dash_requires_terminal" },
+        );
+      }
+      await recoverSetupJournal(paths);
+      const current = await readConfig(paths.configFile);
+      const inScope = Array.isArray(current.sources)
+        ? current.sources.filter(isConfiguredSource)
+        : [];
+      const selected = byCapacitySource(inScope);
+      if (selected.length === 0) {
+        throw new SnackError("The requested capacity source is unavailable or ambiguous.", {
+          code: ExitCode.unavailable,
+          reason: "source_unavailable",
+        });
+      }
+      // Missing and a schema behind are not refusals: the first sync child creates or migrates
+      // storage, with its backup, and the screen says so meanwhile. Newer or unreadable is.
+      await readStorageReadiness(paths.databaseFile);
+      const color = supportsColor(stdout, env);
+      // Imported here, so no other command pays for loading the screen, the widgets or the
+      // controller.
+      const { createStoragePort, runDash } = await import("./dash.js");
+      const injected = options.dash ?? {};
+      const real =
+        injected.terminal === undefined ||
+        injected.clock === undefined ||
+        injected.scheduler === undefined ||
+        injected.sync === undefined ||
+        injected.signals === undefined
+          ? (await import("./dash-terminal.js")).createTerminalPorts({
+              stdin: /** @type {NodeJS.ReadStream} */ (/** @type {unknown} */ (stdin)),
+              stdout: /** @type {NodeJS.WriteStream} */ (/** @type {unknown} */ (stdout)),
+              env,
+            })
+          : undefined;
+      commandExitCode = await runDash({
+        terminal: injected.terminal ?? /** @type {NonNullable<typeof real>} */ (real).terminal,
+        clock: injected.clock ?? /** @type {NonNullable<typeof real>} */ (real).clock,
+        scheduler: injected.scheduler ?? /** @type {NonNullable<typeof real>} */ (real).scheduler,
+        sync: injected.sync ?? /** @type {NonNullable<typeof real>} */ (real).sync,
+        signals: injected.signals ?? /** @type {NonNullable<typeof real>} */ (real).signals,
+        ...(injected.probe === undefined ? {} : { probe: injected.probe }),
+        storage: createStoragePort({
+          paths,
+          config: current,
+          selected,
+          inScope,
+          invocationId,
+          ...(options.weightingVariants === undefined
+            ? {}
+            : { weightingVariants: options.weightingVariants }),
+        }),
+        color,
       });
     });
 

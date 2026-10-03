@@ -8,9 +8,14 @@ import { renderQuestion } from "./terminal-prompt.js";
 // the stdout socket, which would replace the output with a stack trace. Ending quietly is what
 // every other Unix tool does, and it is the only sensible answer: the consumer got what it
 // asked for.
+//
+// `EIO` is the same event on a terminal: the TTY under `snack dash` closed (the window went away),
+// and there is no one left to report anything to. The dash's own listener ends its session
+// quietly; this keeps the error from escaping as an uncaught exception mid-screen.
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (error) => {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code !== "EPIPE") throw error;
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    if (code !== "EPIPE" && code !== "EIO") throw error;
   });
 }
 

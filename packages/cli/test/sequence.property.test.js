@@ -131,9 +131,21 @@ test("nothing searches for a length: one call site, and no solver anywhere in th
       );
     }
   }
-  assert.deepEqual(callers, ["status.js"]);
+  // `snack dash` (1.6.0, decision D3) is the second caller: the person's N, stepped by a key.
+  assert.deepEqual(callers.sort(), ["dash.js", "status.js"]);
   const status = await readFile(new URL("status.js", directory), "utf8");
   assert.match(status, /assessSequence\(forecast, request\.sequenceLength\)/u);
+  const dash = await readFile(new URL("dash.js", directory), "utf8");
+  assert.match(dash, /assessSequence\(report, state\.sequenceLength\)/u);
+  // Its length moves only by the person's keys: shown at the length they last had, or exactly one
+  // step within 1..SEQUENCE_MAX_LENGTH. Nothing assigns it from a probability.
+  const assignments = [...dash.matchAll(/state\.sequenceLength = ([^;]+);/gu)].map((match) =>
+    String(match[1]).replace(/\s+/gu, " "),
+  );
+  assert.deepEqual(assignments, [
+    "state.sequenceLength === null ? lastLength : null",
+    "Math.min( SEQUENCE_MAX_LENGTH, Math.max(1, state.sequenceLength + step), )",
+  ]);
 });
 
 /** One configured history with two sources, so every report and every path is exercised. */
