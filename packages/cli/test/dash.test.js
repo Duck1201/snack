@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { rm, writeFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
+import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers";
 
 import Database from "better-sqlite3";
@@ -699,4 +700,27 @@ test("the warnings a reading carries are written to standard error once the term
   assert.equal(lines.length, 1, dash.stderr.value);
   assert.match(String(lines[0]), /^Warning: Plan profile ".*absent-profile\.json" is unavailable/u);
   assert.equal(dash.terminal.inAltBuffer, false);
+});
+
+test("a terminal error after the session let go of the streams is absorbed, never thrown", async () => {
+  // The dash may outlive its screen by a moment -- waiting for a write in flight, or for its sync
+  // child -- and an `EIO` emitted then, with no listener, would crash the process instead.
+  const { createTerminalPorts } = await import("../src/dash-terminal.js");
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const ports = createTerminalPorts({
+    stdin: /** @type {never} */ (stdin),
+    stdout: /** @type {never} */ (stdout),
+    env: {},
+  });
+  let gone = 0;
+  const off = ports.terminal.onGone(() => {
+    gone += 1;
+  });
+  stdin.emit("error", new Error("EIO"));
+  assert.equal(gone, 1);
+  off();
+  assert.doesNotThrow(() => stdin.emit("error", new Error("EIO")));
+  assert.doesNotThrow(() => stdout.emit("error", new Error("EIO")));
+  assert.equal(gone, 1);
 });

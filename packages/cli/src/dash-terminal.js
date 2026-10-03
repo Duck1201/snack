@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url";
  * pseudo-terminal; everything it does is wiring, and every decision is `dash.js`'s.
  */
 
+/** Swallows a stream error once nothing is left to tell. */
+const ignore = () => {};
+
 /** The executable a sync child runs: this very build's, resolved from this module. */
 const CLI = fileURLToPath(new URL("./cli.js", import.meta.url));
 
@@ -62,6 +65,10 @@ export function createTerminalPorts({ stdin, stdout, env }) {
         return () => {
           stdin.off("error", listener);
           stdout.off("error", listener);
+          // The process can outlive the session by a moment -- a write in flight, the sync child --
+          // and an error emitted with no listener would crash it. Absorbed: the session is over.
+          stdin.on("error", ignore);
+          stdout.on("error", ignore);
         };
       },
     },
