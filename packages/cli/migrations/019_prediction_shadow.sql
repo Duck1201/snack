@@ -12,6 +12,12 @@
 -- half-lives. `prediction_reported_capacity` keeps the `reported-capacity` shadow, which carries its
 -- binding window: it is neither moved nor touched.
 --
+-- No cross-column CHECK that the interval contains its point, unlike 007's: a shadow row shares the
+-- answer's transaction, so a shadow that broke it would take the answer down with it. Until 1.6.0
+-- an equal-tailed interval could exclude its own mean on a valid user profile's prior, and that
+-- CHECK on the attempt row made `status` exit 10; `assembleForecast` now widens the interval to
+-- contain the point, so the rule holds by construction rather than by refusal.
+--
 -- Content-free by shape: version identifiers and numbers. Not exported: a new table would fail every
 -- version-2 export validator.
 CREATE TABLE prediction_shadow (
@@ -29,8 +35,7 @@ CREATE TABLE prediction_shadow (
   backoff_level TEXT NOT NULL,
   posterior_alpha REAL NOT NULL CHECK (posterior_alpha > 0.0),
   posterior_beta REAL NOT NULL CHECK (posterior_beta > 0.0),
-  PRIMARY KEY (prediction_attempt_id, method_id, method_version),
-  CHECK (lower <= point AND point <= upper)
+  PRIMARY KEY (prediction_attempt_id, method_id, method_version)
 ) STRICT;
 
 -- Immutable like its parent: never rewritten, and deleted only by the connection `data purge`

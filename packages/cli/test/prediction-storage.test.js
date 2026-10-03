@@ -598,7 +598,7 @@ test("an attempt, its sequence, its reported shadow and its weighting variants c
         attempt({ generated_at: "2026-01-09T01:00:00.000Z" }),
         sequenceRow(),
         shadowRow(),
-        [weightingRow("50"), weightingRow("100", { lower: 0.99 })],
+        [weightingRow("50"), weightingRow("100", { lower: 1.5 })],
       ),
     /CHECK constraint failed/u,
   );

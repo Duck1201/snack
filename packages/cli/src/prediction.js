@@ -488,7 +488,16 @@ export function assembleForecast(input) {
   const alpha = input.prior.strength * input.prior.viability + cell.weighted_successes;
   const beta = input.prior.strength * (1 - input.prior.viability) + cell.weighted_restrictions;
   const tail = (1 - policy.coverage_target) / 2;
-  const lower = betaQuantile(tail, alpha, beta);
+  const point = alpha / (alpha + beta);
+  // A mean need not sit inside an equal-tailed interval. On a posterior with almost no weight on
+  // one side -- Beta(0.99, 0.01), from a valid user profile's prior -- the 10% quantile lies above
+  // the mean, and an interval that excludes its own point is no estimate at all (until 1.6.0 the
+  // attempt row refused it and `status` exited 10). The interval is widened to contain the point,
+  // as `assessSequence` widens a sequence's, which keeps at least `coverage_target` of the
+  // posterior inside. Wherever the quantiles already contain the mean -- on every posterior a
+  // bundled profile's prior can produce -- `Math.min` and `Math.max` return the quantile itself,
+  // bit for bit.
+  const lower = Math.min(betaQuantile(tail, alpha, beta), point);
 
   return {
     // A forecast the weak prior alone produced is named as the initial heuristic it is;
@@ -501,8 +510,8 @@ export function assembleForecast(input) {
           : { id: "bayesian-pressure-band", version: "1" },
     viability: {
       lower,
-      point: alpha / (alpha + beta),
-      upper: betaQuantile(1 - tail, alpha, beta),
+      point,
+      upper: Math.max(betaQuantile(1 - tail, alpha, beta), point),
       coverage_target: policy.coverage_target,
     },
     risk: classifyRisk(lower),

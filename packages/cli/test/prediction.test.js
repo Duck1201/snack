@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
 import { test } from "node:test";
 
 import fc from "fast-check";
+
+import { betaQuantile } from "../src/beta.js";
+import { resolvePlanProfile } from "../src/plan-profile.js";
+import { REPORTED_CAPACITY_POLICY } from "../src/reported-capacity.js";
 
 import {
   EVIDENCE_POLICY,
@@ -1061,5 +1066,111 @@ test("buildForecast without a method is the forecast it always was", () => {
       );
     }),
     { numRuns: 100 },
+  );
+});
+
+// --- The interval contains its point (1.6.0) ---
+
+/** @param {number} successes @param {number} restrictions */
+const cellOf = (successes, restrictions) => ({
+  prompts_considered: 0,
+  limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
+  successes: 0,
+  restrictions: 0,
+  excluded: 0,
+  weighted_successes: successes,
+  weighted_restrictions: restrictions,
+  effective_samples: successes + restrictions,
+  alpha: 0,
+  beta: 0,
+});
+const weight = fc.oneof(
+  fc.constant(0),
+  fc.double({ min: 0, max: 1e-6, noNaN: true }),
+  fc.double({ min: 0, max: 200, noNaN: true }),
+  fc.double({ min: 0, max: 1e4, noNaN: true }),
+);
+const policies = [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)];
+
+test("every forecast's interval contains its point, whatever valid prior a profile declares", () => {
+  // A user profile may declare any prior strength in (0, 100] and viability in (0, 1). With
+  // `prior_strength: 1, prior_viability: 0.99` the raw 10% quantile lies above the mean, which
+  // until 1.6.0 made `status` exit 10 on the attempt row's CHECK.
+  fc.assert(
+    fc.property(
+      fc.double({ min: 1e-6, max: 100, noNaN: true }),
+      fc.double({ min: 1e-6, max: 1 - 1e-6, noNaN: true }),
+      weight,
+      weight,
+      (strength, viability, successes, restrictions) => {
+        const result = assembleForecast({
+          cell: cellOf(successes, restrictions),
+          level: "period",
+          prior: { strength, viability },
+          policy: PREDICTION_POLICY,
+          dataCompleteness: "complete",
+        });
+        const { lower, point, upper } = result.viability;
+        assert.ok(lower <= point && point <= upper, JSON.stringify(result.viability));
+        const { alpha, beta } = result.contributors.evidence_window;
+        assert.equal(lower, Math.min(betaQuantile((1 - 0.8) / 2, alpha, beta), point));
+        assert.equal(upper, Math.max(betaQuantile(1 - (1 - 0.8) / 2, alpha, beta), point));
+        assert.equal(result.risk.label, classifyRisk(lower).label);
+      },
+    ),
+    { numRuns: 500 },
+  );
+  // The case the defect report named, so the property is not vacuous.
+  const confident = assembleForecast({
+    cell: cellOf(0, 0),
+    level: "prior",
+    prior: { strength: 1, viability: 0.99 },
+    policy: PREDICTION_POLICY,
+    dataCompleteness: "complete",
+  });
+  assert.ok(betaQuantile(0.1, 0.99, 0.01) > 0.99);
+  assert.equal(confident.viability.lower, confident.viability.point);
+});
+
+test("on every prior SNACK ships, containing the point changes no double", () => {
+  // The bundled profiles and the `reported-capacity` full-statement prior: for every posterior they
+  // can reach, the equal-tailed quantiles already contain the mean, so the widening is a no-op and
+  // every bundled answer is the one 1.5.0 gave, bit for bit.
+  const directory = new URL("../profiles/plans/", import.meta.url);
+  const priors = readdirSync(directory)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      const { profile, warnings } = resolvePlanProfile({ plan_profile: name.slice(0, -5) });
+      assert.deepEqual(warnings, []);
+      return { strength: profile.prior_strength, viability: profile.prior_viability };
+    });
+  assert.equal(priors.length, 3);
+  priors.push(REPORTED_CAPACITY_POLICY.full_prior);
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...priors),
+      fc.constantFrom(...policies),
+      weight,
+      weight,
+      (prior, policy, successes, restrictions) => {
+        const result = assembleForecast({
+          cell: cellOf(successes, restrictions),
+          level: "period",
+          prior,
+          policy,
+          dataCompleteness: "complete",
+        });
+        const { alpha, beta } = result.contributors.evidence_window;
+        const tail = (1 - policy.coverage_target) / 2;
+        // `deepStrictEqual` compares doubles with Object.is: the raw quantiles, untouched.
+        assert.deepEqual(result.viability, {
+          lower: betaQuantile(tail, alpha, beta),
+          point: alpha / (alpha + beta),
+          upper: betaQuantile(1 - tail, alpha, beta),
+          coverage_target: policy.coverage_target,
+        });
+      },
+    ),
+    { numRuns: 2000 },
   );
 });

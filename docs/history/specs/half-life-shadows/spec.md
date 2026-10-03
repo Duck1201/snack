@@ -616,5 +616,16 @@ source; it is the same object as `shadow`.
   `shadow`, it does not forbid them otherwise.
 - **The answer's collapse comment** in `prediction.simulation.test.js` read "0/25 at two hours"; the
   test measures 1/25 there, and now says so and asserts both counts.
+- **A released defect, fixed here: a valid user profile made `status` exit 10.** With
+  `prior_strength: 1, prior_viability: 0.99` the posterior is `Beta(0.99, 0.01)`, whose 10% quantile
+  (0.99997) lies above its mean (0.99); `007`'s `CHECK (lower <= point AND point <= upper)` refused
+  the attempt row. Reproduced at `v1.5.0`; reachable for a prior β (or α) between about 0.01 and
+  0.05; never on a bundled profile. `assembleForecast` now widens the interval to contain the point
+  (`min`/`max`, the rule `assessSequence` already applied), a no-op on every posterior a bundled prior
+  can reach — held by property in `prediction.test.js`, and the frozen corpora replay unchanged — so
+  `PREDICTION_POLICY.version` does not move. The schema was not tightened: rejecting a configuration
+  `1.5` accepted is not a minor's change. `019`, unreleased, was edited in place to drop the same
+  cross-column CHECK, so a shadow row can never abort the answer's transaction; no test pinned its
+  checksum. `compatibility.md` records the fix in its `1.6.0` section.
 - **Left to the release PR:** ADR-0011, the roadmap entry, `docs/release/performance.md`, the
   changeset and the version. The measured budgets are in the build report.

@@ -514,6 +514,23 @@ snapshot through the path `status` uses, written only when what is shown changed
 carried as `predictions.delivery_format` and `export.schema.json` has never constrained. No
 migration comes from the dash, and its `next N` row records no `prediction_sequence`.
 
+**One fix: a valid user plan profile no longer makes `status` exit `10`.** A profile declaring a
+prior with almost no weight on one side — `prior_strength: 1, prior_viability: 0.99` is
+`Beta(0.99, 0.01)` — gives a posterior whose equal-tailed interval excludes its own mean (lower
+0.99997, point 0.99), and the attempt row's `CHECK (lower <= point AND point <= upper)` from `007`
+refused it: `status` exited `10` on every invocation, reproduced at `v1.5.0`, reachable when the
+prior's β (or α) is between about 0.01 and 0.05. `plan-profile.schema.json` accepts those profiles
+and is not tightened — refusing a configuration `1.5` accepted would not be
+compatible. The interval is instead widened to contain the point (`lower = min(q, point)`,
+`upper = max(q, point)`), the rule `status --sequence` has applied since `1.4.0`; it keeps at least
+`coverage_target` of the posterior inside. On every posterior a bundled profile can reach the
+quantiles already contain the mean, so the widening changes no double there — a property test holds
+it for every bundled prior and the `reported-capacity` full prior, and the frozen corpora replay
+unchanged. `PREDICTION_POLICY.version` therefore stays `stage5-prediction-v2`: no bundled answer
+moves, and the only numbers that move are ones no release could deliver — the answer `status` never
+gave on such a profile and `stats`' replay of it, whose intervals excluded their own points. The
+unreleased `019` carries no such CHECK, so a shadow can never take the answer's transaction down.
+
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`; each variant names its own policy. No new
 flag on an existing command, no exit code and no configuration key; the only new reason values are
