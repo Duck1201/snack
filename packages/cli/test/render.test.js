@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import fc from "fast-check";
+
 import { renderStats, renderStatus, renderStatusTable, sparkline } from "../src/render.js";
 
 test("a series of scores draws one block per window, low to high", () => {
@@ -842,7 +844,7 @@ test("the sequence row sits beneath the next prompt row and says all of them go 
   const lines = text.split("\n");
 
   assert.equal(lines[1], "  next prompt  95-100% chance it goes through · risk low");
-  assert.equal(lines[2], "  next 10      64-100% chance all 10 go through · risk elevated");
+  assert.equal(lines[2], "  next 10      63-100% chance all 10 go through · risk elevated");
   // The word "prompts" is never set beside the number, so the row cannot read as a count a plan
   // allows; the only integers in it besides the interval are the user's own N, echoed.
   assert.doesNotMatch(lines[2], /\d+\s+prompts?/u);
@@ -946,4 +948,127 @@ test("a sequence caveat every panel carries is stated once beneath them", () => 
 
   assert.equal(text.split("\n").filter((line) => line.includes(caveat)).length, 1);
   assert.equal(text.split("\n").filter((line) => line.startsWith("  next 5 ")).length, 2);
+});
+
+/**
+ * The two ends of every interval a status panel shows, as numbers, in the order they appear.
+ *
+ * @param {string} text
+ */
+function shownIntervals(text) {
+  return [...text.matchAll(/(\d+)-(\d+)% chance/gu)].map((match) => [
+    Number(match[1]),
+    Number(match[2]),
+  ]);
+}
+
+test("a shown interval is rounded outward, so it contains the estimate it stands for", () => {
+  // Beta(1, 1.25) at N = 4 has an upper end of 0.5015. Rounded to the nearest percent it read
+  // `0-50%` beside a caveat saying the interval cannot tell whether going through is more likely
+  // than not -- which a `0-50%` plainly can. Floor the lower end, ceil the upper.
+  const text = renderStatus(
+    [
+      statusFor({
+        viability: { lower: 0.1249, point: 0.2, upper: 0.5015, coverage_target: 0.8 },
+        sequence: sequenceFor(4, { lower: 0.0001, upper: 0.5015 }, "high"),
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.deepEqual(shownIntervals(text), [
+    [12, 51],
+    [0, 51],
+  ]);
+  // The overview's column is the same interval, so it rounds the same way.
+  const overview = renderStatusTable(
+    [statusFor({ viability: { lower: 0.1249, point: 0.2, upper: 0.5015, coverage_target: 0.8 } })],
+    { color: false, columns: 80 },
+  );
+  assert.match(overview, / 12-51% /u);
+});
+
+test("an end that is a whole percent before floating error is not pushed a point outward", () => {
+  // 0.95 * 100 is 94.99999999999999 and 0.07 * 100 is 7.000000000000001; both are the whole
+  // percent they were written as, and a bare floor and ceil would show `94` and `8`.
+  const text = renderStatus(
+    [
+      statusFor({
+        viability: { lower: 0.95, point: 0.97, upper: 0.99, coverage_target: 0.8 },
+        sequence: sequenceFor(3, { lower: 0.07, upper: 0.29 }, "high"),
+      }),
+    ],
+    { color: false },
+  );
+
+  assert.deepEqual(shownIntervals(text), [
+    [95, 99],
+    [7, 29],
+  ]);
+});
+
+test("every shown interval contains the true one and stays inside 0-100", () => {
+  const unit = fc.double({ min: 0, max: 1, noNaN: true });
+  fc.assert(
+    fc.property(unit, unit, unit, unit, (a, b, c, d) => {
+      const [lower, upper] = a <= b ? [a, b] : [b, a];
+      const [sequenceLower, sequenceUpper] = c <= d ? [c, d] : [d, c];
+      const text = renderStatus(
+        [
+          statusFor({
+            viability: { lower, point: lower, upper, coverage_target: 0.8 },
+            sequence: sequenceFor(7, { lower: sequenceLower, upper: sequenceUpper }, "high"),
+          }),
+        ],
+        { color: false },
+      );
+      const truth = [
+        [lower, upper],
+        [sequenceLower, sequenceUpper],
+      ];
+      const shown = shownIntervals(text);
+      assert.equal(shown.length, 2);
+      shown.forEach(([low = NaN, high = NaN], index) => {
+        const [trueLow = NaN, trueHigh = NaN] = truth[index] ?? [];
+        // A whole-percent end may sit within float error of its true value, never further.
+        assert.ok(low <= trueLow * 100 + 1e-6, `${low} above ${trueLow}`);
+        assert.ok(high >= trueHigh * 100 - 1e-6, `${high} below ${trueHigh}`);
+        assert.ok(low >= 0 && high <= 100 && low <= high);
+      });
+    }),
+    { numRuns: 2000 },
+  );
+});
+
+test("a too-wide sequence interval always shows even odds strictly inside it", () => {
+  // `sequence-width-v1` flags an interval wider than one half, which necessarily holds 0.5 strictly
+  // inside it. The caveat says so in words, so the shown interval must say so in digits: an end
+  // that rounds onto 50 from the far side would contradict the sentence beneath it.
+  const unit = fc.double({ min: 0, max: 1, noNaN: true });
+  fc.assert(
+    fc.property(unit, unit, (a, b) => {
+      const [lower, upper] = a <= b ? [a, b] : [b, a];
+      fc.pre(upper - lower > 0.5);
+      const text = renderStatus(
+        [statusFor({ sequence: sequenceFor(9, { lower, upper }, "high") })],
+        { color: false },
+      );
+      const [low = NaN, high = NaN] = shownIntervals(text)[1] ?? [];
+      assert.ok(low < 50 && high > 50, `${low}-${high}% for ${lower}-${upper}`);
+    }),
+    { numRuns: 2000 },
+  );
+  /** @type {[number, number][]} */
+  const edges = [
+    [0.4999999999999, 0.99999999999995],
+    [0.0001, 0.5015],
+    [0.4999, 1],
+  ];
+  for (const [lower, upper] of edges) {
+    const text = renderStatus([statusFor({ sequence: sequenceFor(9, { lower, upper }, "high") })], {
+      color: false,
+    });
+    const [low = NaN, high = NaN] = shownIntervals(text)[1] ?? [];
+    assert.ok(low < 50 && high > 50, `${low}-${high}% for ${lower}-${upper}`);
+  }
 });

@@ -370,6 +370,12 @@ used, and a test asserts it. `data purge` deletes the rows with their attempts a
 for every migration; `storage.test.js` upgrades every published schema level, `1.3.0`'s included,
 straight to `016`, and `npm run upgrade:smoke` upgrades a database the published `1.3.0` wrote.
 
+**Human formatting only: intervals are rounded outward.** Every viability interval the human
+`status` output shows — the overview column, `next prompt` and `next <n>` — floors its lower end and
+ceils its upper end to a whole percent, where `1.3` rounded both to the nearest one. A shown end can
+move by one point (`0.6394` was `64` and is `63`). Human formatting is not a frozen surface, and no
+`--json` value, corpus document or export byte changes with it.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a

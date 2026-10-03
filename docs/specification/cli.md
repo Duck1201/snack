@@ -83,6 +83,16 @@ that level supports, the pressure band with the reading behind it, the top press
 the expected prompt category, the active period, the data age, the synchronization status, and the
 uncertainty statement.
 
+**A shown interval is rounded outward.** Every viability interval a human surface shows — the
+overview's `NEXT PROMPT` column, the `next prompt` row, the `next <n>` row — is stated in whole
+percents with its lower end rounded down and its upper end rounded up, so the interval shown always
+contains the interval estimated and never claims more certainty than the estimate has. An end within
+float error of a whole percent is that percent (`0.95` shows as `95`, not `94`), and that allowance
+never carries an end across even odds: an end below one half shows below `50`, one above it shows
+above `50`. From 1.4.0; rounding to the nearest percent before it showed an upper end of `0.5015` as
+`50%`. The `--json` values are unrounded and unchanged; only the human formatting rounds, and it is
+not a frozen surface.
+
 The method identifier and its version, the model policy version, the evidence gates, and the
 percentile each pressure contributor ranks at are **not** in the default human output. They identify
 and qualify the estimate rather than state it, and the reader of a panel is a developer deciding

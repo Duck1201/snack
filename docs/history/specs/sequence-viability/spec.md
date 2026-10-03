@@ -648,5 +648,15 @@ in words, instead of leaving the reader to think the tool failed.
   No command closes a period without opening the next, so the command test reaches that state by
   closing the period in the database after `sync`; it asserts exit `0`, the sequence answered, and
   no `prediction_attempt` or `prediction_sequence` row.
+- **Shown intervals are rounded outward** (§6.1 said "Rounding is `bare()`/`percent()`, the same
+  as the `next prompt` row"). Rounded to the nearest percent, a too-wide interval could show 50 as
+  an end: Beta(1, 1.25) at `N = 4` has an upper end of 0.5015 and showed `0-50%` beside the caveat
+  that it cannot tell whether going through is more likely than not. Every shown viability
+  interval — the overview column, `next prompt` and `next <n>`, so `N = 1` still reads exactly as
+  `next prompt` — now floors its lower end and ceils its upper one, after snapping an end within
+  `1e-9` of a whole percent to it (`0.95 · 100` is `94.99999999999999`), and that snap never
+  carries an end across 50. So a shown interval always contains the estimated one, and a too-wide
+  one always shows 50 strictly inside it; `render.test.js` holds both as properties. The §6.1
+  example reads `63-100%` for a lower end of 0.6394. `--json` is unchanged.
 - **READMEs, CHANGELOGs, the changeset and the release cut** (§6.4, §8 slice 4) are left to the
   release's docs pass.
