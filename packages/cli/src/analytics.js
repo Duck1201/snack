@@ -1,4 +1,4 @@
-import { betaQuantile } from "./beta.js";
+import { betaInterval } from "./beta.js";
 import { ExitCode, SnackError } from "./errors.js";
 
 const HORIZON_PATTERN = /^P(?!$)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
@@ -745,10 +745,11 @@ function restrictionShare(restricted, eligible, policy) {
   const tail = (1 - policy.coverage_target) / 2;
   const alpha = 1 + restricted;
   const beta = 1 + (eligible - restricted);
+  const { lower, upper } = betaInterval(tail, 1 - tail, alpha, beta);
   return {
     value: eligible === 0 ? null : restricted / eligible,
-    lower: betaQuantile(tail, alpha, beta),
-    upper: betaQuantile(1 - tail, alpha, beta),
+    lower,
+    upper,
     coverage_target: policy.coverage_target,
   };
 }

@@ -177,15 +177,80 @@ function incompleteBeta(x, alpha, beta, forward, backward) {
 export function betaQuantile(probability, alpha, beta) {
   requirePositive(alpha, "alpha");
   requirePositive(beta, "beta");
+  requireFinite(probability);
+  if (probability <= 0) return 0;
+  if (probability >= 1) return 1;
+  return quantile(probability, alpha, beta, shapeConstants(alpha, beta));
+}
+
+/**
+ * Two quantiles of one Beta(alpha, beta) -- the two ends of a credible interval -- from one
+ * log-gamma setup.
+ *
+ * Each end is the double `betaQuantile` returns for it, bit for bit: the normalizers depend on the
+ * shapes alone, and are computed once here rather than once per end. Replaying a six-figure history
+ * asks for two ends of every forecast, so the setup was paid twice for nothing.
+ *
+ * @param {number} lowerProbability
+ * @param {number} upperProbability
+ * @param {number} alpha Positive shape parameter.
+ * @param {number} beta Positive shape parameter.
+ * @returns {{lower: number, upper: number}}
+ */
+export function betaInterval(lowerProbability, upperProbability, alpha, beta) {
+  requirePositive(alpha, "alpha");
+  requirePositive(beta, "beta");
+  requireFinite(lowerProbability);
+  requireFinite(upperProbability);
+  /** @type {ReturnType<typeof shapeConstants> | undefined} */
+  let constants;
+  /** @param {number} probability */
+  const end = (probability) => {
+    if (probability <= 0) return 0;
+    if (probability >= 1) return 1;
+    constants ??= shapeConstants(alpha, beta);
+    return quantile(probability, alpha, beta, constants);
+  };
+  return { lower: end(lowerProbability), upper: end(upperProbability) };
+}
+
+/** @param {number} probability */
+function requireFinite(probability) {
   if (!Number.isFinite(probability)) {
     throw new RangeError(`probability must be finite, received ${probability}`);
   }
-  if (probability <= 0) return 0;
-  if (probability >= 1) return 1;
+}
 
-  const logBeta = logGamma(alpha) + logGamma(beta) - logGamma(alpha + beta);
-  const forward = logNormalizer(alpha, beta);
-  const backward = logNormalizer(beta, alpha);
+/**
+ * What the quantile's search needs from the shapes alone: three log-gammas, combined in exactly the
+ * order `logNormalizer` and the density have always combined them, so each result is the double
+ * they produced. `Γ(beta + alpha)` is `Γ(alpha + beta)`: floating-point addition commutes.
+ *
+ * @param {number} alpha
+ * @param {number} beta
+ */
+function shapeConstants(alpha, beta) {
+  const ofAlpha = logGamma(alpha);
+  const ofBeta = logGamma(beta);
+  const ofSum = logGamma(alpha + beta);
+  return {
+    logBeta: ofAlpha + ofBeta - ofSum,
+    forward: ofSum - ofAlpha - ofBeta,
+    backward: ofSum - ofBeta - ofAlpha,
+  };
+}
+
+/**
+ * The Newton-in-a-bracket search, for a probability strictly inside (0, 1).
+ *
+ * @param {number} probability
+ * @param {number} alpha
+ * @param {number} beta
+ * @param {{logBeta: number, forward: number, backward: number}} constants
+ * @returns {number}
+ */
+function quantile(probability, alpha, beta, constants) {
+  const { logBeta, forward, backward } = constants;
   let low = 0;
   let high = 1;
   let guess = alpha / (alpha + beta);

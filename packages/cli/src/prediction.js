@@ -5,7 +5,7 @@
  * profile prior. It consumes domain-shaped rows and never queries SQLite.
  */
 
-import { betaQuantile } from "./beta.js";
+import { betaInterval } from "./beta.js";
 import { REPORTED_CAPACITY_POLICY, REPORTED_EVIDENCE_RELEVANCE } from "./reported-capacity.js";
 
 /** Versioned model policy. Every forecast names the policy that produced it. */
@@ -497,7 +497,8 @@ export function assembleForecast(input) {
   // posterior inside. Wherever the quantiles already contain the mean -- on every posterior a
   // bundled profile's prior can produce -- `Math.min` and `Math.max` return the quantile itself,
   // bit for bit.
-  const lower = Math.min(betaQuantile(tail, alpha, beta), point);
+  const quantiles = betaInterval(tail, 1 - tail, alpha, beta);
+  const lower = Math.min(quantiles.lower, point);
 
   return {
     // A forecast the weak prior alone produced is named as the initial heuristic it is;
@@ -511,7 +512,7 @@ export function assembleForecast(input) {
     viability: {
       lower,
       point,
-      upper: Math.max(betaQuantile(1 - tail, alpha, beta), point),
+      upper: Math.max(quantiles.upper, point),
       coverage_target: policy.coverage_target,
     },
     risk: classifyRisk(lower),
