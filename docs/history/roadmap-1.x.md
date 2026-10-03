@@ -454,13 +454,23 @@ that prefix; an install with the flag under both npm 11.16.0 and npm 12 loads th
 
 **Reading the latest figure blew the `status` budget.** Ranking the whole history of statements on every `status` measured 474–658 ms p95 at 200,000 rows against a 250 ms budget. Migration `015` gained `reported_capacity_latest`, a pointer kept in the transaction that inserts, and the read is guarded by its query plan in a test rather than by a clock.
 
-### 1.4.0 - `status --sequence N`
+### 1.4.0 - `status --sequence N` — **shipped**
 
 - the probability that N consecutive prompts all complete without an observed restriction, reported as an interval with an evidence level, a risk label, and a named method — the same shape as the single-prompt answer;
 - N is always supplied by the user. SNACK never inverts the relation, because a count derived from a probability is a claim about remaining capacity;
 - an additive field in the existing envelope; no new command, no new envelope.
 
-**Exit:** `status --json` validates against `status.schema.json` extended with an optional `sequence` — no version moves, the envelope stays at `2` — and every frozen corpus (`0.9`, `1.2`, `1.3`) still validates against it unchanged; no output path can produce a count of prompts.
+**Exit, met.** `status --json` validates against `status.schema.json` extended with an optional `sequence` — no version moves, the envelope stays at `2` — and every frozen corpus (`0.9`, `1.2`, and the `1.3` corpus captured at `v1.3.0` before any `1.4` change) still validates against it unchanged. No output path can produce a count of prompts: the length is only an echo of argv, a property test holds that nothing but `sequence` and its caveats depends on it, a scan of the source finds no solver for a length, and `vocabulary.test.js` refuses a number, `<n>` or `N` set before "prompts" on every help page and in the manual. Without `--sequence` every byte is what `1.3` emitted; at `--sequence 1` the answer is the single-prompt one, bit for bit; `stats` and `export` are byte-identical whether or not the flag was ever used.
+
+**Where the plan above was wrong.**
+
+**There was no `1.0` corpus.** The exit line asked for one. `1.0` confirmed the freeze without changing a surface, so the `0.9` corpus captured at `v0.9.0` is the `1.0` contract, and the corpora that exist are `0.9`, `1.2` and — captured first, before any file under `packages/` moved — `1.3`.
+
+**The schema was not version-bumped, because additive fields do not bump.** The plan said "a version-bumped schema". `sequence` is a new optional member a consumer can ignore, which is additive under the rule `docs/compatibility.md` already states; and `envelope.schema.json` pins `schema_version` as a constant, so bumping it would have failed every frozen corpus — the opposite of the exit criterion. The exit line was corrected to say so before the build.
+
+**A wide answer needed words of its own.** The plan asked for an interval and stopped there. A long sequence on a short history produces ranges like `0-78%`, which a reader takes for a broken tool. An interval wider than half the probability scale (`sequence-width-v1`) contains even odds, cannot say whether the run is more likely to go through than not, and is now said to be too wide to inform, in a caveat and in `sequence.width`. The caveat's first wording advised a shorter sequence or more history; it was withdrawn in review, because the width is not monotone in either, and the advice would have had the reader search `N` for a probability — the inversion the release exists to refuse.
+
+**The answer is recorded, which took a table.** The plan was silent on persistence. Every forecast SNACK shows is stored as an immutable attempt, and leaving the sequence out would have contradicted that; scoring it as an attempt would have corrupted live calibration, because a sequence is not a forecast about one prompt (ADR-0008). Migration `016` adds `prediction_sequence`, keyed on its attempt, written in the same transaction with the posterior that produced it, immutable, deleted only by `data purge` with its attempt, and neither exported nor calibrated in `1.4`.
 
 ### 1.5.0 - `reported_capacity_v1` prediction method
 
