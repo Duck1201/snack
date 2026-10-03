@@ -368,7 +368,7 @@ calibration stream (ADR-0008), so `stats` is byte-identical whether or not `--se
 used, and a test asserts it. `data purge` deletes the rows with their attempts and counts them with
 `counts.predictions`, so `data-purge.schema.json` does not move. The pre-migration backup is taken as
 for every migration; `storage.test.js` upgrades every published schema level, `1.3.0`'s included,
-straight to `016`.
+straight to `016`, and `npm run upgrade:smoke` upgrades a database the published `1.3.0` wrote.
 
 ## Upgrading from 0.6+
 
