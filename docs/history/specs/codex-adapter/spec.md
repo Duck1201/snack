@@ -791,3 +791,9 @@ purges.
   data, and it recovers on the next `sync` once the permission returns. The `source_sync_failed`
   warning, for every source, now ends "run `snack doctor` for the cause"; `doctor` reports the
   Codex source inaccessible. Neither names a path.
+- **The O(groups) read is guarded by its plan, not a clock** (amends R7). `readReportedCapacity`'s
+  statement is exported as `readReportedCapacitySql`, and a storage test seeds 20,000 older
+  history rows in one statement and asserts, with and without `ANALYZE`, that `EXPLAIN QUERY PLAN`
+  reaches `reported_capacity_latest` by its primary key and `reported_capacity_observation` only
+  by its unique `(installation_id, observation_key)` key. The pre-R7 `ROW_NUMBER` query and a
+  plain `JOIN` in place of `CROSS JOIN` both fail it; neither fails any functional test.

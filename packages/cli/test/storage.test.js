@@ -16,6 +16,7 @@ import {
   migrationDirectory,
   readIngestionCursor,
   readReportedCapacity,
+  readReportedCapacitySql,
   readSpoolIssueCount,
   restoreSetupDatabaseBackup,
   storeObservations,
@@ -1547,6 +1548,68 @@ test("the latest stated figure is read per installation and per limit, with its 
   ]);
   // A source nothing stated a figure for answers with nothing, not with an error.
   assert.deepEqual(readReportedCapacity(paths.databaseFile, "elsewhere"), []);
+});
+
+test("reading the latest stated figure visits one row per group, never the history", async () => {
+  // A deterministic guard on the read's cost. A timing budget catches a regression back to ranking
+  // the whole history only on a large, quiet run; the plan says it on any run. Every access to the
+  // history must be a lookup by its unique key, driven from the per-group pointers.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
+  storeReported(paths.databaseFile, [
+    snapshot(1, "2026-01-02T03:00:00.000Z"),
+    snapshot(2, "2026-01-02T02:00:00.000Z", { limit_id: "premium" }),
+  ]);
+  const HISTORY = 20_000;
+  const database = new Database(paths.databaseFile);
+  try {
+    // A long, older history, seeded in one statement: none of it is the latest of its group.
+    database
+      .prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < @count)
+         INSERT INTO reported_capacity_observation
+           (source_alias, installation_id, observation_key, observed_at, limit_id, plan_type,
+            window_minutes, used_percent, resets_at, parser_version, first_seen_at)
+         SELECT 'codex', @installation, printf('%064x', 1000000 + i), '2026-01-01T00:00:00.000Z',
+                CASE i % 2 WHEN 0 THEN 'codex' ELSE 'premium' END, 'plus', 300, i % 100, NULL,
+                'codex-rate-limits-v1', '2026-01-01T00:00:00.000Z'
+           FROM n`,
+      )
+      .run({ count: HISTORY, installation: CODEX_INSTALLATION });
+
+    /** @param {string} label */
+    const assertPlan = (label) => {
+      const plan = /** @type {{detail: string}[]} */ (
+        database.prepare(`EXPLAIN QUERY PLAN ${readReportedCapacitySql}`).all({ source: "codex" })
+      ).map((row) => row.detail);
+      const touching = plan.filter((detail) => /\b(latest|reported)\b/u.test(detail));
+      // The pointers are found by their source (and, with statistics, by installation too); the
+      // history only ever by its unique key. Planning order beyond that is the planner's business.
+      assert.equal(touching.length, 2, `${label}: ${JSON.stringify(plan)}`);
+      assert.match(
+        String(touching[0]),
+        /^SEARCH latest USING PRIMARY KEY \(source_alias=\?/u,
+        `${label}: ${JSON.stringify(plan)}`,
+      );
+      assert.equal(
+        touching[1],
+        "SEARCH reported USING INDEX sqlite_autoindex_reported_capacity_observation_1 " +
+          "(installation_id=? AND observation_key=?)",
+        `${label}: ${JSON.stringify(plan)}`,
+      );
+    };
+    // Without statistics, which is how every installation runs, and with them.
+    assertPlan("no statistics");
+    database.exec("ANALYZE");
+    assertPlan("after ANALYZE");
+  } finally {
+    database.close();
+  }
+
+  assert.deepEqual(
+    readReportedCapacity(paths.databaseFile, "codex").map((entry) => entry.observed_at),
+    ["2026-01-02T03:00:00.000Z", "2026-01-02T02:00:00.000Z"],
+  );
 });
 
 test("a stated figure holds no content: every column is a key, a time, a number or a version", async () => {

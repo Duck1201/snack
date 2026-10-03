@@ -1279,6 +1279,32 @@ function isReportedInstant(value) {
  */
 
 /**
+ * The statement `readReportedCapacity` prepares.
+ *
+ * One row per group in `reported_capacity_latest`, then that statement's windows by the unique key:
+ * the cost is the number of (installation, limit) groups, not the length of the history. A
+ * statement that named no limit is its own group (`limit_key` ''). CROSS JOIN fixes that order:
+ * without table statistics the planner would otherwise drive the join from the history by its
+ * source index and probe the pointers, which is the O(history) read this table exists to avoid.
+ *
+ * Exported so a test can ask SQLite how it plans the very statement this module prepares; a
+ * timing budget would catch a regression to O(history) only on a large enough, quiet enough run.
+ */
+export const readReportedCapacitySql = `SELECT reported.installation_id, reported.limit_id, reported.plan_type,
+          reported.observed_at, reported.window_minutes, reported.used_percent,
+          reported.resets_at, reported.parser_version
+     FROM reported_capacity_latest AS latest
+     CROSS JOIN reported_capacity_observation AS reported
+       ON reported.installation_id = latest.installation_id
+      AND reported.observation_key = latest.observation_key
+      AND reported.source_alias = latest.source_alias
+     JOIN client_installation
+       ON client_installation.id = reported.installation_id
+      AND client_installation.client_kind = 'codex'
+    WHERE latest.source_alias = @source
+    ORDER BY reported.installation_id, reported.limit_id, reported.window_minutes`;
+
+/**
  * The latest figure each client stated for a capacity source: one entry per installation and limit,
  * holding every window of that one snapshot.
  *
@@ -1296,29 +1322,7 @@ export function readReportedCapacity(databaseFile, sourceAlias) {
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
   try {
     const rows = /** @type {ReportedCapacityRow[]} */ (
-      database
-        .prepare(
-          // One row per group in `reported_capacity_latest`, then that statement's windows by
-          // the unique key: the cost is the number of (installation, limit) groups, not the length
-          // of the history. A statement that named no limit is its own group (`limit_key` '').
-          // CROSS JOIN fixes that order: without table statistics the planner would otherwise drive
-          // the join from the history by its source index and probe the pointers, which is the
-          // O(history) read this table exists to avoid.
-          `SELECT reported.installation_id, reported.limit_id, reported.plan_type,
-                  reported.observed_at, reported.window_minutes, reported.used_percent,
-                  reported.resets_at, reported.parser_version
-             FROM reported_capacity_latest AS latest
-             CROSS JOIN reported_capacity_observation AS reported
-               ON reported.installation_id = latest.installation_id
-              AND reported.observation_key = latest.observation_key
-              AND reported.source_alias = latest.source_alias
-             JOIN client_installation
-               ON client_installation.id = reported.installation_id
-              AND client_installation.client_kind = 'codex'
-            WHERE latest.source_alias = @source
-            ORDER BY reported.installation_id, reported.limit_id, reported.window_minutes`,
-        )
-        .all({ source: sourceAlias })
+      database.prepare(readReportedCapacitySql).all({ source: sourceAlias })
     );
     /** @type {Map<string, ReturnType<typeof readReportedCapacity>[number]>} */
     const entries = new Map();
