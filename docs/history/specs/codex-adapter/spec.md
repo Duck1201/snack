@@ -704,3 +704,10 @@ error — `EACCES`, `ERR_STRING_TOO_LONG` — as a missing rollout. Now only `EN
 absent; any other error on a directory or rollout raises `source_unavailable` (exit 4) for the whole
 read, which is how `claude-adapter.js` treats an unreadable project directory. `fingerprint()`
 throws it too, so `doctor` reports the source inaccessible, and `health()` says `inaccessible`.
+
+### R5 — `doctor` asks what `sync` asks (amends §5.3)
+
+§5.3 passed a Codex source when `fingerprint.supported && families includes source.fingerprint`.
+Once the rollouts of the family setup recorded are deleted, that failed while `sync` stayed
+healthy. For a Codex source `doctor` now passes when the fingerprint is supported and every family
+present is one of `CODEX_FAMILIES`; the recorded family no longer has to be present.

@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { access, constants, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { isCodexSource } from "./codex-adapter.js";
+import { CODEX_FAMILIES, isCodexSource } from "./codex-adapter.js";
 import { isConfiguredSource, readConfig, requireConfiguredSource } from "./config.js";
 import { SnackError } from "./errors.js";
 import { probeSqliteDriver } from "./sqlite-driver.js";
@@ -173,14 +173,20 @@ export async function runDoctor(paths, options = {}) {
       const adapter = createSourceAdapter(source);
       const fingerprint = adapter.fingerprint();
       // Codex keeps several supported families in one history at once, because it never rewrites
-      // an old rollout. Upgrading Codex from one supported family to the next moves the newest
-      // file's family away from the one setup recorded while `sync` keeps reading both, so the
-      // configured family only has to be among those present.
+      // an old rollout. Upgrading Codex moves the newest file's family away from the one setup
+      // recorded, and once the old rollouts are deleted that family is not present at all, while
+      // `sync` keeps reading what is. So for Codex the question is the one `sync` asks: is every
+      // family present one SNACK reads. Other clients still answer for the family setup recorded.
       const families = /** @type {(string | null)[]} */ (
         "families" in fingerprint ? fingerprint.families : [fingerprint.family]
       );
+      const familiesSupported = isCodexSource(source)
+        ? families.every((family) =>
+            CODEX_FAMILIES.includes(/** @type {(typeof CODEX_FAMILIES)[number]} */ (family)),
+          )
+        : families.includes(source.fingerprint);
       checks.push(
-        fingerprint.supported && families.includes(source.fingerprint)
+        fingerprint.supported && familiesSupported
           ? pass(id, `${client} schema fingerprint is supported.`)
           : fail(
               id,

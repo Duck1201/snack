@@ -57,8 +57,9 @@ or a `token_usage_record` names it; otherwise it is `cx-rollout-tokencount-v1`. 
 every family its turns belong to, and a file holding both is a recognized, supported shape, not
 drift. The directory is supported when every file parses. Setup records the family of the most
 recently modified file (the usage-record family as soon as that file holds any such turn);
-`doctor` passes while every family present is supported, so upgrading Codex from one supported
-family to the next does not fail `doctor` while `sync` keeps reading both.
+`doctor` passes while every family present is supported — not only while the recorded one is
+present — so upgrading Codex, or deleting the old rollouts afterwards, does not fail `doctor` while
+`sync` keeps reading.
 
 Every record SNACK reads is held to its shape on every read, not on a sample. A violation refuses the
 whole history with `source_schema_unsupported` (exit `4`) and writes nothing: a token field that is

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -376,6 +376,25 @@ test("doctor keeps passing a Codex source when Codex moves to the next supported
   const fingerprint = checks.find((check) => check.id === "source_fingerprint:codex:codex");
   assert.equal(fingerprint?.status, "pass", JSON.stringify(fingerprint));
   assert.ok(!checks.some((check) => check.id.startsWith("source_coverage:")));
+});
+
+test("doctor keeps passing a Codex source once the family setup saw is gone", async () => {
+  const fixture = await makeRunFixture("snack-doctor-codex-family-gone-");
+  const home = await createCodexHistory(fixture.root, "version-0-147-0.jsonl");
+  fixture.options.env.CODEX_HOME = home;
+  assert.equal(await setupCodex(fixture), 0);
+  // The old rollouts were deleted; only the next supported family remains, and sync reads it.
+  const day = join(home, "sessions", "2026", "01", "02");
+  for (const name of await readdir(day)) await rm(join(day, name));
+  await writeFile(
+    join(day, "rollout-later.jsonl"),
+    await readFile(new URL("./fixtures/codex/version-0-159-3.jsonl", import.meta.url), "utf8"),
+  );
+  assert.equal(await run(["node", "snack", "sync"], fixture.options), 0, fixture.stderr.value);
+
+  const checks = await doctorChecks(fixture);
+  const fingerprint = checks.find((check) => check.id === "source_fingerprint:codex:codex");
+  assert.equal(fingerprint?.status, "pass", JSON.stringify(fingerprint));
 });
 
 test("doctor fails a drifted Codex history with output that says what to do", async () => {
