@@ -240,7 +240,13 @@ much; it cannot tell whether all of them going through is more likely than not."
 of them" is as wrong as "all 1", it speaks of the next prompt as the `next prompt` row does: "The
 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to
 go through than not." It names no remedy:
-neither a shorter sequence nor more history always narrows the interval. Each is shared beneath the
+neither a shorter sequence nor more history always narrows the interval. From 1.6, when no
+restriction carries weight in the history behind the estimate (`sequence-prior-tail-v1`), the width
+caveat is followed by one more: "Your recent history has no restriction to learn from, so the low
+end of this interval comes from SNACK's starting assumption rather than from your history." It is
+a caveat like the others — no new `--json` member. How far the answer reaches for a given history
+and length is tabulated, read forward only, in
+[analysis.md §9.8, "How far the answer reaches"](analysis.md#how-far-the-answer-reaches). Each is shared beneath the
 panels when every source carries it, by the rule above. In `--json` each report gains the
 optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without
 `--sequence` it is absent and every byte is what 1.3 emitted. The mathematics is

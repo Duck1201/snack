@@ -1,6 +1,7 @@
 import { assignPressureBands } from "./analytics.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import {
+  SEQUENCE_PRIOR_TAIL_POLICY,
   WEIGHTING_VARIANTS,
   assessSequence,
   buildForecast,
@@ -94,7 +95,9 @@ export function createSourceStatus(
         : "The estimate is not yet calibrated against observed outcomes.",
       "Real provider capacity is unknown.",
       "Usage pressure compares this window with local history; it is not a share of capacity.",
-      ...(sequence === undefined ? [] : sequenceCaveats(sequence)),
+      ...(sequence === undefined
+        ? []
+        : sequenceCaveats(sequence, forecast.contributors.evidence_window)),
     ],
   };
 }
@@ -261,25 +264,48 @@ export function attachShadows(status, variants) {
  * read as a number of prompts a plan allows. At one, "all of them" is as wrong as "all 1", so the
  * width caveat speaks of the next prompt, as the `next prompt` row does.
  *
+ * The third follows the second, and only it: a too-wide interval whose evidence window holds no
+ * restriction with weight (`SEQUENCE_PRIOR_TAIL_POLICY`) has a low end that is the plan prior's
+ * tail, and the reader is told whose number it is. It names no length, so it reads the same for
+ * every `N` it applies to.
+ *
+ * Structured, so `snack dash` prints these very sentences in its `next N` row; `status` lists the
+ * ones that apply, in this order.
+ *
  * @param {import("./prediction.js").SequenceAssessment} sequence
+ * @param {{weighted_restrictions: number}} evidenceWindow the posterior's evidence window, which
+ *   the sequence was read from
+ * @returns {{assumption: string | null, tooWide: string | null, priorTail: string | null}}
+ */
+export function describeSequenceCaveats(sequence, evidenceWindow) {
+  const length = sequence.length;
+  const tooWide = sequence.width.too_wide;
+  return {
+    assumption:
+      length === 1
+        ? null
+        : `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
+    tooWide: !tooWide
+      ? null
+      : length === 1
+        ? "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not."
+        : `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
+    priorTail:
+      tooWide &&
+      evidenceWindow.weighted_restrictions < SEQUENCE_PRIOR_TAIL_POLICY.max_weighted_restrictions
+        ? "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history."
+        : null,
+  };
+}
+
+/**
+ * @param {import("./prediction.js").SequenceAssessment} sequence
+ * @param {{weighted_restrictions: number}} evidenceWindow
  * @returns {string[]}
  */
-function sequenceCaveats(sequence) {
-  const length = sequence.length;
-  return [
-    ...(length === 1
-      ? []
-      : [
-          `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
-        ]),
-    ...(sequence.width.too_wide
-      ? [
-          length === 1
-            ? "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not."
-            : `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
-        ]
-      : []),
-  ];
+function sequenceCaveats(sequence, evidenceWindow) {
+  const { assumption, tooWide, priorTail } = describeSequenceCaveats(sequence, evidenceWindow);
+  return [assumption, tooWide, priorTail].filter((caveat) => caveat !== null);
 }
 
 /**

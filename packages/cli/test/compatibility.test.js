@@ -20,7 +20,8 @@ afterEach(cleanupRunFixtures);
  * Replaying it on today's tree and comparing bytes is the exit criterion of 1.6.0 written as a test:
  * the weighting variants run in shadow on every source, so every source's answer is the one 1.5
  * gave, and each report differs from 1.5's only by the members 1.6.0 adds -- `shadows` on `status`,
- * the variant entries of `calibration.by_method` on `stats`.
+ * the variant entries of `calibration.by_method` on `stats` -- and, on `status --sequence`, by the
+ * one caveat 1.6.0 adds to the open `caveats` array (`sequence-prior-tail-v1`).
  */
 const setup = (
   /** @type {string} */ client,
@@ -51,6 +52,10 @@ const SEQUENCE = /** @type {const} */ ([
   ["status", ["status", "--no-sync", "--json"]],
   ["status-sequence", ["status", "--no-sync", "--sequence", "10", "--json"]],
 ]);
+
+/** The `sequence-prior-tail-v1` diagnostic, the one caveat 1.6.0 adds. */
+const PRIOR_TAIL =
+  "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history.";
 
 /** @param {string} name */
 async function captured(name) {
@@ -193,6 +198,18 @@ test("the documents 1.5 emitted are emitted again, byte for byte, but for what 1
           assert.equal(shadows.length, 2);
         }
         delete stripped.shadows;
+        if (name === "status-sequence") {
+          // Every source here is too wide at ten with no restriction behind it, so each gains the
+          // diagnostic, last, and nothing else moves.
+          const caveats = /** @type {string[]} */ (stripped.caveats);
+          const sequence = /** @type {{width: {too_wide: boolean}}} */ (stripped.sequence);
+          const window = /** @type {{evidence_window: {weighted_restrictions: number}}} */ (
+            stripped.contributors
+          ).evidence_window;
+          assert.equal(sequence.width.too_wide && window.weighted_restrictions < 0.05, true);
+          assert.equal(caveats.at(-1), PRIOR_TAIL, `${name} ${alias}`);
+          stripped.caveats = caveats.slice(0, -1);
+        }
       }
       assert.equal(JSON.stringify(stripped), JSON.stringify(reportThen), `${name} ${alias}`);
     }

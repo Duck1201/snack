@@ -135,6 +135,8 @@ test("no command calls observed usage a quota percentage or a remaining balance"
   assert.match(transcript, /chance all 10 go through/u);
   assert.match(transcript, /"sequence"/u);
   assert.match(transcript, /interval is too wide to say much/u);
+  // The prior-tail diagnostic (`sequence-prior-tail-v1`, 1.6.0) is on the policed surface too.
+  assert.match(transcript, /comes from SNACK's starting assumption rather than from your history/u);
   assert.match(transcript, /--sequence <n>/u);
   // The weighting variants (1.6.0): their verbose lines, the half-lives in words, and the JSON.
   assert.match(transcript, /recency half-life/u);

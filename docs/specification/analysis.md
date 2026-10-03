@@ -140,6 +140,27 @@ From 1.4, `status --sequence <n>` also answers for a **user-supplied** number `n
 - **One way only.** The relation is `(posterior, n) → probability`. Nothing computes `(posterior, probability) → n`, because that `n` would be a count of prompts a plan allows — a claim about real provider capacity. `n` is limited to 1–100: past that the answer is the prior's tail raised to a power rather than a reading of the user's history.
 - **Recording.** Each answer is stored in `prediction_sequence`, keyed on the attempt the same invocation recorded, with the posterior `α` and `β` so a later calibration can reproduce it without recalculating the past. Delivery is the parent attempt's. It is immutable, deleted only by `data purge` with its attempt, and not exported.
 - **Calibration** is for a later release and is never folded into the live stream. The outcome is definable — the next `n` eligible prompts of the same capacity period all completed — but successive invocations produce overlapping, dependent windows, which need their own primary-forecast rule before a Brier score means anything (ADR-0008's separate calibration report). Until then `stats` is identical whether or not `--sequence` was ever used.
+- **Prior tail.** From 1.6, when the interval is too wide to inform **and** the evidence window's weighted restrictions are below `0.05` (policy `sequence-prior-tail-v1`: one restriction decayed past about four half-lives), the width caveat is followed by one more: "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history." With no restriction carrying weight, the posterior's `β` is the plan prior's pseudo-restriction alone, so the low end raised to `n` is that assumption's tail. It names no length, it is a caveat in the open `caveats` array — no JSON member, no stored column — and it is the one explanation of the width that is true of the reader's own data. `snack dash` prints the same sentence in its `next N` row.
+
+#### How far the answer reaches
+
+The answer weights recent prompts more, halving a prompt's weight every 30 later prompts in the same conditions, so the history behind it saturates near an effective 44 prompts: beyond that, a longer history does not narrow the interval any further.
+
+The table below is computed by the product's own code (`node scripts/sequence-ceiling.mjs`; a test holds this copy to it): each history is a list of outcomes one prompt every six minutes, the newest a minute old, all in the conditions the next prompt meets, put through the forecast, `assessSequence` and the panel's rounding, under the bundled `Beta(0.5, 0.5)` prior. The level in brackets is the evidence level the real gates give that history. `*` marks an interval `sequence-width-v1` calls too wide to inform — the panel then prints no figure for it in `snack dash`, and the caveats above on `status --sequence`.
+
+| History behind the answer (level) | next 1 | next 5 | next 10 | next 20 | next 50 | next 100 |
+|---|---|---|---|---|---|---|
+| none — the starting assumption alone (very_low) | 2-98%* | 0-89%* | 0-79%* | 0-61%* | 0-29% | 0-9% |
+| 3 prompts, no restriction (very_low) | 65-100% | 12-99%* | 1-98%* | 0-96%* | 0-89%* | 0-79%* |
+| 8 prompts, no restriction (low) | 83-100% | 41-100%* | 17-99%* | 2-98%* | 0-95%* | 0-91%* |
+| 8 prompts, 1 restriction (low) | 65-97% | 12-84%* | 1-71%* | 0-50% | 0-18% | 0-3% |
+| 30 prompts, no restriction (moderate) | 94-100% | 73-100% | 54-100% | 29-100%* | 4-99%* | 0-97%* |
+| 200 prompts, no restriction (moderate) | 96-100% | 85-100% | 72-100% | 53-100% | 20-100%* | 4-99%* |
+| 200 prompts, 1 in 100 restricted (high) | 95-100% | 78-100% | 62-99% | 38-98%* | 9-94%* | 0-87%* |
+| 200 prompts, 1 in 20 restricted (high) | 89-98% | 56-91% | 32-82% | 10-67%* | 0-36% | 0-13% |
+| 200 prompts, 1 in 10 restricted (high) | 82-95% | 39-77% | 15-58% | 2-34% | 0-7% | 0-1% |
+
+Read it left to right only: a history and a length in, an interval out. Turning it around to find, for a level, the length at which the interval stops informing is the probability-to-`n` inversion this section refuses ("One way only"), done by hand. A sparse history makes the boundary move with every prompt, the width is not monotone in `n` (`8 prompts, 1 restriction` is too wide at 5 and 10 and informative at 20), and a person's `n` stays the person's.
 
 ### 9.9 Reported-capacity Method (shadow)
 

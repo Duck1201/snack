@@ -648,6 +648,23 @@ export const SEQUENCE_WIDTH_POLICY = Object.freeze({
 });
 
 /**
+ * When a too-wide sequence interval's low end is the prior's tail rather than the reader's history.
+ *
+ * With no observed restriction carrying weight in the evidence window, the posterior's `β` is the
+ * plan prior's pseudo-restriction and nothing else, and the lower quantile raised to `n` is that
+ * assumption's tail: no history of the reader's put it there. Below `max_weighted_restrictions` --
+ * one restriction decayed past four half-lives, about 130 later prompts in the cell or a month --
+ * the `status --sequence` caveat beside a too-wide interval says so. The edge is exclusive; a
+ * restriction in the last few dozen prompts of the cell keeps it silent. A diagnostic about the
+ * estimate, never about capacity, and it adds no member to any document: it is one more caveat.
+ * Changing the rule moves the version.
+ */
+export const SEQUENCE_PRIOR_TAIL_POLICY = Object.freeze({
+  version: "sequence-prior-tail-v1",
+  max_weighted_restrictions: 0.05,
+});
+
+/**
  * @typedef {object} SequenceAssessment
  * @property {number} length The user-supplied number of consecutive prompts, echoed.
  * @property {{lower: number, point: number, upper: number, coverage_target: number}} viability

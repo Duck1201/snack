@@ -491,6 +491,16 @@ variants included. `stats` replays the answer and both variants in one chronolog
 for bit to `1.5.0`'s single replay, and costs about a second more per variant per 100,000 prompts.
 Human formatting is not a frozen surface.
 
+**One more caveat on `status --sequence`.** When the sequence interval is too wide to inform and no
+restriction carries weight in the evidence window (weighted restrictions below `0.05`, policy
+`sequence-prior-tail-v1`), the report's `caveats` gains one string after the width caveat: "Your
+recent history has no restriction to learn from, so the low end of this interval comes from SNACK's
+starting assumption rather than from your history." `caveats` was always an open array of strings,
+so no member is added and no schema moves; without `--sequence`, or at an interval that is not too
+wide, nothing changes. The `1.5` corpus's `status --sequence 10` is too wide with no restriction on
+all three sources, so the replay above asserts exactly this one string appended to each and every
+other byte unchanged.
+
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`; each variant names its own policy. No new
 flag, exit code, configuration key or reason value. `status.schema.json` declares `shadows`

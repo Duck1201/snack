@@ -4,7 +4,8 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { run } from "../src/main.js";
-import { createSourceStatus } from "../src/status.js";
+import { SEQUENCE_PRIOR_TAIL_POLICY } from "../src/prediction.js";
+import { createSourceStatus, describeSequenceCaveats } from "../src/status.js";
 import {
   cleanupRunFixtures,
   createCodexHistory,
@@ -14,6 +15,10 @@ import {
 } from "./fixtures/run-fixture.js";
 
 afterEach(cleanupRunFixtures);
+
+/** The `sequence-prior-tail-v1` diagnostic, word for word. */
+const PRIOR_TAIL =
+  "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history.";
 
 /**
  * @param {string} client
@@ -122,7 +127,8 @@ test("without --sequence nothing about a sequence exists, in JSON or on the pane
     assert.equal(report.sequence.length, 7);
     delete report.sequence;
     report.caveats = report.caveats.filter(
-      (/** @type {string} */ caveat) => !caveat.startsWith("The 7-prompt "),
+      (/** @type {string} */ caveat) =>
+        !caveat.startsWith("The 7-prompt ") && caveat !== PRIOR_TAIL,
     );
   }
   assert.deepEqual(asked, plain);
@@ -139,6 +145,7 @@ test("without --sequence nothing about a sequence exists, in JSON or on the pane
         (line) =>
           !line.startsWith("  next 7 ") &&
           !line.includes("The 7-prompt ") &&
+          !line.includes(PRIOR_TAIL) &&
           !line.includes("sequence-bayesian-pressure-band@1"),
       )
       .join("\n"),
@@ -406,7 +413,9 @@ test("the too-wide caveat states the rule, the same for every length above one, 
   for (const length of [2, 10]) {
     const { status, own } = priorOnlyCaveats(length);
     assert.equal(status.sequence?.width.too_wide, true, String(length));
-    const caveat = own.at(-1) ?? "";
+    // The prior alone, so the diagnostic follows the width caveat (`sequence-prior-tail-v1`).
+    assert.equal(own.at(-1), PRIOR_TAIL);
+    const caveat = own.at(-2) ?? "";
     assert.equal(
       caveat,
       `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
@@ -417,8 +426,9 @@ test("the too-wide caveat states the rule, the same for every length above one, 
   // prompt` row says, about the next prompt.
   const single = priorOnlyCaveats(1);
   assert.equal(single.status.sequence?.width.too_wide, true);
+  assert.equal(single.own.at(-1), PRIOR_TAIL);
   assert.equal(
-    single.own.at(-1),
+    single.own.at(-2),
     "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not.",
   );
   assert.doesNotMatch(single.own.join(" "), /all of them|all 1\b|shorter|more history|narrow/iu);
@@ -431,7 +441,97 @@ test("a sequence of one carries no assumption caveat: one prompt has no next one
   const assumption = (/** @type {number} */ length) =>
     `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`;
   assert.ok(!priorOnlyCaveats(1).own.includes(assumption(1)));
-  assert.equal(priorOnlyCaveats(1).own.length, 1);
+  // The width caveat and, on the prior alone, the prior-tail diagnostic: no assumption.
+  assert.deepEqual(priorOnlyCaveats(1).own.slice(1), [PRIOR_TAIL]);
+  assert.equal(priorOnlyCaveats(1).own.length, 2);
   assert.equal(priorOnlyCaveats(2).own[0], assumption(2));
   assert.equal(priorOnlyCaveats(100).own[0], assumption(100));
+});
+
+/**
+ * A report for one source whose evidence window holds `restrictions` restrictions among `prompts`
+ * outcomes, all one minute apart and ending a minute before `now`, the newest first.
+ *
+ * @param {{prompts: number, restrictedAgo: number[]}} history
+ * @param {number} sequenceLength
+ */
+function reportWith(history, sequenceLength) {
+  const now = new Date("2026-01-01T12:00:00.000Z");
+  const outcomes = Array.from({ length: history.prompts }, (_, index) => ({
+    started_at: new Date(now.getTime() - (index + 1) * 60_000).toISOString(),
+    outcome: history.restrictedAgo.includes(index) ? "restricted" : "success",
+    size_category: "typical",
+  }));
+  return createSourceStatus(
+    { alias: "work", provider: "anthropic", profile: "default", plan: "pro" },
+    {
+      prompts: history.prompts,
+      successes: history.prompts - history.restrictedAgo.length,
+      restrictions: history.restrictedAgo.length,
+      excluded: 0,
+      as_of: now.toISOString(),
+      active_period_started_at: "2026-01-01T00:00:00.000Z",
+    },
+    now,
+    undefined,
+    undefined,
+    { outcomes: /** @type {never} */ (outcomes) },
+    { sequenceLength },
+  );
+}
+
+test("the prior-tail diagnostic follows a too-wide interval only when no restriction carries weight", () => {
+  // Thirty successes and nothing else: the low end of a 50-prompt interval is the prior's tail.
+  const clean = reportWith({ prompts: 30, restrictedAgo: [] }, 50);
+  assert.equal(clean.sequence?.width.too_wide, true);
+  assert.ok(clean.contributors.evidence_window.weighted_restrictions < 0.05);
+  assert.equal(clean.caveats.at(-1), PRIOR_TAIL);
+  assert.match(String(clean.caveats.at(-2)), /^The 50-prompt interval is too wide/u);
+
+  // One recent restriction carries weight: the same width is the reader's own history speaking.
+  const restricted = reportWith({ prompts: 30, restrictedAgo: [3] }, 50);
+  assert.ok(restricted.contributors.evidence_window.weighted_restrictions >= 0.05);
+  assert.ok(!restricted.caveats.includes(PRIOR_TAIL), JSON.stringify(restricted.caveats));
+
+  // Not too wide: nothing to explain, whatever the restrictions.
+  const narrow = reportWith({ prompts: 30, restrictedAgo: [] }, 2);
+  assert.equal(narrow.sequence?.width.too_wide, false);
+  assert.ok(!narrow.caveats.includes(PRIOR_TAIL));
+});
+
+test("the prior-tail rule is versioned, and its edge is exclusive", () => {
+  assert.deepEqual(SEQUENCE_PRIOR_TAIL_POLICY, {
+    version: "sequence-prior-tail-v1",
+    max_weighted_restrictions: 0.05,
+  });
+  const sequence = /** @type {never} */ ({ length: 10, width: { too_wide: true } });
+  assert.equal(
+    describeSequenceCaveats(sequence, { weighted_restrictions: 0.0499 }).priorTail,
+    PRIOR_TAIL,
+  );
+  assert.equal(describeSequenceCaveats(sequence, { weighted_restrictions: 0.05 }).priorTail, null);
+  assert.equal(
+    describeSequenceCaveats(/** @type {never} */ ({ length: 10, width: { too_wide: false } }), {
+      weighted_restrictions: 0,
+    }).priorTail,
+    null,
+  );
+});
+
+test("the structured caveats are the sentences status prints, in its order", () => {
+  for (const length of [1, 2, 10, 50, 100]) {
+    const report = reportWith({ prompts: 30, restrictedAgo: [] }, length);
+    const parts = describeSequenceCaveats(
+      /** @type {never} */ (report.sequence),
+      report.contributors.evidence_window,
+    );
+    const listed = [parts.assumption, parts.tooWide, parts.priorTail].filter(
+      (caveat) => caveat !== null,
+    );
+    assert.deepEqual(
+      report.caveats.slice(report.caveats.length - listed.length),
+      listed,
+      String(length),
+    );
+  }
 });

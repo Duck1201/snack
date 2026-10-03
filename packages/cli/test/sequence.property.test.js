@@ -224,9 +224,14 @@ function assertSequenceShape(sequence, n) {
   }
 }
 
+/** The `sequence-prior-tail-v1` diagnostic (1.6.0): it names no length, and follows the width caveat. */
+const PRIOR_TAIL =
+  "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history.";
+
 /**
  * The document with everything the sequence added taken away: its member, and the caveats that
- * name its length, which come last. A sequence of one that is not too wide adds no caveat at all.
+ * name its length, which come last, followed by the prior-tail diagnostic when it applies. A
+ * sequence of one that is not too wide adds no caveat at all.
  *
  * @param {unknown} document
  * @param {number} n
@@ -235,6 +240,12 @@ function withoutSequence(document, n) {
   const copy = JSON.parse(JSON.stringify(document));
   for (const report of copy.data.sources ?? [copy.data]) {
     assertSequenceShape(report.sequence, n);
+    // Only beside a too-wide interval, and only last.
+    if (report.caveats.at(-1) === PRIOR_TAIL) {
+      assert.equal(report.sequence.width.too_wide, true);
+      report.caveats = report.caveats.slice(0, -1);
+    }
+    assert.ok(!report.caveats.includes(PRIOR_TAIL), JSON.stringify(report.caveats));
     delete report.sequence;
     const own = report.caveats.filter((/** @type {string} */ caveat) =>
       caveat.startsWith(`The ${n}-prompt `),
