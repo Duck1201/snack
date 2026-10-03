@@ -186,8 +186,44 @@ async function statusJson(fixture, argv) {
 }
 
 /**
+ * Every key a `sequence` member may carry, at every depth. Deleting the member wholesale would hide
+ * whatever else it carried -- an `informative_length`, a count -- so its exact shape is asserted
+ * first, and every number in it but the user's own length must be a probability.
+ *
+ * @param {unknown} sequence
+ * @param {number} n
+ */
+function assertSequenceShape(sequence, n) {
+  const keys = (/** @type {unknown} */ value) => Object.keys(/** @type {object} */ (value)).sort();
+  const member = /** @type {Record<string, any>} */ (sequence);
+  assert.deepEqual(keys(member), ["evidence", "length", "method", "risk", "viability", "width"]);
+  assert.equal(member.length, n);
+  assert.deepEqual(keys(member.viability), ["coverage_target", "lower", "point", "upper"]);
+  assert.deepEqual(keys(member.risk), ["label", "policy_version"]);
+  assert.deepEqual(keys(member.evidence), ["gates", "level", "policy_version"]);
+  assert.ok(Array.isArray(member.evidence.gates));
+  for (const gate of member.evidence.gates) {
+    assert.deepEqual(keys(gate), ["id", "level", "limiting"]);
+  }
+  assert.deepEqual(keys(member.method), ["id", "version"]);
+  assert.deepEqual(keys(member.width), ["max_width", "policy_version", "too_wide"]);
+
+  /** @param {unknown} value @param {string} path */
+  const probabilities = (value, path) => {
+    if (typeof value === "number") {
+      assert.ok(value >= 0 && value <= 1, `${path} = ${value} is not a probability`);
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) probabilities(child, `${path}.${key}`);
+    }
+  };
+  for (const [key, value] of Object.entries(member)) {
+    if (key !== "length") probabilities(value, `sequence.${key}`);
+  }
+}
+
+/**
  * The document with everything the sequence added taken away: its member, and the caveats that
- * name its length, which come last.
+ * name its length, which come last. A sequence of one that is not too wide adds no caveat at all.
  *
  * @param {unknown} document
  * @param {number} n
@@ -195,18 +231,21 @@ async function statusJson(fixture, argv) {
 function withoutSequence(document, n) {
   const copy = JSON.parse(JSON.stringify(document));
   for (const report of copy.data.sources ?? [copy.data]) {
-    assert.equal(report.sequence.length, n);
+    assertSequenceShape(report.sequence, n);
     delete report.sequence;
     const own = report.caveats.filter((/** @type {string} */ caveat) =>
       caveat.startsWith(`The ${n}-prompt `),
     );
-    assert.ok(own.length >= 1 && own.length <= 2, JSON.stringify(report.caveats));
+    assert.ok(own.length <= 2, JSON.stringify(report.caveats));
     // The only integer a sequence caveat carries is the user's own length, echoed.
     for (const caveat of own) {
       assert.deepEqual(caveat.match(/\d+/gu)?.map(Number), [n]);
     }
-    assert.deepEqual(report.caveats.slice(-own.length), own);
-    report.caveats = report.caveats.slice(0, -own.length);
+    // `slice(-0)` is the whole array, so a report with no sequence caveat is left as it is.
+    if (own.length > 0) {
+      assert.deepEqual(report.caveats.slice(-own.length), own);
+      report.caveats = report.caveats.slice(0, -own.length);
+    }
   }
   return copy;
 }
