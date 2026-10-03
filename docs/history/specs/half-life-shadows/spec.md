@@ -300,8 +300,11 @@ Measured in process, 100,000 prompts: one policy 1.38 s; three policies as separ
 4.14 s; three in one walk **3.45 s**. Each variant adds about **1.0 s per 100,000 prompts**; `stats`
 cannot stay flat while each variant publishes interval coverage, which needs two quantiles per
 scored forecast, and CONTEXT's **Calibration** requires coverage beside Brier and reliability.
-Rejected ways to flatten it: dropping intervals for variants (an incomplete calibration), memoizing
-or warm-starting `betaQuantile` (doubles that differ from the live path's). The budget that applies
+Rejected ways to flatten it: dropping intervals for variants (an incomplete calibration);
+warm-starting `betaQuantile` (doubles that differ from the live path's); memoizing it on its
+`(probability, α, β)` key, which returns the same doubles but buys nothing — measured on the
+100,000-prompt history, **0 hits in 587,946 calls**: the decayed weights make every posterior
+distinct, no key is shared across weightings, and the cache held about **150 MB** more heap. The budget that applies
 is `performance.test.js`'s 10 s and 150 MB heap for `stats --verbose --json` on 100,000 prompts; 1.5.0
 measured Codex `stats` at 3.3 s, so about 5.3 s with both variants. Scored arrays add about 5 MB per
 variant at that size, inside the heap cap.
@@ -458,7 +461,7 @@ elsewhere:
 ```
   shadow       bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above
                bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high
-               the answer's model with a 50- and a 100-prompt recency half-life instead of 30 · recency-hl50-v1 · recency-hl100-v1
+               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt
 ```
 
 Not computed: `bayesian-pressure-band-hl50@1 not computed — no outcome of yours to read yet`, one
@@ -611,9 +614,11 @@ source; it is the same object as `shadow`.
   "bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — …"; the line
   naming the half-lives is shown whether or not they were computed. On a Codex source whose
   `reported-capacity` line says only why it was not computed, the "not the answer above" suffix
-  moves to the first variant line that says what it would say.
-- **`shadowEntry`** requires the forecast members when `computed` is true (`if`/`then`); like 1.5's
-  `shadow`, it does not forbid them otherwise.
+  moves to the first variant line that says what it would say. The half-life line reads "instead of the answer's
+  30-prompt" and leaves the policy versions to `--json`: they identify the variants rather than
+  state them, and carried the line far past a terminal's width.
+- **`shadowEntry`** requires the forecast members, and a `null` `reason`, when `computed` is true
+  (`if`/`then`); like 1.5's `shadow`, it does not forbid the forecast members otherwise.
 - **The answer's collapse comment** in `prediction.simulation.test.js` read "0/25 at two hours"; the
   test measures 1/25 there, and now says so and asserts both counts.
 - **A released defect, fixed here: a valid user profile made `status` exit 10.** With

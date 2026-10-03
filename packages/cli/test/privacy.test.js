@@ -362,7 +362,7 @@ test("no command writes or prints what a Codex rollout says about the user", asy
     ["sync", "--full"],
     ["status"],
     ["status", "--source", "codex", "--verbose"],
-    // After the stated full window planted below: the shadow computes and is recorded.
+    // After the stated full window planted below: the shadow computes from its `full` ladder.
     ["status", "--source", "codex", "--verbose", "--sequence", "3"],
     ["stats", "--verbose"],
     ["doctor"],
@@ -387,9 +387,10 @@ test("no command writes or prints what a Codex rollout says about the user", asy
       await run(["node", "snack", ...argv, ...(json ? ["--json"] : [])], fixture.options);
       transcript.push(fixture.stdout.value, fixture.stderr.value);
     }
-    // The canary history's prompts are not evidence either way, so the figure the rollout states
-    // leaves the shadow nothing to read. Once the verbose panel has quoted that figure, Codex
-    // stating the same limit full a minute before the clock makes the shadow compute from the
+    // The canary history's prompts are not evidence either way, but the six turns added above are:
+    // under the figure the rollout states, the shadow already computes from them on the first
+    // `status`. Once the verbose panel has quoted that figure, Codex stating the same limit full a
+    // minute before the clock moves the shadow onto its `full` ladder, which computes from the
     // starting assumption -- through the identity the rollout's own statement was stored under.
     if (argv[0] === "status" && argv.includes("--verbose") && !planted) {
       planted = true;
