@@ -696,3 +696,11 @@ location, provider **and profile** all match. So two aliases may also share a pr
 by profile — the claim that "providers always differ" is not quite true — but that pairing is the
 ambiguous mapping, where prompts already wait and the figure now waits with them. Provider plus the
 ambiguity count is therefore enough to route every snapshot to at most one source.
+
+### R4 — only absence is absence (amends §5.1)
+
+The build skipped any unreadable directory under `sessions/**` and treated any `readFileSync`
+error — `EACCES`, `ERR_STRING_TOO_LONG` — as a missing rollout. Now only `ENOENT`/`ENOTDIR` mean
+absent; any other error on a directory or rollout raises `source_unavailable` (exit 4) for the whole
+read, which is how `claude-adapter.js` treats an unreadable project directory. `fingerprint()`
+throws it too, so `doctor` reports the source inaccessible, and `health()` says `inaccessible`.

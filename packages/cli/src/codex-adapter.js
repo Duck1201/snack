@@ -439,9 +439,12 @@ function parseFile(home, file, rejected) {
   try {
     content = readFileSync(file, "utf8");
     mtimeMs = statSync(file).mtimeMs;
-  } catch {
-    // A rollout archived or deleted between listing and reading is absence of evidence.
-    return null;
+  } catch (error) {
+    // A rollout archived or deleted between listing and reading is absence of evidence. Anything
+    // else -- a file SNACK may not read, one too large to hold -- is a history that cannot be read
+    // in full, and a read that skipped it would report a quietly smaller history as complete.
+    if (isMissing(error)) return null;
+    throw unavailable();
   }
   const key = fileKey(home, file);
   const lines = content.split("\n");
@@ -1197,14 +1200,13 @@ function listRolloutFiles(home) {
     let entries;
     try {
       entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      if (!required) return;
-      // No Codex installation, no sessions directory, or one SNACK may not read are the same fact
-      // to a user. The message names no path.
-      throw new SnackError(
-        "Codex CLI history is unavailable; its sessions directory could not be read. Install Codex CLI, or set CODEX_HOME to an existing Codex CLI home directory.",
-        { code: ExitCode.unavailable, reason: "source_unavailable" },
-      );
+    } catch (error) {
+      // An optional directory that does not exist -- no archive yet, a day directory Codex removed
+      // mid-listing -- holds nothing. One that exists and cannot be read is the same fact to a
+      // user as a missing sessions directory: the history cannot be read in full. Claude Code's
+      // reader refuses an unreadable project directory the same way.
+      if (!required && isMissing(error)) return;
+      throw unavailable();
     }
     for (const entry of entries) {
       const path = join(directory, entry.name);
@@ -1317,6 +1319,24 @@ function isObject(value) {
 function readObject(source, name) {
   const value = source === null ? undefined : source[name];
   return isObject(value) ? value : null;
+}
+
+/** No Codex installation, no sessions directory, or one SNACK may not read; names no path. */
+function unavailable() {
+  return new SnackError(
+    "Codex CLI history is unavailable; its sessions directory could not be read. Install Codex CLI, or set CODEX_HOME to an existing Codex CLI home directory.",
+    { code: ExitCode.unavailable, reason: "source_unavailable" },
+  );
+}
+
+/** @param {unknown} error */
+function isMissing(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 function drift() {

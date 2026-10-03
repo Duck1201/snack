@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   appendFile,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -610,6 +611,60 @@ test("the field allowlist is the reader's only way in", () => {
   }
   assert.ok(Object.isFrozen(CODEX_FIELD_ALLOWLIST));
 });
+
+/** @param {() => unknown} read */
+function assertUnavailable(read) {
+  assert.throws(read, (error) => {
+    assert.ok(error instanceof SnackError);
+    assert.equal(error.reason, "source_unavailable");
+    assert.doesNotMatch(error.message, /\//u);
+    return true;
+  });
+}
+
+const canDenyReads = process.platform !== "win32" && process.getuid?.() !== 0;
+
+test(
+  "a sessions subdirectory SNACK may not read is unavailable, not skipped",
+  {
+    skip: !canDenyReads,
+  },
+  async () => {
+    const home = await codexHome("version-0-159-3.jsonl");
+    const locked = join(home, "sessions", "2026", "01", "03");
+    await mkdir(locked, { recursive: true });
+    await chmod(locked, 0o000);
+    try {
+      const adapter = adapterFor(home);
+      assertUnavailable(() => adapter.readAll());
+      assertUnavailable(() => adapter.fingerprint());
+      assert.equal(adapter.health().status, "inaccessible");
+    } finally {
+      await chmod(locked, 0o700);
+    }
+  },
+);
+
+test(
+  "a rollout SNACK may not read is unavailable, not absent",
+  {
+    skip: !canDenyReads,
+  },
+  async () => {
+    const home = await codexHome(["version-0-159-3.jsonl", "version-0-147-0.jsonl"]);
+    const day = join(home, "sessions", "2026", "01", "02");
+    const [name] = await readdir(day);
+    const file = join(day, String(name));
+    await chmod(file, 0o000);
+    try {
+      const adapter = adapterFor(home);
+      assertUnavailable(() => adapter.readAll());
+      assertUnavailable(() => adapter.fingerprint());
+    } finally {
+      await chmod(file, 0o600);
+    }
+  },
+);
 
 test("a file moved between listing and reading is absence of evidence", async () => {
   const home = await codexHome(["version-0-159-3.jsonl"]);

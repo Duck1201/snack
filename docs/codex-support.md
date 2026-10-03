@@ -38,6 +38,12 @@ archived threads to the second — and never lists `<home>` itself. `~/.codex/hi
 raw prompt history and is never opened; no file under `packages/cli/src/` names it, and a test
 asserts that.
 
+Only a directory or rollout that does not exist is treated as absent — a rollout Codex archived
+between listing and reading, or no `archived_sessions` yet. A subdirectory or rollout that exists
+and cannot be read (permissions, or a file too large to hold) makes the whole history
+`source_unavailable` (exit `4`), as an unreadable Claude Code project directory does: a read that
+skipped it would report a smaller history as complete.
+
 Compressed rollouts (`rollout-*.jsonl.zst`) are not read in `1.3`. `doctor` counts them and warns
 that their prompts are not observed.
 
