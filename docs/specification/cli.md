@@ -191,14 +191,14 @@ elsewhere.
 ```text
   shadow       bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above
                bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high
-               the answer's model with a 50- and a 100-prompt recency half-life instead of 30 · recency-hl50-v1 · recency-hl100-v1
+               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt
 ```
 
 "Not the answer above" is said once per panel, on the first line that says what a shadow would say.
 A variant not computed says why on its own line, or both on one line when they share the reason:
 "bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — no outcome of yours
-to read yet". The last line names the half-lives, always hyphenated, and the policy versions that
-identify them. `--sequence` adds nothing for a shadow. In `--json` every shadow is an entry of the
+to read yet". The last line names the half-lives, always hyphenated; the policy versions that
+identify them are in `--json` only. `--sequence` adds nothing for a shadow. In `--json` every shadow is an entry of the
 report's `shadows` array, its last member, present on every report: the `reported-capacity` entry
 first where it runs — the same object as `shadow`, which stays — then the variants by ascending
 half-life.

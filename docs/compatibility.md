@@ -484,7 +484,7 @@ exactly the same outcomes. The top-level `live` and `backtest` keep their meanin
 lacked it is additive — no document loses a field, and a consumer must tolerate added fields.
 
 **Human output.** `status --verbose` adds the variants under the `shadow` label — what each would
-say, or why it was not computed, then one line naming the half-lives and policy versions — saying
+say, or why it was not computed, then one line naming the half-lives — saying
 once per panel that none of it is the answer; the default panel, the overview and `--sequence`
 without `--verbose` never show them. `stats --verbose` lists every source's `by method` block, the
 variants included. `stats` replays the answer and both variants in one chronological walk, held bit

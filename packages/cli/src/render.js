@@ -1182,7 +1182,9 @@ function weightingRows(variants, paint, labelled, disclaim) {
     lines.push(
       row(paint, label(), [
         [
-          `the answer's model with ${spoken} recency half-life instead of ${PREDICTION_POLICY.recency_half_life_prompts} · ${variants.map((entry) => entry.policy_version).join(" · ")}`,
+          // The policy versions identify the variants rather than state them, and would carry the
+          // line well past a terminal's width: they stay in `--json`.
+          `the answer's model with ${spoken} recency half-life instead of the answer's ${PREDICTION_POLICY.recency_half_life_prompts}-prompt`,
           "dim",
           0,
         ],

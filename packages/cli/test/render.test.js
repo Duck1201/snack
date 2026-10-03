@@ -1269,7 +1269,7 @@ test("the weighting variants are verbose shadow lines, said once not to be the a
   assert.deepEqual(lines.slice(first, first + 3), [
     "  shadow       bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above",
     "               bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high",
-    "               the answer's model with a 50- and a 100-prompt recency half-life instead of 30 · recency-hl50-v1 · recency-hl100-v1",
+    "               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt",
   ]);
   assert.equal(verbose.match(/not the answer above/gu)?.length, 1);
   // The answer is the report's own interval, above them.
@@ -1297,7 +1297,7 @@ test("on a Codex source the variants follow the reported-capacity lines under on
     "               reads what Codex states about its 5h window — in the near band · reported-capacity-v1",
     "               bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high",
     "               bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high",
-    "               the answer's model with a 50- and a 100-prompt recency half-life instead of 30 · recency-hl50-v1 · recency-hl100-v1",
+    "               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt",
   ]);
   assert.equal(lines.filter((line) => line.startsWith("  shadow")).length, 1);
 
@@ -1332,7 +1332,7 @@ test("variants not computed for one reason share one line", () => {
   const first = lines.findIndex((line) => line.startsWith("  shadow"));
   assert.deepEqual(lines.slice(first, first + 2), [
     "  shadow       bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — no outcome of yours to read yet",
-    "               the answer's model with a 50- and a 100-prompt recency half-life instead of 30 · recency-hl50-v1 · recency-hl100-v1",
+    "               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt",
   ]);
   assert.ok(!lines[first + 2]?.startsWith("               bayesian"));
   // One computed, one not: a line each.
