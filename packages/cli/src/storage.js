@@ -2903,12 +2903,14 @@ export async function assertReadableStorage(databaseFile) {
     // is. Every upgrade passes through this state, so the honest answer names the way out.
     const pending = available.filter((migration) => !applied.has(migration.number));
     if (pending.length > 0) {
-      throw new SnackError(
-        `Storage is at an older schema: ${pending.length} migration${
-          pending.length === 1 ? "" : "s"
-        } have not been applied. Run \`snack sync\` to apply them; a backup is taken first.`,
-        { code: ExitCode.storage, reason: "storage_migrations_pending" },
-      );
+      const counted =
+        pending.length === 1
+          ? "1 migration has not been applied. Run `snack sync` to apply it"
+          : `${pending.length} migrations have not been applied. Run \`snack sync\` to apply them`;
+      throw new SnackError(`Storage is at an older schema: ${counted}; a backup is taken first.`, {
+        code: ExitCode.storage,
+        reason: "storage_migrations_pending",
+      });
     }
   } catch (error) {
     if (error instanceof SnackError) throw error;

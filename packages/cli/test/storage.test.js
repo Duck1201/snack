@@ -530,9 +530,34 @@ test("a database still at an older schema is refused rather than half-read", asy
     // Actionable, or it is no better than the crash it replaces: the message names the command
     // that fixes it.
     assert.match(document.errors[0].message, /snack sync/u);
+    assert.match(document.errors[0].message, /: 7 migrations have not been applied\./u);
   }
   // Refusing means refusing: nothing was read, so nothing was written either.
   assert.deepEqual(tableCounts(fixture.paths.databaseFile), before);
+});
+
+test("one pending migration is counted in the singular", async () => {
+  // Every 1.3.0 installation meets this on its first read-only command after upgrading to 1.4.0:
+  // one migration, `016`, is pending.
+  const fixture = await makeRunFixture("snack-unmigrated-one-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  const migrations = await readdir(new URL("../migrations/", import.meta.url));
+  const newest = Math.max(...migrations.map((name) => Number.parseInt(name, 10)));
+  await initializeDatabase(fixture.paths, {
+    migrationsDir: await copyMigrationsThrough(newest - 1),
+    applicationVersion: "1.3.0",
+    now,
+  });
+  await writeZeroSixConfig(fixture);
+
+  const exitCode = await run(["node", "snack", "status", "--no-sync", "--json"], fixture.options);
+  assert.equal(exitCode, ExitCode.storage, fixture.stdout.value);
+  const [error] = JSON.parse(fixture.stdout.value).errors;
+  assert.equal(error.code, "storage_migrations_pending");
+  assert.equal(
+    error.message,
+    "Storage is at an older schema: 1 migration has not been applied. Run `snack sync` to apply it; a backup is taken first.",
+  );
 });
 
 test("a 0.6 database answers every command the frozen release publishes", async () => {
