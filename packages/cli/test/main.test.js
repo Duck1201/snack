@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -3413,6 +3413,159 @@ test("a prompt that reads differently at the same revision keeps its usage and s
   );
   assert.equal(ingestion?.status, "warn", JSON.stringify(doctor.data.checks));
   assert.equal(ingestion.message, "1 observation(s) were refused on ingestion.");
+});
+
+for (const [label, appended] of /** @type {const} */ ([
+  ["the terminal", { stop_reason: "end_turn", output_tokens: 9 }],
+  ["a usage slice", { stop_reason: "tool_use", output_tokens: 5 }],
+])) {
+  test(`${label} written in the same millisecond under a smaller uuid advances a Claude turn`, async () => {
+    // A Claude revision names the turn's newest record by time, and used to break a tie inside one
+    // millisecond by uuid. A record Claude Code appends in the millisecond of the newest one, under
+    // a uuid that sorts lower, added content without moving the revision, and the next sync refused
+    // the turn as `same_revision_content_conflict` and kept the stale row until another record
+    // arrived. The real history held 42 such pairs. Append order breaks the tie now.
+    const fixture = await makeRunFixture("snack-same-millisecond-");
+    fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+    const sessionFile = join(
+      fixture.options.env.CLAUDE_CONFIG_DIR,
+      "projects",
+      "-fixture-project",
+      "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+    );
+    const lines = (await readFile(sessionFile, "utf8")).trimEnd().split("\n");
+    const terminal = JSON.parse(/** @type {string} */ (lines.at(-1)));
+    const toolResult = JSON.parse(/** @type {string} */ (lines.at(-2)));
+    // The turn up to its tool result: provisional, newest record `3333…` at 10:00:03.000.
+    await writeFile(sessionFile, `${lines.slice(0, -1).join("\n")}\n`, { mode: 0o600 });
+    await run(
+      [
+        "node",
+        "snack",
+        "setup",
+        "claude",
+        "--non-interactive",
+        "--source",
+        "claude",
+        "--provider",
+        "anthropic",
+        "--profile",
+        "default",
+        "--plan",
+        "pro",
+      ],
+      fixture.options,
+    );
+    await run(["node", "snack", "sync"], fixture.options);
+
+    const record = {
+      ...terminal,
+      uuid: "00000000-0000-4000-8000-000000000044",
+      timestamp: toolResult.timestamp,
+      message: {
+        ...terminal.message,
+        stop_reason: appended.stop_reason,
+        usage: { ...terminal.message.usage, output_tokens: appended.output_tokens },
+      },
+    };
+    await writeFile(sessionFile, `${lines.slice(0, -1).join("\n")}\n${JSON.stringify(record)}\n`, {
+      mode: 0o600,
+    });
+    const later = new Date(Date.now() + 60_000);
+    await utimes(sessionFile, later, later);
+    fixture.stdout.value = "";
+    await run(["node", "snack", "sync", "--json"], fixture.options);
+    const synced = JSON.parse(fixture.stdout.value).data.sources[0];
+    assert.deepEqual(
+      { updated: synced.updated, rejected_invalid: synced.rejected_invalid },
+      { updated: 1, rejected_invalid: 0 },
+    );
+
+    fixture.stdout.value = "";
+    await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+    const tables = JSON.parse(fixture.stdout.value).data.tables;
+    assert.equal(tables.usage_slices.length, 2);
+    assert.equal(
+      tables.prompts[0].completion,
+      appended.stop_reason === "end_turn" ? "completed" : "provisional",
+    );
+
+    // The same history read again is the same revision: nothing to update, nothing refused.
+    fixture.stdout.value = "";
+    await run(["node", "snack", "sync", "--full", "--json"], fixture.options);
+    const again = JSON.parse(fixture.stdout.value).data.sources[0];
+    assert.deepEqual(
+      { updated: again.updated, rejected_invalid: again.rejected_invalid },
+      { updated: 0, rejected_invalid: 0 },
+    );
+  });
+}
+
+test("a Claude session copied into another file under a new session id is stored once", async () => {
+  // A transcript copied whole into a second file -- same records, same prompt ids, same uuids and
+  // times, so the same revision -- under another `sessionId`. It is one prompt, not two, so its
+  // usage is counted once. The copy cannot be told apart from a reader disagreeing with itself at
+  // a revision that names its content, so it is refused as `same_revision_content_conflict` and the
+  // file listed first keeps the prompt; a later sync refuses it again and moves nothing.
+  const fixture = await makeRunFixture("snack-copied-session-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
+  const project = join(fixture.options.env.CLAUDE_CONFIG_DIR, "projects", "-fixture-project");
+  const original = await readFile(
+    join(project, "aaaaaaaa-0000-4000-8000-000000000001.jsonl"),
+    "utf8",
+  );
+  await writeFile(
+    join(project, "bbbbbbbb-0000-4000-8000-000000000002.jsonl"),
+    original.replaceAll(
+      "aaaaaaaa-0000-4000-8000-000000000001",
+      "bbbbbbbb-0000-4000-8000-000000000002",
+    ),
+    { mode: 0o600 },
+  );
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+  const exported = async () => {
+    fixture.stdout.value = "";
+    await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+    return JSON.parse(fixture.stdout.value).data.tables;
+  };
+  /** @param {string[]} argv */
+  const sync = async (argv) => {
+    fixture.stdout.value = "";
+    await run(["node", "snack", "sync", ...argv, "--json"], fixture.options);
+    const { inserted, updated, unchanged, rejected_invalid } = JSON.parse(fixture.stdout.value).data
+      .sources[0];
+    return { inserted, updated, unchanged, rejected_invalid };
+  };
+
+  assert.deepEqual(await sync([]), { inserted: 1, updated: 0, unchanged: 0, rejected_invalid: 1 });
+  const first = await exported();
+  assert.equal(first.prompts.length, 1);
+  assert.equal(first.usage_slices.length, 2);
+
+  assert.deepEqual(await sync(["--full"]), {
+    inserted: 0,
+    updated: 0,
+    unchanged: 1,
+    rejected_invalid: 1,
+  });
+  assert.deepEqual(await exported(), first);
 });
 
 test("a refusal one client saw survives another client succeeding on the same source", async () => {

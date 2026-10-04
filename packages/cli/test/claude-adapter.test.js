@@ -267,6 +267,88 @@ test("a turn still being written revises upward instead of duplicating", async (
   assert.equal(reread.revision, provisional.revision);
 });
 
+test("a Claude revision is the one earlier releases wrote unless a record was appended after it in its millisecond", async () => {
+  // Databases written before 1.6.1 hold `<ms>:<uuid of the newest record>`, ties broken by uuid. A
+  // revision that moved for an unchanged turn would send every stored prompt through the update
+  // path on the first sync after the upgrade, so it must stay byte for byte what it was wherever no
+  // record was appended after the one it names.
+  const projectsDirectory = await createFixtureProjects("version-2-1-220.jsonl");
+  const sessionFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  );
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const revision = () => adapter.readAll().observations[0]?.revision;
+  const terminalAt = Date.parse("2026-07-30T10:00:07.000Z");
+  assert.equal(revision(), `${terminalAt}:44444444-4444-4444-8444-444444444444`);
+
+  const lines = (await readFile(sessionFile, "utf8")).trimEnd().split("\n");
+  const terminal = JSON.parse(/** @type {string} */ (lines.at(-1)));
+  /** @param {string} uuid */
+  const sameMillisecond = (uuid) =>
+    JSON.stringify({ ...terminal, uuid, parentUuid: terminal.uuid, type: "user", message: {} });
+
+  // A tie written in uuid order names the last record, exactly as before.
+  await appendFile(sessionFile, `${sameMillisecond("55555555-5555-4555-8555-555555555555")}\n`);
+  assert.equal(revision(), `${terminalAt}:55555555-5555-4555-8555-555555555555`);
+
+  // Appended after it under a lower uuid: the name stays, and the revision moves past it.
+  const before = /** @type {string} */ (revision());
+  await appendFile(sessionFile, `${sameMillisecond("00000000-0000-4000-8000-000000000001")}\n`);
+  const after = /** @type {string} */ (revision());
+  assert.equal(after, `${terminalAt}:55555555-5555-4555-8555-555555555555+000001`);
+  await appendFile(sessionFile, `${sameMillisecond("00000000-0000-4000-8000-000000000002")}\n`);
+  const twice = /** @type {string} */ (revision());
+  assert.equal(twice, `${terminalAt}:55555555-5555-4555-8555-555555555555+000002`);
+  // Storage compares what follows the millisecond as text, with `localeCompare`.
+  const tail = (/** @type {string} */ value) => value.slice(value.indexOf(":") + 1);
+  assert.ok(tail(after).localeCompare(tail(before)) > 0);
+  assert.ok(tail(twice).localeCompare(tail(after)) > 0);
+
+  // A higher uuid in the same millisecond names the revision again, and still sorts later.
+  await appendFile(sessionFile, `${sameMillisecond("66666666-6666-4666-8666-666666666666")}\n`);
+  const renamed = /** @type {string} */ (revision());
+  assert.equal(renamed, `${terminalAt}:66666666-6666-4666-8666-666666666666`);
+  assert.ok(tail(renamed).localeCompare(tail(twice)) > 0);
+});
+
+test("a subagent record written in the turn's newest millisecond moves the revision", async () => {
+  // A subagent transcript is another file, so nothing orders its records against the session's:
+  // one in the newest millisecond counts as appended after the record the revision names.
+  const projectsDirectory = await createFixtureProjects("subagent-parent.jsonl", {
+    subagents: { f1f1f1f1f1f1f1f1: "subagent-child.jsonl" },
+  });
+  const agentFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001",
+    "subagents",
+    "agent-f1f1f1f1f1f1f1f1.jsonl",
+  );
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const before = /** @type {string} */ (adapter.readAll().observations[0]?.revision);
+  const terminalAt = Date.parse("2026-07-30T10:00:25.000Z");
+  assert.equal(before, `${terminalAt}:44444444-4444-4444-8444-444444444444`);
+
+  const lines = (await readFile(agentFile, "utf8")).trimEnd().split("\n");
+  const last = JSON.parse(/** @type {string} */ (lines.at(-1)));
+  await appendFile(
+    agentFile,
+    `${JSON.stringify({
+      ...last,
+      uuid: "00000000-0000-4000-8000-000000000003",
+      parentUuid: last.uuid,
+      timestamp: "2026-07-30T10:00:25.000Z",
+    })}\n`,
+  );
+
+  assert.equal(
+    adapter.readAll().observations[0]?.revision,
+    `${terminalAt}:44444444-4444-4444-8444-444444444444+000001`,
+  );
+});
+
 test("an incremental Claude read skips sessions that did not move", async () => {
   const projectsDirectory = await createFixtureProjects("version-2-1-220.jsonl");
   const adapter = createClaudeAdapter({ projectsDirectory });

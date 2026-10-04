@@ -411,22 +411,62 @@ function readSessionObservations(records, readSubagent) {
 }
 
 /**
+ * Where each record was read from: its file and its line, which is the order Claude Code appended
+ * it in. Held beside the records rather than on them, so nothing SNACK adds can be mistaken for a
+ * field Claude Code wrote.
+ *
+ * @type {WeakMap<Record<string, unknown>, {file: string, line: number}>}
+ */
+const appendPosition = new WeakMap();
+
+/**
  * Describe how far a turn has been written, as a revision storage can order.
  *
  * Claude Code only appends, so the newest record of a turn says how complete the reading is. The
- * numeric timestamp leads because storage orders revisions by that prefix; the record identity
- * breaks ties between records written in the same millisecond, and keeps the revision stable when
- * the same unchanged history is read again.
+ * numeric timestamp leads because storage orders revisions by that prefix, and the rest is compared
+ * as text.
+ *
+ * Records written in the same millisecond tie on that prefix. The tie used to be broken by uuid
+ * alone, and a record appended later in the millisecond under a uuid that sorts lower added
+ * content -- a usage slice, or the terminal -- without moving the revision; storage then refused
+ * the turn as a same-revision conflict until some later record arrived. So the tie is broken by
+ * append order: the revision names the highest uuid of the newest millisecond, as it always did,
+ * followed by how many of that millisecond's records were appended after it (`+000001`, ...). The
+ * suffix sorts after the bare uuid and grows with every such append, and a record with a higher
+ * uuid replaces the name and sorts higher still, so every append moves the revision forward.
+ *
+ * Where nothing was appended after that record -- every turn without a tie, and every tie written
+ * in uuid order -- the revision is exactly the one earlier releases wrote, so an upgraded database
+ * reads its unchanged history as unchanged and nothing is re-written. A record in another file (a
+ * subagent transcript) has no append order relative to the session file, so it counts as after.
  *
  * @param {Record<string, unknown>[]} records
  */
 function readRevision(records) {
-  const newest = records
-    .map((record) => ({ at: Date.parse(String(record.timestamp)), uuid: String(record.uuid) }))
-    .filter((entry) => Number.isFinite(entry.at))
-    .sort((left, right) => left.at - right.at || left.uuid.localeCompare(right.uuid))
+  const timed = records
+    .map((record) => ({
+      record,
+      at: Date.parse(String(record.timestamp)),
+      uuid: String(record.uuid),
+    }))
+    .filter((entry) => Number.isFinite(entry.at));
+  const at = Math.max(...timed.map((entry) => entry.at));
+  const newestMillisecond = timed.filter((entry) => entry.at === at);
+  const named = newestMillisecond
+    .toSorted((left, right) => left.uuid.localeCompare(right.uuid))
     .at(-1);
-  return `${newest?.at ?? 0}:${newest?.uuid ?? ""}`;
+  if (named === undefined) return "0:";
+  const namedAt = appendPosition.get(named.record);
+  const appendedAfter = newestMillisecond.filter((entry) => {
+    if (entry.record === named.record) return false;
+    const position = appendPosition.get(entry.record);
+    if (position === undefined || namedAt === undefined || position.file !== namedAt.file) {
+      return true;
+    }
+    return position.line > namedAt.line;
+  }).length;
+  const suffix = appendedAfter === 0 ? "" : `+${String(appendedAfter).padStart(6, "0")}`;
+  return `${at}:${named.uuid}${suffix}`;
 }
 
 /**
@@ -750,6 +790,7 @@ function readRecords(sessionFile, rejected = undefined) {
       rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
       continue;
     }
+    appendPosition.set(record, { file: sessionFile, line: index });
     records.push(record);
   }
   return records;
