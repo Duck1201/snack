@@ -181,6 +181,28 @@ overview and every surface without `--verbose` never show the shadow. In `--json
 `shadow` member of that source's report (see [compatibility.md](../compatibility.md)), absent for a
 source no Codex installation feeds.
 
+**From 1.6, the weighting variants, on every source and in the same place.** `status` also computes
+`bayesian-pressure-band-hl50@1` and `bayesian-pressure-band-hl100@1` — the answer's model with a 50-
+and a 100-prompt recency half-life instead of 30 ([analysis.md §9.10](analysis.md)) — for every
+source, records them and calibrates them, and never answers with either. Under `--verbose` they
+follow the `reported-capacity@1` lines on a Codex source, or stand alone under the `shadow` label
+elsewhere.
+
+```text
+  shadow       bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above
+               bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high
+               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt
+```
+
+"Not the answer above" is said once per panel, on the first line that says what a shadow would say.
+A variant not computed says why on its own line, or both on one line when they share the reason:
+"bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — no outcome of yours
+to read yet". The last line names the half-lives, always hyphenated; the policy versions that
+identify them are in `--json` only. `--sequence` adds nothing for a shadow. In `--json` every shadow is an entry of the
+report's `shadows` array, its last member, present on every report: the `reported-capacity` entry
+first where it runs — the same object as `shadow`, which stays — then the variants by ascending
+half-life.
+
 **With `--sequence <n>`, a second estimate beneath the first.** From 1.4, `--sequence <n>` also
 assesses **sequence viability**: the probability that prompts sent one after another — all of the
 next `n` — complete without an observed restriction. `n` is the user's own number, a whole number from 1 to
@@ -218,7 +240,13 @@ much; it cannot tell whether all of them going through is more likely than not."
 of them" is as wrong as "all 1", it speaks of the next prompt as the `next prompt` row does: "The
 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to
 go through than not." It names no remedy:
-neither a shorter sequence nor more history always narrows the interval. Each is shared beneath the
+neither a shorter sequence nor more history always narrows the interval. From 1.6, when no
+restriction carries weight in the history behind the estimate (`sequence-prior-tail-v1`), the width
+caveat is followed by one more: "Your recent history has no restriction to learn from, so the low
+end of this interval comes from SNACK's starting assumption rather than from your history." It is
+a caveat like the others — no new `--json` member. How far the answer reaches for a given history
+and length is tabulated, read forward only, in
+[analysis.md §9.8, "How far the answer reaches"](analysis.md#how-far-the-answer-reaches). Each is shared beneath the
 panels when every source carries it, by the rule above. In `--json` each report gains the
 optional `sequence` member (`length`, `viability`, `risk`, `evidence`, `method`, `width`); without
 `--sequence` it is absent and every byte is what 1.3 emitted. The mathematics is
@@ -257,8 +285,9 @@ Brier scores, sample sizes and interval coverage; and the policy versions. A sta
 reported as a bare number without its unit and sample size, and those travel with it under
 `--verbose` rather than being dropped.
 
-From 1.5, for a source a Codex installation feeds, `--verbose` closes the calibration block with
-`by method`: one line per method — its identifier, its role (`answer` or `shadow`), and its live and
+From 1.5, for a source a Codex installation feeds — and from 1.6 for every source, because the
+weighting variants run everywhere — `--verbose` closes the calibration block with `by method`: one
+line per method — its identifier, its role (`answer` or `shadow`), and its live and
 backtest Brier scores, each with its sample size — and, beneath the shadow's line, its comparison
 with the answering baseline over exactly the same outcomes, live and replayed, with the number of
 those outcomes and of the restrictions among them.
@@ -270,8 +299,14 @@ those outcomes and of the restrictions among them.
                               same outcomes as the baseline · live not available yet · backtest brier 0.019 against 0.017, sample 71, 1 restricted
 ```
 
+From 1.6 each weighting variant follows, with its own line and its comparison with the answer over
+exactly the same outcomes; its backtest scores only the prompts where its ladder reads an outcome of
+the user's, and its live stream only the forecasts recorded since 1.6.
+
 A stream with nothing scored yet says "not available yet", never zero. The default `stats` output
-is unchanged. In `--json` the same figures are the optional `calibration.by_method` array.
+is unchanged. In `--json` the same figures are the `calibration.by_method` array: optional, present
+only on a Codex-fed source in 1.5 and on every source from 1.6, the entries 1.5 emitted first and
+unchanged.
 
 `--by-client` compares the clients feeding each capacity source. It answers the one question a
 shared source invites: whether one client is refused more often than the others against the same
@@ -414,6 +449,33 @@ If synchronization partially fails but a valid, explicitly stale forecast can st
 A time window is half-open, so `--until` at or before `--since` selects nothing by construction and exits `2` rather than reporting an empty success that hides a mistyped bound.
 
 An unexpected internal failure reports no detail, because SNACK cannot know what is safe to print about a failure it did not anticipate. Setting `SNACK_DEBUG` to any value prints the underlying error to stderr for a bug report; it never enters the JSON document, stdout, or any file, and it is off unless asked for, because a stack trace carries absolute paths.
+
+From 1.6, exit `2` also carries the two refusals of `snack dash` (§12.12): `dash_json_unsupported` and `dash_requires_terminal`. They are new values of the open `errors[].code` field under an existing exit code; no exit code moves.
+
+### 12.12 `snack dash`
+
+```text
+snack dash
+```
+
+From 1.6, a live screen that watches every capacity source at once: the overview's columns, one row per source, and the selected source's detail beneath — `next prompt`, `evidence`, `pressure` with a marker on a scale between the lightest and the heaviest windows of the reader's own history, a plot of the last 24 windows, `drivers`, `reported` for a source a Codex installation feeds, `as of` and the caveats. It answers what `snack status` answers, with the same wording and the same rounding, and it takes no flag but `--help`.
+
+It refuses, before anything is drawn or written, with exit `2`:
+
+- `--json`, on either side of the command (`dash_json_unsupported`): "snack dash draws a screen and has no JSON form; `snack status --json` gives the same reading as a document." With `--json` the refusal is one error envelope, the only document `dash` produces.
+- a standard output or a standard input that is not a terminal — `snack dash | cat`, `snack dash < /dev/null` — or `TERM` unset, empty or `dumb` (`dash_requires_terminal`): "snack dash needs an interactive terminal; `snack status` gives the same reading through a pipe."
+
+Configuration, a missing capacity source and storage that is newer, unreadable or never initialized are refused as `status` refuses them (`3`, `4`, `5`). Storage that does not exist yet, or is a schema behind, is not refused: the first synchronization creates or migrates it, with its backup, and the screen says so meanwhile. Nor is a storage operation lock another command holds when the dash starts — a long `sync --full`, a migration with its backup, a `data purge`: the dash opens on the configuration as it reads at that moment, takes no reading past the lock, and says on the screen that another `snack` command is using storage until the lock is free. A setup journal is recovered only under the lock; a dash that started without it leaves the journal to the synchronization child, which recovers it under its own.
+
+Keys: `↑` `↓` or `k` `j` select a source; `r` synchronizes now; `s` shows or hides a `next N` row; `+` and `-` change `N` by one, from 1 to 100; `?` opens the help, `Esc` closes it; `Ctrl+L` repaints; `q` or `Ctrl+C` quits with `0`; `Ctrl+Z` suspends: the terminal is handed back at once, and the process stops once any read or write it has in flight has released the storage lock. `SIGINT` or `SIGTERM` from outside restores the terminal and ends the process by that signal. Colour follows `NO_COLOR` and `FORCE_COLOR` as everywhere else; with colour off a frame carries no escape sequence but cursor addressing. `COLUMNS` is not read: the screen is drawn at the terminal's own size, at least 64 columns and as many rows as the sources need, and a smaller terminal shows one sentence saying so.
+
+**Two clocks.** The screen is redrawn about once a second from the reading it already has; that reads no storage and takes no lock. A synchronization — `snack sync --json` as a child process — runs at start, then 60 seconds after the previous one ended, and on `r`; never two at once, never timed out, never killed, quitting included. After a synchronization that succeeded the dash takes the storage operation lock once, reads every source as `status --no-sync` would, and releases it. Between synchronizations it takes the lock only for two short writes of the same kind: a reading the lock was busy for is retried on the next second's redraw, and a snapshot recorded while the terminal was too small is confirmed delivered, under the lock, by the first frame that draws it once the terminal has room again. A redraw that needs neither reads no storage. A synchronization skipped because another `snack` command holds storage, or one that failed, is said on the screen, and the reading on it is marked as old. SQLite answering busy to a read or write the dash makes under its own lock is retried the same way; after 5 such answers in a row — no `snack` command can hold SQLite under that lock, so a streak is something outside `snack` — the screen says "Storage keeps answering busy; quit and run snack doctor." until one gets through.
+
+**What it records.** A forecast the screen draws is a prediction snapshot exactly as a `status` run's is ([ADR-0008](../adr/0008-watch-writes-a-snapshot-only-on-new-evidence.md)): one is written when what is shown of a source's answer — its interval as printed, its risk label, its evidence level, its method and policy versions, its capacity period — differs from the last one this session delivered, and is confirmed delivered only once a frame drew it — with the `next N` row it was recorded with: one recorded while the terminal was too small, whose `N` the person then stepped or whose row they showed or hid, is never delivered, and the reading is recorded again at the next recompute with the row then on screen. A screen left open writes nothing more while that stays the same; new outcomes that do not move the printed line are linked to the snapshot still on screen. The delivery is recorded with `format` `dash`. A warning a reading carries — a plan profile that could not be read and fell back to the generic one, say — has no room on the screen; each is written once to standard error as the dash leaves, after the terminal is restored, in the `Warning: …` form `status` uses.
+
+**The sequence row.** `s` adds a `next N` row under the `next prompt` row; `N` is the person's own number, and starts at 10. Where the sequence interval is too wide to inform (`sequence-width-v1`) the row prints no figure but `N`: it says so in `status --sequence`'s own words, followed by the prior-tail caveat when it applies. The keys move `N` one step at a time between 1 and 100 and never skip, hide or stop at a length because of how informative it is. Stepping `N` does show, by the row's content, where the interval turns too wide — exactly as running `status --sequence N` for successive `N` does, and no more: the dash adds no other channel for it. The row takes the same height whether or not it informs, the frame reports the same sources as drawn, and the key bar, the help and the timing of every redraw and write are the same on either side of that boundary. The row is drawn from the reading on screen. While it is shown, each snapshot the dash records carries the sequence for the `N` on screen as a `prediction_sequence` row, in the attempt's transaction, exactly as `status --sequence` records its own; with the row off it records no sequence. Stepping `N` writes nothing: a snapshot is written only when what is shown of the single-prompt answer changes, so a row per length passed through is never recorded. The record is per snapshot, not per screen: it holds the sequence shown with each forecast the dash records, not every `N` that passed across the screen. It is also per source while the row is drawn once: every source's snapshot recorded while the row is on carries the sequence for the `N` on screen, although the row is drawn only in the selected source's detail, so a source that was not selected holds a sequence nobody was shown for it. Sequences are outside calibration; this affects only the record. An `N` stepped through between two snapshots is not recorded, and a row turned on after the session's snapshot was recorded, while the single-prompt answer then never changes, leaves no sequence in the record for that session at all, although the row was on screen throughout. `status --sequence N` records its sequence with the snapshot each run writes.
+
+The dash draws no shadow estimate; its help names `snack status --verbose`, which does.
 
 ## 13. JSON Output
 

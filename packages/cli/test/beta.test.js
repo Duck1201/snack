@@ -3,7 +3,12 @@ import { test } from "node:test";
 
 import fc from "fast-check";
 
-import { QUANTILE_TOLERANCE, betaQuantile, regularizedIncompleteBeta } from "../src/beta.js";
+import {
+  QUANTILE_TOLERANCE,
+  betaInterval,
+  betaQuantile,
+  regularizedIncompleteBeta,
+} from "../src/beta.js";
 import * as reference from "./fixtures/beta-reference.js";
 
 /**
@@ -279,6 +284,13 @@ test("hoisting the normalizer out of the Newton loop changes no double, bit for 
         const actual = betaQuantile(probability, alpha, beta);
         const expected = reference.betaQuantile(probability, alpha, beta);
         assert.ok(Object.is(actual, expected), `Q(${probability}; ${alpha}, ${beta})`);
+        // Both ends of an interval from one shared log-gamma setup: the same two doubles.
+        const interval = betaInterval(probability, 1 - probability, alpha, beta);
+        assert.ok(Object.is(interval.lower, expected), `lower(${probability}; ${alpha}, ${beta})`);
+        assert.ok(
+          Object.is(interval.upper, reference.betaQuantile(1 - probability, alpha, beta)),
+          `upper(${probability}; ${alpha}, ${beta})`,
+        );
         compared += 1;
       }
       for (const x of points) {
@@ -303,4 +315,23 @@ test("hoisting the normalizer out of the Newton loop changes no double, bit for 
     ),
     { numRuns: 2000 },
   );
+  fc.assert(
+    fc.property(
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 1e-3, max: 1e4, noNaN: true }),
+      fc.double({ min: 1e-3, max: 1e4, noNaN: true }),
+      (low, high, alpha, beta) => {
+        const interval = betaInterval(low, high, alpha, beta);
+        return (
+          Object.is(interval.lower, reference.betaQuantile(low, alpha, beta)) &&
+          Object.is(interval.upper, reference.betaQuantile(high, alpha, beta))
+        );
+      },
+    ),
+    { numRuns: 2000 },
+  );
+  // Validated as one quantile call would be, whichever end is wrong.
+  assert.throws(() => betaInterval(0.1, 0.9, 0, 1), RangeError);
+  assert.throws(() => betaInterval(0.1, Number.NaN, 1, 1), RangeError);
 });

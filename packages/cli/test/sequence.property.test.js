@@ -131,9 +131,21 @@ test("nothing searches for a length: one call site, and no solver anywhere in th
       );
     }
   }
-  assert.deepEqual(callers, ["status.js"]);
+  // `snack dash` (1.6.0, decision D3) is the second caller: the person's N, stepped by a key.
+  assert.deepEqual(callers.sort(), ["dash.js", "status.js"]);
   const status = await readFile(new URL("status.js", directory), "utf8");
   assert.match(status, /assessSequence\(forecast, request\.sequenceLength\)/u);
+  const dash = await readFile(new URL("dash.js", directory), "utf8");
+  assert.match(dash, /assessSequence\(report, state\.sequenceLength\)/u);
+  // Its length moves only by the person's keys: shown at the length they last had, or exactly one
+  // step within 1..SEQUENCE_MAX_LENGTH. Nothing assigns it from a probability.
+  const assignments = [...dash.matchAll(/state\.sequenceLength = ([^;]+);/gu)].map((match) =>
+    String(match[1]).replace(/\s+/gu, " "),
+  );
+  assert.deepEqual(assignments, [
+    "state.sequenceLength === null ? lastLength : null",
+    "Math.min( SEQUENCE_MAX_LENGTH, Math.max(1, state.sequenceLength + step), )",
+  ]);
 });
 
 /** One configured history with two sources, so every report and every path is exercised. */
@@ -224,9 +236,14 @@ function assertSequenceShape(sequence, n) {
   }
 }
 
+/** The `sequence-prior-tail-v1` diagnostic (1.6.0): it names no length, and follows the width caveat. */
+const PRIOR_TAIL =
+  "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history.";
+
 /**
  * The document with everything the sequence added taken away: its member, and the caveats that
- * name its length, which come last. A sequence of one that is not too wide adds no caveat at all.
+ * name its length, which come last, followed by the prior-tail diagnostic when it applies. A
+ * sequence of one that is not too wide adds no caveat at all.
  *
  * @param {unknown} document
  * @param {number} n
@@ -235,6 +252,12 @@ function withoutSequence(document, n) {
   const copy = JSON.parse(JSON.stringify(document));
   for (const report of copy.data.sources ?? [copy.data]) {
     assertSequenceShape(report.sequence, n);
+    // Only beside a too-wide interval, and only last.
+    if (report.caveats.at(-1) === PRIOR_TAIL) {
+      assert.equal(report.sequence.width.too_wide, true);
+      report.caveats = report.caveats.slice(0, -1);
+    }
+    assert.ok(!report.caveats.includes(PRIOR_TAIL), JSON.stringify(report.caveats));
     delete report.sequence;
     const own = report.caveats.filter((/** @type {string} */ caveat) =>
       caveat.startsWith(`The ${n}-prompt `),

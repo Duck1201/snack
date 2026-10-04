@@ -3,7 +3,15 @@ import { test } from "node:test";
 
 import fc from "fast-check";
 
-import { renderStats, renderStatus, renderStatusTable, sparkline } from "../src/render.js";
+import {
+  formatInterval,
+  renderStats,
+  renderStatus,
+  renderStatusTable,
+  shownForecast,
+  shownInterval,
+  sparkline,
+} from "../src/render.js";
 
 test("a series of scores draws one block per window, low to high", () => {
   // Scores are percentiles in [0, 1] -- `computeUsagePressure().score` -- so the mapping is fixed
@@ -1233,4 +1241,187 @@ test("stats --verbose gives each method its own line, and the shadow its compari
   // The default report is unchanged by a second method.
   assert.equal(renderStats(report, { verbose: false }), renderStats(base, { verbose: false }));
   assert.doesNotMatch(verbose, /accuracy/iu);
+});
+
+/** @param {number} halfLife @param {Record<string, unknown>} [overrides] */
+const variantEntry = (halfLife, overrides = {}) => ({
+  method: { id: `bayesian-pressure-band-hl${halfLife}`, version: "1" },
+  computed: true,
+  reason: null,
+  policy_version: `recency-hl${halfLife}-v1`,
+  viability: {
+    lower: halfLife === 50 ? 0.96 : 0.97,
+    point: 0.99,
+    upper: 1,
+    coverage_target: 0.8,
+  },
+  risk: { label: "low" },
+  evidence: { level: "high" },
+  ...overrides,
+});
+
+test("the weighting variants are verbose shadow lines, said once not to be the answer", () => {
+  const status = statusFor({ shadows: [variantEntry(50), variantEntry(100)] });
+  const verbose = renderStatus([status], { color: false, verbose: true });
+  const lines = verbose.split("\n");
+  const first = lines.findIndex((line) => line.startsWith("  shadow"));
+  assert.ok(first > 0, verbose);
+  assert.deepEqual(lines.slice(first, first + 3), [
+    "  shadow       bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above",
+    "               bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high",
+    "               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt",
+  ]);
+  assert.equal(verbose.match(/not the answer above/gu)?.length, 1);
+  // The answer is the report's own interval, above them.
+  assert.ok(first > lines.findIndex((line) => line.startsWith("  next prompt")));
+  assert.match(verbose, /next prompt {2}95-100% chance it goes through · risk low/u);
+  // Never on the default panel or the overview.
+  for (const plain of [
+    renderStatus([status], { color: false }),
+    renderStatusTable([status], { color: false, columns: 160 }),
+  ]) {
+    assert.doesNotMatch(plain, /shadow|hl50|hl100|half-life|96-100/u);
+  }
+});
+
+test("on a Codex source the variants follow the reported-capacity lines under one label", () => {
+  const computed =
+    /** @type {ReturnType<typeof codexStatusFor> & {shadow: import("../src/render.js").WeightingShadowStatusView & import("../src/render.js").ShadowStatusView}} */ (
+      codexStatusFor(COMPUTED)
+    );
+  const status = { ...computed, shadows: [computed.shadow, variantEntry(50), variantEntry(100)] };
+  const lines = renderStatus([status], { color: false, verbose: true }).split("\n");
+  const first = lines.findIndex((line) => line.startsWith("  shadow"));
+  assert.deepEqual(lines.slice(first, first + 5), [
+    "  shadow       reported-capacity@1 would say 41-97% · risk high · evidence low — recorded to compare, not the answer above",
+    "               reads what Codex states about its 5h window — in the near band · reported-capacity-v1",
+    "               bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high",
+    "               bayesian-pressure-band-hl100@1 would say 97-100% · risk low · evidence high",
+    "               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt",
+  ]);
+  assert.equal(lines.filter((line) => line.startsWith("  shadow")).length, 1);
+
+  // When the reported-capacity shadow says only why it was not computed, the first variant that
+  // says something carries the one "not the answer" suffix.
+  const quiet =
+    /** @type {ReturnType<typeof codexStatusFor> & {shadow: import("../src/render.js").WeightingShadowStatusView & import("../src/render.js").ShadowStatusView}} */ (
+      codexStatusFor({ computed: false, reason: "no_statement", binding: null })
+    );
+  const quietLines = renderStatus(
+    [{ ...quiet, shadows: [quiet.shadow, variantEntry(50), variantEntry(100)] }],
+    { color: false, verbose: true },
+  ).split("\n");
+  const at = quietLines.findIndex((line) => line.startsWith("  shadow"));
+  assert.deepEqual(quietLines.slice(at, at + 2), [
+    "  shadow       reported-capacity@1 not computed — no figure stated yet",
+    "               bayesian-pressure-band-hl50@1 would say 96-100% · risk low · evidence high — recorded to compare, not the answer above",
+  ]);
+});
+
+test("variants not computed for one reason share one line", () => {
+  const notComputed = (/** @type {number} */ halfLife) => ({
+    method: { id: `bayesian-pressure-band-hl${halfLife}`, version: "1" },
+    computed: false,
+    reason: "no_local_outcomes",
+    policy_version: `recency-hl${halfLife}-v1`,
+  });
+  const lines = renderStatus([statusFor({ shadows: [notComputed(50), notComputed(100)] })], {
+    color: false,
+    verbose: true,
+  }).split("\n");
+  const first = lines.findIndex((line) => line.startsWith("  shadow"));
+  assert.deepEqual(lines.slice(first, first + 2), [
+    "  shadow       bayesian-pressure-band-hl50@1 and bayesian-pressure-band-hl100@1 not computed — no outcome of yours to read yet",
+    "               the answer's model with a 50- and a 100-prompt recency half-life instead of the answer's 30-prompt",
+  ]);
+  assert.ok(!lines[first + 2]?.startsWith("               bayesian"));
+  // One computed, one not: a line each.
+  const mixed = renderStatus([statusFor({ shadows: [variantEntry(50), notComputed(100)] })], {
+    color: false,
+    verbose: true,
+  });
+  assert.match(
+    mixed,
+    /\n {15}bayesian-pressure-band-hl100@1 not computed — no outcome of yours to read yet\n/u,
+  );
+});
+
+test("stats --verbose lists each weighting variant with its paired comparison", () => {
+  const stream = (/** @type {number | null} */ value, /** @type {number} */ sample) => ({
+    brier: { value, sample_size: sample },
+    interval: { coverage: null, sample_size: sample },
+  });
+  const base = statsFor();
+  const variant = (/** @type {number} */ halfLife, /** @type {number} */ brier) => ({
+    id: `bayesian-pressure-band-hl${halfLife}`,
+    version: "1",
+    role: "shadow",
+    live: stream(null, 0),
+    backtest: stream(brier, 84),
+    paired: {
+      live: { sample_size: 0, restrictions: 0, brier: null, baseline_brier: null },
+      backtest: { sample_size: 84, restrictions: 1, brier, baseline_brier: 0.0168 },
+    },
+  });
+  const report = {
+    ...base,
+    calibration: {
+      ...base.calibration,
+      by_method: [
+        {
+          id: "bayesian-pressure-band",
+          version: "1",
+          role: "answer",
+          live: stream(0.0104, 40),
+          backtest: stream(0.0168, 84),
+        },
+        variant(50, 0.0161),
+        variant(100, 0.0157),
+      ],
+    },
+  };
+  const verbose = renderStats(report, { verbose: true });
+  assert.match(
+    verbose,
+    / {2}by method\n {4}bayesian-pressure-band@1 {8}answer · live brier 0\.010, sample 40 · backtest brier 0\.017, sample 84\n {4}bayesian-pressure-band-hl50@1 {3}shadow · live not available yet · backtest brier 0\.016, sample 84\n {36}same outcomes as the baseline · live not available yet · backtest brier 0\.016 against 0\.017, sample 84, 1 restricted\n {4}bayesian-pressure-band-hl100@1 {2}shadow · /u,
+  );
+  assert.equal(renderStats(report, { verbose: false }), renderStats(base, { verbose: false }));
+});
+
+test("every printed interval is formatted from shownInterval, the one rounding function", () => {
+  // The dash keys its snapshots on these two integers (ADR-0008), so the key and every panel must
+  // round through the same function or a snapshot could record what no one was shown.
+  fc.assert(
+    fc.property(
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      (a, b) => {
+        const viability = {
+          lower: Math.min(a, b),
+          point: (a + b) / 2,
+          upper: Math.max(a, b),
+          coverage_target: 0.8,
+        };
+        const shown = shownInterval(viability);
+        assert.ok(Number.isInteger(shown.lower) && Number.isInteger(shown.upper));
+        assert.ok(0 <= shown.lower && shown.lower <= shown.upper && shown.upper <= 100);
+        const text = `${shown.lower}-${shown.upper}%`;
+        assert.equal(formatInterval(viability), text);
+        const status = /** @type {never} */ (statusFor({ viability }));
+        assert.ok(renderStatus([status], { color: false }).includes(`${text} chance`), text);
+        assert.ok(renderStatusTable([status], { color: false, columns: 120 }).includes(text));
+      },
+    ),
+  );
+});
+
+test("shownForecast states what a human surface shows of one answer, already rounded", () => {
+  const status = statusFor({
+    viability: { lower: 0.6394, point: 0.8, upper: 0.95, coverage_target: 0.8 },
+  });
+  assert.deepEqual(shownForecast(/** @type {never} */ (status)), {
+    interval: { lower: 63, upper: 95 },
+    risk: "low",
+    evidence: "moderate",
+  });
 });

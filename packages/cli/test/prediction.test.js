@@ -1,19 +1,26 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
 import { test } from "node:test";
 
 import fc from "fast-check";
+
+import { betaQuantile } from "../src/beta.js";
+import { resolvePlanProfile } from "../src/plan-profile.js";
+import { REPORTED_CAPACITY_POLICY } from "../src/reported-capacity.js";
 
 import {
   EVIDENCE_POLICY,
   PREDICTION_POLICY,
   SEQUENCE_MAX_LENGTH,
   SEQUENCE_WIDTH_POLICY,
+  WEIGHTING_VARIANTS,
   assembleForecast,
   assessSequence,
   buildForecast,
   buildReportedForecast,
   classifyIngestionCompleteness,
   classifyRisk,
+  decayWeight,
 } from "../src/prediction.js";
 
 const now = new Date("2026-02-01T00:00:00.000Z");
@@ -874,5 +881,296 @@ test("the baseline forecast is untouched by the reported method's existence", ()
   assert.equal(
     buildForecast({ ...input, outcomes: plain }).evidence.policy_version,
     EVIDENCE_POLICY.version,
+  );
+});
+
+// --- Weighting variants: the answer's model under longer recency half-lives, in shadow (1.6.0) ---
+
+/** Arbitrary chronological histories over two bands and three categories, every outcome kind. */
+const varietyHistory = fc
+  .array(
+    fc.record({
+      ageSeconds: fc.integer({ min: 0, max: 20 * 86400 }),
+      outcome: fc.constantFrom("success", "success", "success", "restricted", "excluded"),
+      pressure_band: fc.constantFrom("low", "moderate"),
+      size_category: fc.constantFrom("small", "typical", "large"),
+    }),
+    { maxLength: 250, size: "max" },
+  )
+  .map((rows) =>
+    rows
+      .map((row) => ({
+        started_at: at(row.ageSeconds),
+        outcome: /** @type {"success" | "restricted" | "excluded"} */ (row.outcome),
+        pressure_band: row.pressure_band,
+        size_category: row.size_category,
+      }))
+      .sort((left, right) => left.started_at.localeCompare(right.started_at)),
+  );
+
+test("the weighting variants change one knob each, and every one of them still decays", () => {
+  assert.ok(Object.isFrozen(WEIGHTING_VARIANTS));
+  assert.deepEqual(
+    WEIGHTING_VARIANTS.map((variant) => [
+      `${variant.method.id}@${variant.method.version}`,
+      variant.policy.version,
+      variant.policy.recency_half_life_prompts,
+    ]),
+    [
+      ["bayesian-pressure-band-hl50@1", "recency-hl50-v1", 50],
+      ["bayesian-pressure-band-hl100@1", "recency-hl100-v1", 100],
+    ],
+  );
+  const versions = new Set(/** @type {string[]} */ ([PREDICTION_POLICY.version]));
+  for (const variant of WEIGHTING_VARIANTS) {
+    assert.ok(Object.isFrozen(variant) && Object.isFrozen(variant.policy));
+    assert.match(variant.method.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+    assert.ok(!versions.has(variant.policy.version), variant.policy.version);
+    versions.add(variant.policy.version);
+    assert.equal(variant.policy.base_policy, PREDICTION_POLICY.version);
+    // The always-decays guard: a finite recency half-life, and the answer's time half-life.
+    assert.ok(Number.isFinite(variant.policy.recency_half_life_prompts));
+    assert.ok(variant.policy.recency_half_life_prompts > 0);
+    assert.equal(variant.policy.decay_half_life_seconds, PREDICTION_POLICY.decay_half_life_seconds);
+    // One knob: everything but the version, the recency half-life and the base policy is the
+    // answer's own.
+    const {
+      version,
+      recency_half_life_prompts: recency,
+      base_policy: base,
+      ...rest
+    } = variant.policy;
+    const {
+      version: answerVersion,
+      recency_half_life_prompts: answerRecency,
+      ...answerRest
+    } = PREDICTION_POLICY;
+    assert.deepEqual(rest, answerRest);
+    assert.notEqual(version, answerVersion);
+    assert.ok(recency > answerRecency && typeof base === "string");
+  }
+});
+
+test("old outcomes weigh strictly less, by age and by later prompts, under every weighting", () => {
+  const policies = [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)];
+  fc.assert(
+    fc.property(
+      fc.integer({ min: 1, max: 365 * 86400 }),
+      fc.integer({ min: 1, max: 365 * 86400 }),
+      fc.integer({ min: 0, max: 2000 }),
+      fc.integer({ min: 0, max: 2000 }),
+      (ageA, ageB, laterA, laterB) => {
+        for (const policy of policies) {
+          if (ageA !== ageB) {
+            const [younger, older] = ageA < ageB ? [ageA, ageB] : [ageB, ageA];
+            assert.ok(
+              decayWeight(at(older), laterA, now, policy) <
+                decayWeight(at(younger), laterA, now, policy),
+              `${policy.version}: ${older}s does not weigh less than ${younger}s`,
+            );
+          }
+          if (laterA !== laterB) {
+            const [fewer, more] = laterA < laterB ? [laterA, laterB] : [laterB, laterA];
+            assert.ok(
+              decayWeight(at(ageA), more, now, policy) < decayWeight(at(ageA), fewer, now, policy),
+              `${policy.version}: ${more} later prompts do not weigh less than ${fewer}`,
+            );
+          }
+        }
+      },
+    ),
+    { numRuns: 300 },
+  );
+  // And through the forecast: one success, older, adds less effective sample.
+  for (const policy of policies) {
+    const single = (/** @type {number} */ ageSeconds) =>
+      buildForecast({
+        now,
+        prior: PLAN_PRIOR,
+        expectedBand: "moderate",
+        expectedCategory: "typical",
+        policy,
+        outcomes: [
+          {
+            started_at: at(ageSeconds),
+            outcome: "success",
+            pressure_band: "moderate",
+            size_category: "typical",
+          },
+        ],
+      }).contributors.evidence_window.weighted_successes;
+    assert.ok(single(7 * 86400) < single(3600), policy.version);
+  }
+});
+
+test("a variant at the answer's half-life is the answer, but for its name", () => {
+  fc.assert(
+    fc.property(
+      varietyHistory,
+      fc.constantFrom("low", "moderate", "unknown"),
+      fc.constantFrom("small", "typical", "large"),
+      fc.constantFrom("complete", "partial", "unknown"),
+      (outcomes, band, category, completeness) => {
+        const input = {
+          now,
+          prior: PLAN_PRIOR,
+          expectedBand: band,
+          expectedCategory: category,
+          outcomes,
+          dataCompleteness: /** @type {"complete" | "partial" | "unknown"} */ (completeness),
+        };
+        const answer = buildForecast(input);
+        const identity = buildForecast({
+          ...input,
+          policy: Object.freeze({
+            ...PREDICTION_POLICY,
+            version: "identity-v1",
+            recency_half_life_prompts: PREDICTION_POLICY.recency_half_life_prompts,
+          }),
+          method: { id: "identity", version: "1" },
+        });
+        assert.deepEqual(identity.method, { id: "identity", version: "1" });
+        assert.equal(identity.model_policy_version, "identity-v1");
+        /** @param {Record<string, unknown>} forecast */
+        const unnamed = (forecast) => {
+          const rest = { ...forecast };
+          delete rest.method;
+          delete rest.model_policy_version;
+          return rest;
+        };
+        assert.deepEqual(unnamed(identity), unnamed(answer));
+      },
+    ),
+    { numRuns: 150 },
+  );
+});
+
+test("buildForecast without a method is the forecast it always was", () => {
+  fc.assert(
+    fc.property(varietyHistory, (outcomes) => {
+      const input = {
+        now,
+        prior: PLAN_PRIOR,
+        expectedBand: "low",
+        expectedCategory: "typical",
+        outcomes,
+      };
+      const plain = buildForecast(input);
+      assert.equal(
+        JSON.stringify(buildForecast({ ...input, policy: PREDICTION_POLICY })),
+        JSON.stringify(plain),
+      );
+      assert.ok(
+        ["bayesian-pressure-band", "initial-generic"].includes(plain.method.id),
+        plain.method.id,
+      );
+    }),
+    { numRuns: 100 },
+  );
+});
+
+// --- The interval contains its point (1.6.0) ---
+
+/** @param {number} successes @param {number} restrictions */
+const cellOf = (successes, restrictions) => ({
+  prompts_considered: 0,
+  limit_prompts: PREDICTION_POLICY.evidence_window_prompts,
+  successes: 0,
+  restrictions: 0,
+  excluded: 0,
+  weighted_successes: successes,
+  weighted_restrictions: restrictions,
+  effective_samples: successes + restrictions,
+  alpha: 0,
+  beta: 0,
+});
+const weight = fc.oneof(
+  fc.constant(0),
+  fc.double({ min: 0, max: 1e-6, noNaN: true }),
+  fc.double({ min: 0, max: 200, noNaN: true }),
+  fc.double({ min: 0, max: 1e4, noNaN: true }),
+);
+const policies = [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)];
+
+test("every forecast's interval contains its point, whatever valid prior a profile declares", () => {
+  // A user profile may declare any prior strength in (0, 100] and viability in (0, 1). With
+  // `prior_strength: 1, prior_viability: 0.99` the raw 10% quantile lies above the mean, which
+  // until 1.6.0 made `status` exit 10 on the attempt row's CHECK.
+  fc.assert(
+    fc.property(
+      fc.double({ min: 1e-6, max: 100, noNaN: true }),
+      fc.double({ min: 1e-6, max: 1 - 1e-6, noNaN: true }),
+      weight,
+      weight,
+      (strength, viability, successes, restrictions) => {
+        const result = assembleForecast({
+          cell: cellOf(successes, restrictions),
+          level: "period",
+          prior: { strength, viability },
+          policy: PREDICTION_POLICY,
+          dataCompleteness: "complete",
+        });
+        const { lower, point, upper } = result.viability;
+        assert.ok(lower <= point && point <= upper, JSON.stringify(result.viability));
+        const { alpha, beta } = result.contributors.evidence_window;
+        assert.equal(lower, Math.min(betaQuantile((1 - 0.8) / 2, alpha, beta), point));
+        assert.equal(upper, Math.max(betaQuantile(1 - (1 - 0.8) / 2, alpha, beta), point));
+        assert.equal(result.risk.label, classifyRisk(lower).label);
+      },
+    ),
+    { numRuns: 500 },
+  );
+  // The case the defect report named, so the property is not vacuous.
+  const confident = assembleForecast({
+    cell: cellOf(0, 0),
+    level: "prior",
+    prior: { strength: 1, viability: 0.99 },
+    policy: PREDICTION_POLICY,
+    dataCompleteness: "complete",
+  });
+  assert.ok(betaQuantile(0.1, 0.99, 0.01) > 0.99);
+  assert.equal(confident.viability.lower, confident.viability.point);
+});
+
+test("on every prior SNACK ships, containing the point changes no double", () => {
+  // The bundled profiles and the `reported-capacity` full-statement prior: for every posterior they
+  // can reach, the equal-tailed quantiles already contain the mean, so the widening is a no-op and
+  // every bundled answer is the one 1.5.0 gave, bit for bit.
+  const directory = new URL("../profiles/plans/", import.meta.url);
+  const priors = readdirSync(directory)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      const { profile, warnings } = resolvePlanProfile({ plan_profile: name.slice(0, -5) });
+      assert.deepEqual(warnings, []);
+      return { strength: profile.prior_strength, viability: profile.prior_viability };
+    });
+  assert.equal(priors.length, 3);
+  priors.push(REPORTED_CAPACITY_POLICY.full_prior);
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...priors),
+      fc.constantFrom(...policies),
+      weight,
+      weight,
+      (prior, policy, successes, restrictions) => {
+        const result = assembleForecast({
+          cell: cellOf(successes, restrictions),
+          level: "period",
+          prior,
+          policy,
+          dataCompleteness: "complete",
+        });
+        const { alpha, beta } = result.contributors.evidence_window;
+        const tail = (1 - policy.coverage_target) / 2;
+        // `deepStrictEqual` compares doubles with Object.is: the raw quantiles, untouched.
+        assert.deepEqual(result.viability, {
+          lower: betaQuantile(tail, alpha, beta),
+          point: alpha / (alpha + beta),
+          upper: betaQuantile(1 - tail, alpha, beta),
+          coverage_target: policy.coverage_target,
+        });
+      },
+    ),
+    { numRuns: 2000 },
   );
 });

@@ -5,7 +5,19 @@ import { afterEach, test } from "node:test";
 
 import { commandSurface } from "../../../scripts/man-surface.mjs";
 import { compareOutcomeGroups } from "../src/analytics.js";
+import { minimumRows, renderDash } from "../src/dash-view.js";
 import { run } from "../src/main.js";
+import { createScreen } from "../src/screen.js";
+import { everyDashState } from "./fixtures/dash-states.js";
+import {
+  makeFakeClock,
+  makeFakeSignals,
+  makeFakeSync,
+  makeFakeTerminal,
+  realSync,
+  startDash,
+} from "./fixtures/fake-tty.js";
+import { makeVirtualScreen } from "./fixtures/fake-screen.js";
 import {
   cleanupRunFixtures,
   createCodexHistory,
@@ -104,6 +116,8 @@ test("no command calls observed usage a quota percentage or a remaining balance"
     ["data", "purge", "--source", "work", "--dry-run"],
     // An unconfigured source is the error surface, which is UI too.
     ["stats", "--source", "absent"],
+    // `snack dash` through a pipe, and with `--json`: both refusals, in words and as an envelope.
+    ["dash"],
   ];
 
   /** @type {{argv: string[], json: boolean, text: string}[]} */
@@ -131,7 +145,20 @@ test("no command calls observed usage a quota percentage or a remaining balance"
   assert.match(transcript, /chance all 10 go through/u);
   assert.match(transcript, /"sequence"/u);
   assert.match(transcript, /interval is too wide to say much/u);
+  // The prior-tail diagnostic (`sequence-prior-tail-v1`, 1.6.0) is on the policed surface too.
+  assert.match(transcript, /comes from SNACK's starting assumption rather than from your history/u);
   assert.match(transcript, /--sequence <n>/u);
+  assert.match(transcript, /snack dash needs an interactive terminal/u);
+  assert.match(transcript, /"dash_json_unsupported"/u);
+  // The weighting variants (1.6.0): their verbose lines, the half-lives in words, and the JSON.
+  assert.match(transcript, /recency half-life/u);
+  assert.match(transcript, /not the answer above/u);
+  assert.match(transcript, /bayesian-pressure-band-hl50@1 would say/u);
+  assert.match(transcript, /"bayesian-pressure-band-hl100"/u);
+  for (const output of outputs.filter((entry) => entry.argv.includes("--verbose"))) {
+    // A half-life is said "50-prompt", never a number set before the word.
+    assert.doesNotMatch(output.text, countBeforePrompts, `\`snack ${output.argv.join(" ")}\``);
+  }
 
   for (const output of outputs) {
     for (const term of forbidden) {
@@ -381,6 +408,69 @@ test("the count-before-prompts pattern catches every shape of a count and nothin
   }
 });
 
+test("no dash screen says what the panels refuse to, at any size or pane", () => {
+  // The dash is a screen rather than a stream, so it is policed as a reader sees it: every widget
+  // state is drawn at three widths and two heights besides its minimum, pushed through the screen
+  // buffer onto a virtual terminal, and the final screen -- colour on, escapes applied -- is held
+  // to the same patterns as every command's output. Each state is drawn over the previous one, so
+  // a row the frame diff forgot to clear would be read here too.
+  /** @type {{where: string, text: string}[]} */
+  const screens = [];
+  for (const columns of [64, 80, 120]) {
+    for (const rows of [24, 60]) {
+      const terminal = makeVirtualScreen({ columns, rows });
+      const screen = createScreen(terminal);
+      screen.enter();
+      for (const [name, state] of everyDashState()) {
+        for (const height of [minimumRows(state), rows]) {
+          if (height > rows) continue;
+          screen.frame(renderDash(state, { columns, rows: height }, { color: true }).lines);
+          screens.push({ where: `${name} at ${columns}x${height}`, text: terminal.text() });
+        }
+      }
+      // Too small is a widget too.
+      const [, first] = /** @type {[string, import("../src/dash-view.js").DashState]} */ (
+        everyDashState()[0]
+      );
+      screen.frame(renderDash(first, { columns: 58, rows: 20 }, { color: true }).lines);
+      screens.push({ where: `too small under ${columns}x${rows}`, text: terminal.text() });
+      screen.leave();
+    }
+  }
+
+  // Vacuity guards: the panes, the sequence row in both forms, the drawings and the too-small
+  // sentence were all really on a screen.
+  const transcript = screens.map((screen) => screen.text).join("\n");
+  assert.match(transcript, /chance all 10 go through/u);
+  assert.match(transcript, /interval is too wide to say much/u);
+  assert.match(transcript, /lightest ├─*●─*┤ heaviest/u);
+  assert.match(transcript, /each hour against your own history/u);
+  assert.match(transcript, /reading this screen/u);
+  assert.match(transcript, /Codex states \d+% of its \w+ window/u);
+  assert.match(transcript, /snack dash needs at least 64 columns/u);
+
+  for (const { where, text } of screens) {
+    for (const term of forbidden) {
+      assert.doesNotMatch(text, term.pattern, `${where} says ${term.label}`);
+    }
+    assert.doesNotMatch(text, countBeforePrompts, `${where} sets a count before "prompts"`);
+    assert.doesNotMatch(
+      text,
+      /\b(?:up to\s+)?\d+\s+(?:more\s+)?prompts?\s+(?:left|remaining|available|before)\b/iu,
+      `${where} promises a prompt count`,
+    );
+    assert.doesNotMatch(text, /\bprompts?\s+(?:until|to go)\b/iu, `${where} counts down prompts`);
+    // The two drawings are where a picture could say what a sentence never would: a scale with a
+    // used side, a plot with an empty end.
+    const drawings = text
+      .split("\n")
+      .filter((line) => /lightest|by hour|by window|\bago +now$/u.test(line));
+    for (const line of drawings) {
+      assert.doesNotMatch(line, /\b(?:full|empty|used|left|remaining)\b/iu, `${where}: ${line}`);
+    }
+  }
+});
+
 test("no help page or manual sets a number directly before the word prompts", async () => {
   const fixture = await makeRunFixture("snack-vocabulary-help-");
   /** @type {Map<string, string>} */
@@ -527,4 +617,75 @@ test("storage names no type after the client that happened to be first", async (
     (match) => match[0],
   );
   assert.deepEqual([...new Set(named)], [], "storage.js names identifiers after a client");
+});
+
+test("a live dash session says what the panels refuse to, through every pane and size", async () => {
+  // The widgets are policed state by state above; this is the session itself -- real storage, a
+  // real sync, Codex's stated figure on the `reported` row, every key -- read off the screen.
+  const fixture = await makeRunFixture("snack-vocabulary-dash-");
+  fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
+  fixture.options.env.CODEX_HOME = await createCodexHistory(fixture.root, [
+    "version-0-159-3.jsonl",
+    "version-0-147-0.jsonl",
+  ]);
+  for (const [client, alias, provider, plan] of [
+    ["opencode", "work", "anthropic", "pro"],
+    ["codex", "codex", "openai", "plus"],
+  ]) {
+    const setup = ["setup", String(client), "--non-interactive", "--source", String(alias)];
+    setup.push("--provider", String(provider), "--profile", "default", "--plan", String(plan));
+    assert.equal(await run(["node", "snack", ...setup], fixture.options), 0);
+  }
+  const start = /** @type {Date} */ (fixture.options.now);
+  const clock = makeFakeClock(start);
+  const terminal = makeFakeTerminal({ columns: 120, rows: 40 });
+  const session = await startDash(
+    { ...fixture.options, now: start },
+    {
+      terminal,
+      clock,
+      sync: makeFakeSync(realSync(fixture.options, clock.now)),
+      signals: makeFakeSignals(),
+    },
+  );
+  /** @type {{where: string, text: string}[]} */
+  const screens = [];
+  const keep = (/** @type {string} */ where) => screens.push({ where, text: terminal.text() });
+  keep("start");
+  for (const key of ["j", "s", "+", "?", "escape", "k", "r", "-", "s"]) {
+    terminal.press(key);
+    await session.settle();
+    keep(`after ${key}`);
+  }
+  terminal.press("s");
+  for (const [columns, rows] of [
+    [64, 24],
+    [80, 24],
+    [200, 60],
+    [50, 12],
+  ]) {
+    terminal.resize(Number(columns), Number(rows));
+    keep(`${columns}x${rows}`);
+  }
+  await clock.advance(90_000);
+  keep("after a sync");
+  terminal.press("q");
+  assert.equal(await session.done, 0);
+
+  const transcript = screens.map((screen) => screen.text).join("\n");
+  assert.match(transcript, /Codex states \d+% of its \w+ window/u);
+  assert.match(transcript, /next \d+ /u);
+  assert.match(transcript, /reading this screen/u);
+  for (const { where, text } of screens) {
+    for (const term of forbidden) {
+      assert.doesNotMatch(text, term.pattern, `${where} says ${term.label}`);
+    }
+    assert.doesNotMatch(text, countBeforePrompts, `${where} sets a count before "prompts"`);
+    const drawings = text
+      .split("\n")
+      .filter((line) => /lightest|by hour|by window|\bago +now$/u.test(line));
+    for (const line of drawings) {
+      assert.doesNotMatch(line, /\b(?:full|empty|used|left|remaining)\b/iu, `${where}: ${line}`);
+    }
+  }
 });

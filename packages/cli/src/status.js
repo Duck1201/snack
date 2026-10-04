@@ -1,6 +1,12 @@
 import { assignPressureBands } from "./analytics.js";
 import { resolvePlanProfile } from "./plan-profile.js";
-import { assessSequence, buildForecast, buildReportedForecast } from "./prediction.js";
+import {
+  SEQUENCE_PRIOR_TAIL_POLICY,
+  WEIGHTING_VARIANTS,
+  assessSequence,
+  buildForecast,
+  buildReportedForecast,
+} from "./prediction.js";
 import { REPORTED_CAPACITY_POLICY, resolveStatedState } from "./reported-capacity.js";
 
 /**
@@ -15,8 +21,11 @@ import { REPORTED_CAPACITY_POLICY, resolveStatedState } from "./reported-capacit
  * @param {{performed: boolean, status: string}} [synchronization]
  * @param {{band: string, policy_version: string, contributors?: {dimension: string, percentile: number | null, contribution: number | null}[]}} [pressure] usage pressure for the primary horizon
  * @param {{outcomes?: import("./prediction.js").OutcomeRow[], windowSeconds?: number, category?: string, prospective?: object, completeness?: {level: "complete" | "partial" | "unknown", reasons: string[], policy_version: string}}} [history]
- * @param {{sequenceLength?: number}} [request] what the user asked for beyond the next prompt:
- *   `sequenceLength` is the number passed to `--sequence`, already validated, and absent without it
+ * @param {{sequenceLength?: number, prepared?: PreparedForecastInput}} [request] what the user asked
+ *   for beyond the next prompt: `sequenceLength` is the number passed to `--sequence`, already
+ *   validated, and absent without it. `prepared` is `prepareForecastInput`'s result for these same
+ *   arguments, passed by a caller that also builds the weighting shadows from it, so the outcomes
+ *   are banded once; left out, it is prepared here.
  */
 export function createSourceStatus(
   source,
@@ -31,26 +40,10 @@ export function createSourceStatus(
   const asOf = observed.as_of;
   const ageSeconds = asOf === null ? null : Math.max(0, (now.getTime() - Date.parse(asOf)) / 1000);
 
-  const origin = observed.active_period_started_at ?? asOf ?? now.toISOString();
-  const outcomes =
-    history.outcomes && history.windowSeconds
-      ? assignPressureBands(history.outcomes, { origin, windowSeconds: history.windowSeconds })
-      : (history.outcomes ?? []);
-
-  const expectedCategory = history.category ?? "typical";
-  const completeness = history.completeness ?? {
-    level: /** @type {"unknown"} */ ("unknown"),
-    reasons: ["never_synchronized"],
-    policy_version: "stage5-evidence-v1",
-  };
-  const forecast = buildForecast({
-    now,
-    prior: { strength: planProfile.prior_strength, viability: planProfile.prior_viability },
-    expectedBand: pressure.band,
-    expectedCategory,
-    outcomes,
-    dataCompleteness: completeness.level,
-  });
+  const input = request.prepared ?? prepareForecastInput(source, observed, now, pressure, history);
+  const expectedCategory = input.expectedCategory;
+  const completeness = completenessOf(history);
+  const forecast = buildForecast(input);
   // The one call site. The length is the user's number and only ever travels inward: nothing
   // searches for a length that meets a probability (docs/specification/analysis.md §9.8).
   const sequence =
@@ -102,8 +95,158 @@ export function createSourceStatus(
         : "The estimate is not yet calibrated against observed outcomes.",
       "Real provider capacity is unknown.",
       "Usage pressure compares this window with local history; it is not a share of capacity.",
-      ...(sequence === undefined ? [] : sequenceCaveats(sequence)),
+      ...(sequence === undefined
+        ? []
+        : sequenceCaveats(sequence, forecast.contributors.evidence_window)),
     ],
+  };
+}
+
+/**
+ * The forecast input of one capacity source, as the answer reads it.
+ *
+ * @typedef {object} PreparedForecastInput
+ * @property {Date} now
+ * @property {{strength: number, viability: number}} prior
+ * @property {string} expectedBand
+ * @property {string} expectedCategory
+ * @property {import("./prediction.js").OutcomeRow[]} outcomes banded by usage pressure
+ * @property {"complete" | "partial" | "unknown"} dataCompleteness
+ */
+
+/**
+ * Prepare, once, everything the answer's forecast reads: the plan prior, the band and category the
+ * next prompt is assumed to meet, the outcomes banded by usage pressure, and ingestion
+ * completeness. The answer and every weighting variant read this very object, so a variant can
+ * differ from the answer only by its weighting -- never by a second read or a second banding.
+ *
+ * @param {{alias: string, provider: string, profile: string, plan: string, plan_profile?: string}} source
+ * @param {{as_of: string | null, active_period_started_at: string | null}} observed
+ * @param {Date} now
+ * @param {{band: string}} pressure
+ * @param {{outcomes?: import("./prediction.js").OutcomeRow[], windowSeconds?: number, category?: string, completeness?: {level: "complete" | "partial" | "unknown"}}} history
+ * @returns {PreparedForecastInput}
+ */
+export function prepareForecastInput(source, observed, now, pressure, history) {
+  const planProfile = resolvePlanProfile(source).profile;
+  const origin = observed.active_period_started_at ?? observed.as_of ?? now.toISOString();
+  const outcomes =
+    history.outcomes && history.windowSeconds
+      ? assignPressureBands(history.outcomes, { origin, windowSeconds: history.windowSeconds })
+      : (history.outcomes ?? []);
+  return {
+    now,
+    prior: { strength: planProfile.prior_strength, viability: planProfile.prior_viability },
+    expectedBand: pressure.band,
+    expectedCategory: history.category ?? "typical",
+    outcomes,
+    dataCompleteness: completenessOf(history).level,
+  };
+}
+
+/**
+ * @param {{completeness?: {level: "complete" | "partial" | "unknown", reasons?: string[], policy_version?: string}}} history
+ */
+function completenessOf(history) {
+  return (
+    history.completeness ?? {
+      level: /** @type {"unknown"} */ ("unknown"),
+      reasons: ["never_synchronized"],
+      policy_version: "stage5-evidence-v1",
+    }
+  );
+}
+
+/**
+ * One weighting variant's shadow estimate, as the report carries it in `shadows`.
+ *
+ * @typedef {object} WeightingShadowView
+ * @property {{id: string, version: string}} method
+ * @property {boolean} computed
+ * @property {string | null} reason Why it was not computed; null when it was.
+ * @property {string} policy_version The variant's model policy, naming its half-lives.
+ * @property {import("./prediction.js").Forecast["viability"]} [viability]
+ * @property {import("./prediction.js").Forecast["risk"]} [risk]
+ * @property {import("./prediction.js").Forecast["evidence"]} [evidence]
+ * @property {string} [model_policy_version]
+ * @property {import("./prediction.js").Forecast["contributors"]} [contributors]
+ */
+
+/**
+ * What each weighting variant would say, from the answer's own prepared input (1.6.0).
+ *
+ * Pure, and beside the answer rather than inside it: nothing here reads or writes the report
+ * `createSourceStatus` built, so the answer is the same whether or not any variant runs. A ladder
+ * that ends at the plan prior is not computed (`no_local_outcomes`): with no outcome of the user's
+ * every variant equals the answer's `initial-generic@1` forecast, and recording it would credit the
+ * variant with the prior's calibration.
+ *
+ * @param {PreparedForecastInput} input
+ * @param {typeof WEIGHTING_VARIANTS} [variants]
+ * @returns {{views: WeightingShadowView[], rows: import("./storage.js").WeightingShadowRow[]}}
+ */
+export function createWeightingShadows(input, variants = WEIGHTING_VARIANTS) {
+  /** @type {WeightingShadowView[]} */
+  const views = [];
+  /** @type {import("./storage.js").WeightingShadowRow[]} */
+  const rows = [];
+  for (const variant of variants) {
+    const method = { ...variant.method };
+    const forecast = buildForecast({ ...input, policy: variant.policy, method });
+    if (forecast.contributors.backoff_level === "prior") {
+      views.push({
+        method,
+        computed: false,
+        reason: "no_local_outcomes",
+        policy_version: variant.policy.version,
+      });
+      continue;
+    }
+    views.push({
+      method,
+      computed: true,
+      reason: null,
+      policy_version: variant.policy.version,
+      viability: forecast.viability,
+      risk: forecast.risk,
+      evidence: forecast.evidence,
+      model_policy_version: forecast.model_policy_version,
+      contributors: forecast.contributors,
+    });
+    rows.push({
+      method_id: forecast.method.id,
+      method_version: forecast.method.version,
+      model_policy_version: forecast.model_policy_version,
+      evidence_policy_version: forecast.evidence.policy_version,
+      lower: forecast.viability.lower,
+      point: forecast.viability.point,
+      upper: forecast.viability.upper,
+      coverage_target: forecast.viability.coverage_target,
+      risk_label: forecast.risk.label,
+      evidence_level: forecast.evidence.level,
+      backoff_level: forecast.contributors.backoff_level,
+      posterior_alpha: forecast.contributors.evidence_window.alpha,
+      posterior_beta: forecast.contributors.evidence_window.beta,
+    });
+  }
+  return { views, rows };
+}
+
+/**
+ * Add every shadow estimate the invocation computed to a finished report, as `shadows`: the
+ * `reported-capacity` one first where it runs -- the very object `shadow` holds -- then the
+ * weighting variants by ascending half-life. Placed last, so every member the report already had
+ * keeps its place, and it only ever adds.
+ *
+ * @template {object} T
+ * @param {T & {shadow?: ShadowView}} status
+ * @param {WeightingShadowView[]} variants
+ * @returns {T & {shadows: (ShadowView | WeightingShadowView)[]}}
+ */
+export function attachShadows(status, variants) {
+  return {
+    ...status,
+    shadows: [...(status.shadow === undefined ? [] : [status.shadow]), ...variants],
   };
 }
 
@@ -121,25 +264,48 @@ export function createSourceStatus(
  * read as a number of prompts a plan allows. At one, "all of them" is as wrong as "all 1", so the
  * width caveat speaks of the next prompt, as the `next prompt` row does.
  *
+ * The third follows the second, and only it: a too-wide interval whose evidence window holds no
+ * restriction with weight (`SEQUENCE_PRIOR_TAIL_POLICY`) has a low end that is the plan prior's
+ * tail, and the reader is told whose number it is. It names no length, so it reads the same for
+ * every `N` it applies to.
+ *
+ * Structured, so `snack dash` prints these very sentences in its `next N` row; `status` lists the
+ * ones that apply, in this order.
+ *
  * @param {import("./prediction.js").SequenceAssessment} sequence
+ * @param {{weighted_restrictions: number}} evidenceWindow the posterior's evidence window, which
+ *   the sequence was read from
+ * @returns {{assumption: string | null, tooWide: string | null, priorTail: string | null}}
+ */
+export function describeSequenceCaveats(sequence, evidenceWindow) {
+  const length = sequence.length;
+  const tooWide = sequence.width.too_wide;
+  return {
+    assumption:
+      length === 1
+        ? null
+        : `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
+    tooWide: !tooWide
+      ? null
+      : length === 1
+        ? "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not."
+        : `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
+    priorTail:
+      tooWide &&
+      evidenceWindow.weighted_restrictions < SEQUENCE_PRIOR_TAIL_POLICY.max_weighted_restrictions
+        ? "Your recent history has no restriction to learn from, so the low end of this interval comes from SNACK's starting assumption rather than from your history."
+        : null,
+  };
+}
+
+/**
+ * @param {import("./prediction.js").SequenceAssessment} sequence
+ * @param {{weighted_restrictions: number}} evidenceWindow
  * @returns {string[]}
  */
-function sequenceCaveats(sequence) {
-  const length = sequence.length;
-  return [
-    ...(length === 1
-      ? []
-      : [
-          `The ${length}-prompt estimate assumes each prompt meets the conditions the next one does; it does not model usage pressure rising as they are sent.`,
-        ]),
-    ...(sequence.width.too_wide
-      ? [
-          length === 1
-            ? "The 1-prompt interval is too wide to say much; it cannot tell whether the next prompt is more likely to go through than not."
-            : `The ${length}-prompt interval is too wide to say much; it cannot tell whether all of them going through is more likely than not.`,
-        ]
-      : []),
-  ];
+function sequenceCaveats(sequence, evidenceWindow) {
+  const { assumption, tooWide, priorTail } = describeSequenceCaveats(sequence, evidenceWindow);
+  return [assumption, tooWide, priorTail].filter((caveat) => caveat !== null);
 }
 
 /**

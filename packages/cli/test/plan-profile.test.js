@@ -7,9 +7,12 @@ import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { parseAndValidateConfig } from "../src/config.js";
+import { run } from "../src/main.js";
 import { resolvePaths } from "../src/paths.js";
 import { resolvePlanProfile } from "../src/plan-profile.js";
 import { ensureCapacityPeriod, initializeDatabase } from "../src/storage.js";
+import { sink } from "./fixtures/run-fixture.js";
+import { makeSeededSource } from "./fixtures/seeded-history.js";
 
 /** @type {string[]} */
 const temporaryRoots = [];
@@ -321,4 +324,89 @@ test("a plan profile may declare a different prior viability", async () => {
   const { profile } = resolvePlanProfile(makeSource({ plan: "optimistic", plan_profile: file }));
 
   assert.equal(profile.prior_viability, 0.9);
+});
+
+test("a valid profile whose prior leaves almost no room for a refusal still gets an answer", async () => {
+  // Beta(0.99, 0.01): the posterior's 10% quantile lies above its mean, so the raw interval does
+  // not contain the point. Until 1.6.0 the attempt row's CHECK refused it and `status` exited 10.
+  const origin = new Date("2026-01-01T00:00:00.000Z");
+  const seeded = await makeSeededSource({ origin, roots: temporaryRoots });
+  const file = join(seeded.root, "confident.json");
+  await writeFile(
+    file,
+    JSON.stringify({
+      schema_version: 1,
+      id: "confident",
+      version: "1.0.0",
+      as_of: "2026-01-01",
+      provenance: "user-defined",
+      prior_strength: 1,
+      prior_viability: 0.99,
+      weights: { prompts: 1 },
+    }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    seeded.paths.configFile,
+    `${JSON.stringify({ schema_version: 1, sources: [{ ...seeded.source, plan_profile: file }] })}\n`,
+    { mode: 0o600 },
+  );
+  // The seeded period names no plan profile; naming this one keeps the planted prompts in the
+  // active period rather than retiring them on the first command.
+  const setup = new Database(seeded.paths.databaseFile);
+  try {
+    setup.prepare("UPDATE capacity_period SET plan_profile_id = 'confident' WHERE id = 1").run();
+  } finally {
+    setup.close();
+  }
+  const now = new Date(origin.getTime() + 24 * 3_600_000);
+  /** @param {string[]} argv */
+  const snack = async (argv) => {
+    const stdout = sink();
+    const stderr = sink();
+    const code = await run(["node", "snack", ...argv], {
+      stdout,
+      stderr,
+      env: seeded.env,
+      home: seeded.root,
+      now,
+    });
+    assert.equal(code, 0, `${argv.join(" ")}: ${stderr.value}`);
+    return stdout.value;
+  };
+  /** @param {{lower: number, point: number, upper: number}} viability */
+  const contains = (viability) =>
+    assert.ok(
+      viability.lower <= viability.point && viability.point <= viability.upper,
+      JSON.stringify(viability),
+    );
+
+  // At the prior alone, then with successes only: the two ladders that reach the posterior.
+  for (const count of [0, 30]) {
+    seeded.plant(
+      Array.from({ length: count }, (_unused, index) => ({
+        at: new Date(origin.getTime() + (index + 1) * 10 * 60_000),
+      })),
+    );
+    const report = JSON.parse(await snack(["status", "--json"])).data;
+    assert.equal(report.source.plan_profile.id, "confident");
+    assert.equal(report.contributors.backoff_level === "prior", count === 0);
+    contains(report.viability);
+    for (const shadow of report.shadows ?? []) if (shadow.computed) contains(shadow.viability);
+    const sequence = JSON.parse(await snack(["status", "--sequence", "3", "--json"])).data;
+    contains(sequence.sequence.viability);
+    await snack(["status"]);
+    await snack(["status", "--verbose"]);
+    const stats = JSON.parse(await snack(["stats", "--json"])).data;
+    assert.ok(stats.calibration.snapshots > 0);
+  }
+  const database = new Database(seeded.paths.databaseFile, { readonly: true });
+  try {
+    const recorded = /** @type {{n: number}} */ (
+      database.prepare("SELECT COUNT(*) AS n FROM prediction_attempt").get()
+    );
+    assert.ok(recorded.n > 0);
+  } finally {
+    database.close();
+  }
 });

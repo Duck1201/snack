@@ -279,7 +279,7 @@ test("at the instant a window resets it stops binding, and the next live window 
   assert.notEqual(reset.data.shadow.binding?.window_minutes, shortest.window_minutes);
 });
 
-test("a Claude Code source never gets a stated figure, a shadow, or a per-method stream", async () => {
+test("a Claude Code source never gets a stated figure or the reported-capacity shadow", async () => {
   const fixture = await makeRunFixture("snack-codex-routing-");
   fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(fixture.root);
   await json(fixture, ["setup", "claude", ...flags("personal", "anthropic", "pro")]);
@@ -296,10 +296,22 @@ test("a Claude Code source never gets a stated figure, a shadow, or a per-method
   assert.ok(codex.shadow.computed, "vacuous: the Codex source computed no shadow");
   assert.ok(!("shadow" in personal) && !("reported_capacity" in personal));
 
+  // Its `shadows` holds the weighting variants only; the reported-capacity entry is Codex's.
+  assert.ok(
+    personal.shadows.every(
+      (/** @type {{method: {id: string}}} */ entry) => entry.method.id !== "reported-capacity",
+    ),
+  );
+  assert.equal(codex.shadows[0].method.id, "reported-capacity");
+
+  // From 1.6.0 every source has `by_method` -- the weighting variants run everywhere -- and only
+  // the Codex source's carries a `reported-capacity` entry.
   const stats = await json(fixture, ["stats"]);
   for (const report of stats.data.sources) {
     assert.equal(
-      "by_method" in report.calibration,
+      report.calibration.by_method.some(
+        (/** @type {{id: string}} */ entry) => entry.id === "reported-capacity",
+      ),
       report.source.alias === "codex",
       report.source.alias,
     );

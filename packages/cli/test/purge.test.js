@@ -186,9 +186,13 @@ test("purge deletes the shadow forecasts recorded with the attempts it removes",
   assert.equal(count(databaseFile, "prediction_attempt"), 1);
   assert.equal(count(databaseFile, "prediction_reported_capacity"), 1);
 
+  // The weighting variants ride with the same attempt, both computed.
+  assert.equal(count(databaseFile, "prediction_shadow"), 2);
+
   const result = await purgeScope(fixture.paths, { source: "codex" }, { now: new Date() });
 
   assert.equal(count(databaseFile, "prediction_reported_capacity"), 0);
+  assert.equal(count(databaseFile, "prediction_shadow"), 0);
   assert.equal(count(databaseFile, "prediction_attempt"), 0);
   // Counted with its attempt, as a sequence is: the purge payload keeps its frozen shape.
   assert.equal(result.counts.predictions, 1);
@@ -204,6 +208,18 @@ test("recorded shadow forecasts stay immutable outside a purge", async () => {
     );
     assert.throws(
       () => database.prepare("UPDATE prediction_reported_capacity SET band = 'full'").run(),
+      /immutable/u,
+    );
+    assert.equal(
+      /** @type {{n: number}} */ (
+        database.prepare("SELECT COUNT(*) AS n FROM prediction_shadow").get()
+      ).n,
+      2,
+      "vacuous: no weighting variant was recorded",
+    );
+    assert.throws(() => database.prepare("DELETE FROM prediction_shadow").run(), /immutable/u);
+    assert.throws(
+      () => database.prepare("UPDATE prediction_shadow SET point = point").run(),
       /immutable/u,
     );
   } finally {

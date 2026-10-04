@@ -5,7 +5,7 @@
  * profile prior. It consumes domain-shaped rows and never queries SQLite.
  */
 
-import { betaQuantile } from "./beta.js";
+import { betaInterval } from "./beta.js";
 import { REPORTED_CAPACITY_POLICY, REPORTED_EVIDENCE_RELEVANCE } from "./reported-capacity.js";
 
 /** Versioned model policy. Every forecast names the policy that produced it. */
@@ -53,7 +53,9 @@ export const EVIDENCE_POLICY = Object.freeze({
    * effective sample, 0.105 at two, 0.060 at six, 0.055 at ten, 0.036 at eighteen, and
    * 0.027 at twenty-six, flattening near 0.024 afterwards. `high` is set where the error
    * is within roughly a tenth of that floor. Recency decay saturates the effective sample
-   * size near 44, so a threshold above that could never be reached at all.
+   * size near 44 under the answer's 30-prompt recency half-life, so a threshold above that
+   * could never be reached by the answer at all. The weighting variants publish under these
+   * same gates: they map an effective sample to measured error, whatever weighting produced it.
    */
   sample_thresholds: Object.freeze({ low: 2, moderate: 10, high: 25 }),
   /**
@@ -106,7 +108,24 @@ export const EVIDENCE_POLICY = Object.freeze({
  * @property {string} expectedCategory Prompt-size category assumed for the next prompt.
  * @property {OutcomeRow[]} outcomes Eligible observations of the active capacity period.
  * @property {"complete" | "partial" | "unknown"} [dataCompleteness] Ingestion health.
- * @property {typeof PREDICTION_POLICY} [policy]
+ * @property {WeightingPolicy} [policy]
+ * @property {{id: string, version: string}} [method] The method a non-answering weighting
+ *   publishes under. Left out, the forecast is named by the answer's own rule.
+ */
+
+/**
+ * A model policy for the answer's Beta-Binomial: the answer's own, or a weighting variant's, which
+ * names the answer's policy it varies as `base_policy`.
+ *
+ * @typedef {object} WeightingPolicy
+ * @property {string} version
+ * @property {number} coverage_target
+ * @property {number} decay_half_life_seconds
+ * @property {number} recency_half_life_prompts
+ * @property {number} evidence_window_prompts
+ * @property {number} minimum_cell_samples
+ * @property {readonly string[]} backoff_levels
+ * @property {string} [base_policy]
  */
 
 /**
@@ -204,11 +223,14 @@ export function classifyRisk(lower) {
  *
  * @param {string} startedAt
  * @param {number} promptsAfter Observations in the same cell that started later.
+ * Exported for the guard that every weighting decays: the weight is strictly decreasing in age
+ * and in later prompts under the answer's policy and under every variant's.
+ *
  * @param {Date} now
  * @param {{decay_half_life_seconds: number, recency_half_life_prompts: number}} policy
  * @returns {number}
  */
-function decayWeight(startedAt, promptsAfter, now, policy) {
+export function decayWeight(startedAt, promptsAfter, now, policy) {
   const ageSeconds = (now.getTime() - Date.parse(startedAt)) / 1000;
   const timeWeight =
     !Number.isFinite(ageSeconds) || ageSeconds <= 0
@@ -227,7 +249,7 @@ function decayWeight(startedAt, promptsAfter, now, policy) {
  * @param {OutcomeRow[]} ordered Chronological, oldest first.
  * @param {{band: string, category: string}} expected
  * @param {Date} now
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {WeightingPolicy} policy
  * @returns {{level: string, cell: ForecastCell}[]} most specific first
  */
 function summarizeLevels(ordered, expected, now, policy) {
@@ -322,7 +344,7 @@ function emptyCell() {
  * band, then the period aggregate, then the weak prior alone.
  *
  * @param {ForecastInput} input
- * @param {typeof PREDICTION_POLICY} policy
+ * @param {WeightingPolicy} policy
  * @returns {{level: string, cell: ForecastCell}}
  */
 function selectCell(input, policy) {
@@ -416,8 +438,37 @@ export function buildForecast(input) {
     prior: input.prior,
     policy,
     dataCompleteness: input.dataCompleteness ?? "unknown",
+    // Spread only when given, so a forecast without one is the very object it always was.
+    ...(input.method === undefined ? {} : { method: input.method }),
   });
 }
+
+/**
+ * The answer's model under longer recency half-lives, run as shadow estimates (1.6.0).
+ *
+ * One knob per variant -- `recency_half_life_prompts` -- so a difference in calibration has one
+ * cause; cells, backoff, cell minimum, evidence window, prior, coverage, risk and evidence gates are
+ * the answer's. Each keeps the answer's 7-day time half-life and a finite recency half-life, so
+ * every one decays: older outcomes always weigh less than newer ones. None of them ever answers.
+ * Recorded beside each attempt and calibrated against the same outcomes, a variant can only
+ * displace the answer's 30 by a later release meeting `recency-variant-promotion-v1`, the collapse
+ * test included (docs/history/specs/half-life-shadows/spec.md §6). Ordered by ascending half-life.
+ *
+ * @type {readonly {method: {id: string, version: string}, policy: WeightingPolicy & {base_policy: string}}[]}
+ */
+export const WEIGHTING_VARIANTS = Object.freeze(
+  [50, 100].map((halfLife) =>
+    Object.freeze({
+      method: Object.freeze({ id: `bayesian-pressure-band-hl${halfLife}`, version: "1" }),
+      policy: Object.freeze({
+        ...PREDICTION_POLICY,
+        version: `recency-hl${halfLife}-v1`,
+        recency_half_life_prompts: halfLife,
+        base_policy: PREDICTION_POLICY.version,
+      }),
+    }),
+  ),
+);
 
 /**
  * Turn one aggregated cell into the published forecast.
@@ -437,7 +488,17 @@ export function assembleForecast(input) {
   const alpha = input.prior.strength * input.prior.viability + cell.weighted_successes;
   const beta = input.prior.strength * (1 - input.prior.viability) + cell.weighted_restrictions;
   const tail = (1 - policy.coverage_target) / 2;
-  const lower = betaQuantile(tail, alpha, beta);
+  const point = alpha / (alpha + beta);
+  // A mean need not sit inside an equal-tailed interval. On a posterior with almost no weight on
+  // one side -- Beta(0.99, 0.01), from a valid user profile's prior -- the 10% quantile lies above
+  // the mean, and an interval that excludes its own point is no estimate at all (until 1.6.0 the
+  // attempt row refused it and `status` exited 10). The interval is widened to contain the point,
+  // as `assessSequence` widens a sequence's, which keeps at least `coverage_target` of the
+  // posterior inside. Wherever the quantiles already contain the mean -- on every posterior a
+  // bundled profile's prior can produce -- `Math.min` and `Math.max` return the quantile itself,
+  // bit for bit.
+  const quantiles = betaInterval(tail, 1 - tail, alpha, beta);
+  const lower = Math.min(quantiles.lower, point);
 
   return {
     // A forecast the weak prior alone produced is named as the initial heuristic it is;
@@ -450,8 +511,8 @@ export function assembleForecast(input) {
           : { id: "bayesian-pressure-band", version: "1" },
     viability: {
       lower,
-      point: alpha / (alpha + beta),
-      upper: betaQuantile(1 - tail, alpha, beta),
+      point,
+      upper: Math.max(quantiles.upper, point),
       coverage_target: policy.coverage_target,
     },
     risk: classifyRisk(lower),
@@ -594,6 +655,23 @@ export const SEQUENCE_MAX_LENGTH = 100;
 export const SEQUENCE_WIDTH_POLICY = Object.freeze({
   version: "sequence-width-v1",
   max_width: 0.5,
+});
+
+/**
+ * When a too-wide sequence interval's low end is the prior's tail rather than the reader's history.
+ *
+ * With no observed restriction carrying weight in the evidence window, the posterior's `β` is the
+ * plan prior's pseudo-restriction and nothing else, and the lower quantile raised to `n` is that
+ * assumption's tail: no history of the reader's put it there. Below `max_weighted_restrictions` --
+ * one restriction decayed past four half-lives, about 130 later prompts in the cell or a month --
+ * the `status --sequence` caveat beside a too-wide interval says so. The edge is exclusive; a
+ * restriction in the last few dozen prompts of the cell keeps it silent. A diagnostic about the
+ * estimate, never about capacity, and it adds no member to any document: it is one more caveat.
+ * Changing the rule moves the version.
+ */
+export const SEQUENCE_PRIOR_TAIL_POLICY = Object.freeze({
+  version: "sequence-prior-tail-v1",
+  max_weighted_restrictions: 0.05,
 });
 
 /**

@@ -2627,17 +2627,41 @@ const SHADOW_COLUMNS = [
 ];
 
 /**
+ * A weighting variant's shadow forecast one `status` invocation computed beside its attempt
+ * (migration 019).
+ *
+ * @typedef {object} WeightingShadowRow
+ * @property {string} method_id
+ * @property {string} method_version
+ * @property {string} model_policy_version
+ * @property {string} evidence_policy_version
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ * @property {number} coverage_target
+ * @property {string} risk_label
+ * @property {string} evidence_level
+ * @property {string} backoff_level
+ * @property {number} posterior_alpha
+ * @property {number} posterior_beta
+ */
+
+const WEIGHTING_SHADOW_COLUMNS = SHADOW_COLUMNS.slice(0, SHADOW_COLUMNS.indexOf("installation_id"));
+
+/**
  * Store one immutable prediction attempt, the sequence answer the same invocation gave when one
- * was asked for, and the shadow forecast it computed when it computed one -- in one transaction,
- * so an attempt never exists without what the same invocation computed beside it.
+ * was asked for, the `reported-capacity` shadow forecast it computed when it computed one, and the
+ * weighting variants it computed -- in one transaction, so an attempt never exists without what the
+ * same invocation computed beside it.
  *
  * @param {string} databaseFile
  * @param {Record<string, unknown>} attempt
  * @param {PredictionSequenceRow} [sequence]
  * @param {PredictionShadowRow} [shadow]
+ * @param {WeightingShadowRow[]} [weightings]
  * @returns {number} attempt id
  */
-export function recordPredictionAttempt(databaseFile, attempt, sequence, shadow) {
+export function recordPredictionAttempt(databaseFile, attempt, sequence, shadow, weightings = []) {
   const database = new Database(databaseFile, { fileMustExist: true });
   try {
     database.pragma("foreign_keys = ON");
@@ -2699,6 +2723,24 @@ export function recordPredictionAttempt(databaseFile, attempt, sequence, shadow)
              VALUES (@prediction_attempt_id, ${SHADOW_COLUMNS.map((column) => `@${column}`).join(", ")})`,
           )
           .run({ ...shadow, prediction_attempt_id: id });
+      }
+      if (weightings.length > 0) {
+        const insertWeighting = database.prepare(
+          `INSERT INTO prediction_shadow
+             (prediction_attempt_id, ${WEIGHTING_SHADOW_COLUMNS.join(", ")})
+           VALUES (@prediction_attempt_id, ${WEIGHTING_SHADOW_COLUMNS.map((column) => `@${column}`).join(", ")})`,
+        );
+        for (const weighting of weightings) {
+          insertWeighting.run({
+            ...Object.fromEntries(
+              WEIGHTING_SHADOW_COLUMNS.map((column) => [
+                column,
+                weighting[/** @type {keyof WeightingShadowRow} */ (column)],
+              ]),
+            ),
+            prediction_attempt_id: id,
+          });
+        }
       }
       return id;
     });
@@ -2945,6 +2987,57 @@ export function readCalibrationPairs(databaseFile, sourceAlias) {
 }
 
 /**
+ * @typedef {object} ShadowForecast
+ * @property {number} prediction_attempt_id
+ * @property {string} method_id
+ * @property {string} method_version
+ * @property {number} lower
+ * @property {number} point
+ * @property {number} upper
+ */
+
+/**
+ * Every `prediction_shadow` forecast of a source whose attempt has a primary evaluation: the
+ * weighting variants' half of the live calibration stream. Kept apart from `readCalibrationPairs`,
+ * whose rows feed the top-level `live` and `--by-client`: joining a table that holds two rows per
+ * attempt there would duplicate them. Calibration joins the two in memory by attempt id.
+ *
+ * @param {string} databaseFile
+ * @param {string} sourceAlias
+ * @returns {ShadowForecast[]}
+ */
+export function readShadowForecasts(databaseFile, sourceAlias) {
+  const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT
+           prediction_shadow.prediction_attempt_id AS prediction_attempt_id,
+           prediction_shadow.method_id AS method_id,
+           prediction_shadow.method_version AS method_version,
+           prediction_shadow.lower AS lower,
+           prediction_shadow.point AS point,
+           prediction_shadow.upper AS upper
+         FROM prediction_shadow
+         JOIN prediction_attempt
+           ON prediction_attempt.id = prediction_shadow.prediction_attempt_id
+         WHERE prediction_attempt.source_alias = ?
+           AND EXISTS (
+             SELECT 1 FROM prediction_evaluation
+              WHERE prediction_evaluation.prediction_attempt_id = prediction_attempt.id
+                AND prediction_evaluation.is_primary = 1)
+         ORDER BY prediction_shadow.prediction_attempt_id ASC,
+                  prediction_shadow.method_id ASC,
+                  prediction_shadow.method_version ASC`,
+      )
+      .all(sourceAlias);
+    return /** @type {ShadowForecast[]} */ (/** @type {unknown} */ (rows));
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * @typedef {object} PurgeScope
  * @property {string} [source] One capacity source; absent means every configured source.
  * @property {string} [since] Inclusive lower bound.
@@ -3048,7 +3141,11 @@ function purgeScopeLocked(paths, scope, options) {
         .run(parameters);
       // A sequence answer and a shadow forecast ride with their attempt: they go with it, and are
       // counted with it.
-      for (const table of ["prediction_sequence", "prediction_reported_capacity"]) {
+      for (const table of [
+        "prediction_sequence",
+        "prediction_reported_capacity",
+        "prediction_shadow",
+      ]) {
         database
           .prepare(
             `DELETE FROM ${table}
@@ -3252,6 +3349,40 @@ function isTombstoned(tombstones, startedAt) {
       (tombstone.from_at === null || startedAt >= tombstone.from_at) &&
       (tombstone.until_at === null || startedAt < tombstone.until_at),
   );
+}
+
+/**
+ * Where storage stands for a reader that may wait for a synchronization to prepare it: `snack dash`,
+ * which starts on a database that is missing or a schema behind and lets its first sync child
+ * create or migrate it, saying so on screen meanwhile.
+ *
+ * `missing` and `pending` (with how many migrations) are answers; everything `assertReadableStorage`
+ * refuses beyond those -- a newer schema, an unreadable or uninitialized file -- is thrown as it
+ * throws it.
+ *
+ * @param {string} databaseFile
+ * @returns {Promise<{storage: "missing" | "pending" | "ready", pendingMigrations: number}>}
+ */
+export async function readStorageReadiness(databaseFile) {
+  if (!(await pathExists(databaseFile))) return { storage: "missing", pendingMigrations: 0 };
+  try {
+    await assertReadableStorage(databaseFile);
+    return { storage: "ready", pendingMigrations: 0 };
+  } catch (error) {
+    if (!(error instanceof SnackError) || error.reason !== "storage_migrations_pending")
+      throw error;
+    const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
+    try {
+      const applied = readAppliedMigrations(database);
+      const available = await loadMigrations(migrationDirectory);
+      return {
+        storage: "pending",
+        pendingMigrations: available.filter((migration) => !applied.has(migration.number)).length,
+      };
+    } finally {
+      database.close();
+    }
+  }
 }
 
 /**

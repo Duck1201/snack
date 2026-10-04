@@ -85,6 +85,26 @@ Reported only when an OpenCode source is configured.
 | `spool_rotation:<alias>` | Segment rotation | **warn** — rotation is not keeping up |
 | `spool_cursor:<alias>` | Whether closed segments were fully consumed | **warn** — a closed segment is not yet acknowledged. Segments are removed only after every configured source has committed past them |
 
+## `snack dash`
+
+`dash` is not a `doctor` check, but it refuses and reports in ways worth reading in one place. The
+full contract is [cli.md §12.12](./specification/cli.md#1212-snack-dash).
+
+| What you see | What it means | What to do |
+| --- | --- | --- |
+| exit `2`, `dash_requires_terminal` | Standard output or input is not a terminal (`snack dash \| cat`, a redirect, a script), or `TERM` is unset, empty or `dumb` | Run it in an interactive terminal, or use `snack status`, which gives the same reading through a pipe |
+| exit `2`, `dash_json_unsupported` | `--json` was passed; the dash draws a screen and has no document | `snack status --json` |
+| exit `3`, `4` or `5` before anything is drawn | Configuration, a missing capacity source, or storage newer, unreadable or never initialized — refused exactly as `status` refuses them | As for `status`; storage that does not exist yet or is a migration behind is **not** refused: the first synchronization prepares it, with its backup |
+| "snack dash needs at least 64 columns and … rows" | The terminal is too small for the sources configured; nothing is drawn as a forecast or recorded as delivered | Enlarge it; the screen repaints. `q` still quits |
+| `sync skipped — another snack command is using storage` | Another `snack` command held the storage lock; the reading on screen is kept and marked old | Nothing; the next synchronization or the next second's retry takes it back |
+| `sync failed — run snack doctor` | The synchronization child failed | `snack doctor`, then `snack sync` to see the error itself |
+| `A newer snack upgraded storage; quit and restart snack dash.` | A newer `snack` (after `snack update`, say) migrated the database past what this session's code reads; synchronization stops | Quit and start `snack dash` again |
+| `Storage keeps answering busy; quit and run snack doctor.` | SQLite answered busy to five reads or writes in a row under the dash's own lock — something outside `snack` is holding the database | Quit, find what has the database open, and run `snack doctor` |
+| `Warning: …` on standard error after quitting | A reading carried a warning — a plan profile that could not be read and fell back to `generic`, say — which has no room on the screen, so it is written once on exit, after the terminal is restored | As the warning says; `snack doctor` reports the same condition as `plan_profile:<alias>` |
+
+Quitting never kills a synchronization in flight: it finishes and releases the storage lock on its
+own, and a command typed right after waits for it through the lock's usual retry.
+
 ## When `doctor` itself refuses
 
 `snack doctor --source <alias>` exits `4` with `source_not_configured` when no configured source

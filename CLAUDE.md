@@ -28,9 +28,12 @@ node --test --test-name-pattern "full sync converges" packages/cli/test/main.tes
 npm run pack:smoke     # scripts/package-smoke.mjs — packs tarballs, installs clean, runs the bin
 npm run release:check  # scripts/check-release-readiness.mjs — asserts release gate lines in docs/
 npm run release:prepare  # changeset version + plugin pin + man page + release evidence, one PR
+npm run collapse:check # scripts/collapse-simulation.mjs — the collapse test per weighting variant
+                       # (promotion condition 5); prints counts, promotes nothing
 npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
-                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0 1.4.0; argv narrows
-                       # to one) with the candidate. Needs the network; not part of `check`.
+                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0 1.4.0 1.5.0;
+                       # argv narrows to one) with the candidate. Needs the network; not part of
+                       # `check`.
 ```
 
 Node 24 only (`engines: >=24 <25`), npm 11.16.0, ESM everywhere, JavaScript with JSDoc types — no
@@ -72,6 +75,9 @@ process. No daemon, no event bus, no DI container. Layering intent (files are fl
 - `storage.js`: better-sqlite3, migrations, transactions, repository queries. Does not classify
   errors or compute pressure.
 - `status.js` / prediction code: consumes domain-shaped query results, never touches SQLite.
+  `source-report.js` is the one path from storage to a source's report, for `status` and the dash.
+- `screen.js`, `dash-view.js`, `dash.js`, `dash-terminal.js`: `snack dash`, imported only by that
+  command — frame diff, pure widgets, the controller behind ports, and the real terminal ports.
 - `paths.js`: XDG on Linux, `~/Library/...` on macOS; every path is resolved, never created, here.
 - `errors.js`: `SnackError` + frozen `ExitCode` map (usage 2, config 3, unavailable 4, storage 5, io
   6, internal 10). `output.js`: `createEnvelope()` — every `--json` document is

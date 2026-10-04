@@ -44,10 +44,11 @@ if (!npmCli) throw new Error("Run upgrade smoke through npm.");
  * taking each minor's newest patch because that is what an installation on that minor actually has.
  * `1.2.1` is the last release at schema level 013, so it is the chain that runs 014 and 015 over a
  * database a real release wrote. `1.3.0` is the last release at schema level 015, so it is the
- * chain that runs 016 over one. `1.4.0` is the newest published schema level (migration 016), so
- * it is the chain that runs 017 over one.
+ * chain that runs 016 over one. `1.4.0` is the last release at schema level 016, so it is the
+ * chain that runs 017 and 018 over one. `1.5.0` is the newest published schema level (migration
+ * 018), so it is the chain that runs 019 over one.
  */
-const FLOORS = ["0.6.0", "0.6.1", "0.7.0", "0.8.2", "0.9.0", "1.2.1", "1.3.0", "1.4.0"];
+const FLOORS = ["0.6.0", "0.6.1", "0.7.0", "0.8.2", "0.9.0", "1.2.1", "1.3.0", "1.4.0", "1.5.0"];
 
 const requested = process.argv.slice(2);
 const floors = requested.length > 0 ? requested : FLOORS;

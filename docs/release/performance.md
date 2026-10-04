@@ -25,6 +25,121 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.6.0
+
+- Date: 2026-10-03
+- Commit: `release/1.6.0` at `06340e7`, with migration 019 (`prediction_shadow`), the half-life
+  weighting shadows, `snack dash` and the `sequence-prior-tail-v1` caveat
+- Machine: Linux 6.12.111+deb13-rt-amd64, 12 cores
+- Toolchain: Node `24.18.1`, npm `11.16.0` for the packaging scripts
+- History: 100,000 prompts, per `PROMPTS` in `performance.test.js`; the Codex rows from a synthetic
+  history of 1,000 rollouts in the 0.159.3 shape, 100 turns each, one stated rate-limit snapshot per
+  turn with two windows (200,000 reported capacity rows); the Claude Code rows in the shape of
+  `makeLargeClaudeHistory`
+- Baseline: every `1.5.0` figure below was measured the same afternoon, on the same machine, against
+  the published `@snack-ai/cli@1.5.0`, interleaved sample by sample with this tree on copies of the
+  same database, so the column compares versions rather than days
+
+| Budget | PLAN.md | Measured | `1.5.0`, same session |
+| --- | --- | --- | --- |
+| `status --no-sync` p95 | under 250 ms | **198 ms** (p50 193-195 ms), two batches at 100% idle | 195-200 ms (p50 192-193 ms) |
+| `status --no-sync` p95, two clients on one source | under 250 ms | **198-200 ms** (p50 196 ms), two batches at 99-100% idle | 197-199 ms (p50 194 ms) |
+| `status --no-sync` p95, Codex, 200,000 reported capacity rows | under 250 ms | **229-245 ms** (p50 223-228 ms), three batches at 92-97% idle | 231-333 ms (p50 222-225 ms) |
+| `status --no-sync --sequence 100` p95, Codex | under 250 ms | **222-254 ms**, best of three 222 ms (p50 218-223 ms), at 94-99% idle | 218-246 ms (p50 216-223 ms) |
+| Incremental synchronisation, 100,000 prompts | under 2 s | **443-447 ms** (categorize 52-53 ms + write 391-395 ms) | — |
+| Incremental synchronisation, Codex, one rollout of one turn added, spawned | under 2 s | **1.06 s** p50 of 7 (1.04-1.18 s), at 87% idle | 1.07 s (1.04-1.27 s) |
+| No-op synchronisation, Codex, spawned | under 2 s | **1.01 s** p50 of 7 (0.99-1.02 s) | 0.99 s (0.98-1.01 s) |
+| Initial backfill, 100,000 prompts, OpenCode | under 30 s | **15.3-15.5 s** | — |
+| Initial backfill, 100,000 prompts, Claude Code, spawned | under 30 s | **14.9-15.4 s** (in `performance.test.js`: 14.3-14.4 s) | 14.7 s |
+| Initial backfill, 100,000 prompts, Codex CLI, spawned | under 30 s | **19.5 s** | 19.0-19.3 s |
+| Steady-state memory | under 150 MB | **passes the heap cap for all three clients** | — |
+
+**What was asserted and what was only reported.** `performance.test.js` ran twice with `CI` unset
+and passed 13 of 13 both times, started at 90-94% idle by `vmstat`. The load average read 9.8-10.2
+over 12 cores, over the half-the-cores line, so `machineIsBusy()` was true for the whole run, as it
+was for `1.5.0` on this real-time kernel. Not asserted, reported only: both spawned `status` p95
+assertions (p95 206-217 ms single client; 206-210 ms two clients), the OpenCode backfill's wall
+clock, the dash recompute budget and the dash frame budget. Asserted and passed: the in-process
+forecast path under 250 ms, the recategorization budget (443-447 ms against 2 s), the Claude Code
+backfill under 30 s, `stats --by-client` under 10 s (4.7 s), the backtest, every heap cap and the
+spool-validator structural check. Every figure in the table above is reported, not asserted. Those
+p95 figures are spawned `status --no-sync --json` runs, interleaved with `1.5.0`, 20 samples per
+batch, each batch preceded by its `vmstat` idle reading.
+
+**The tail belongs to the machine, not to the version.** The single `1.5.0` Codex batch at 333 ms
+and the candidate's 254 ms `--sequence 100` batch each came from one or two slow samples. The
+medians are what a wall clock can attribute to `1.6.0`: 0-3 ms on every history, which covers the
+two half-life shadows computed and written beside every answer.
+
+**`stats --json` and `stats --verbose` pay for the two new shadows.** Both backtest the hl50 and
+hl100 variants over the same outcomes as the answer and the baseline, which adds about 2 s. On the
+Codex history they took 5.22-5.24 s p50 against 3.26-3.27 s for `1.5.0`; on the Claude Code history
+4.32 s against 2.24 s, interleaved, at 99% idle. Plain `stats`, which prints no backtest, took
+0.23 s on Codex and 0.27 s on Claude Code, against 3.29 s and 2.25 s, and its output was
+byte-identical.
+
+**The answer did not move.** With the clock frozen by a `Date` preload, `status` printed
+byte-identical human output under both versions on the Codex, Claude Code, plain and two-client
+histories, and identical `--json` documents once the new `shadows` member was removed. `shadows`
+carries `bayesian-pressure-band-hl50` and `-hl100` on every source, plus `reported-capacity` on
+Codex. `status --sequence 10` and `--sequence 100` were identical except for one added line, "Your
+recent history has no restriction to learn from, …", on exactly the runs whose interval was too wide
+and whose evidence window held fewer weighted restrictions than the policy's floor: `--sequence 100`
+on all four histories, never `--sequence 10`, where none of the four intervals was too wide.
+
+### `snack dash`
+
+Measured on the real binary in a pseudo-terminal (`script`, 100 x 30), over a copy of a real
+`~/.codex` installation, with a temporary XDG tree.
+
+| | Measured |
+| --- | --- |
+| Recompute (lock, readiness, every report with its shadows and plot, the attempt), 100,000 prompts, in process | **p95 53-60 ms**, min 50 ms (budget: `status --no-sync`'s 250 ms; reported, the guard was up) |
+| One frame, nine sources at 200 x 60 | **p95 0.13-0.15 ms**, 240 bytes a frame (budget 5 ms; reported, the guard was up) |
+| Frames written over the soak, 100 x 30, one source | 2,149 frames in 2,093 s, about 110 bytes a frame |
+| CPU, first 5 minutes idle (one sync a minute) | dash process **0.29 s** of CPU in 301 s (0.1% of one core); its sync children 1.0 s |
+| CPU, whole 35-minute soak | dash process 1.5 s in 2,093 s (0.07% of one core); sync children 8.0 s |
+| Resident memory | **79-94 MB**, 90 MB at start, 89 MB at the end; no upward trend |
+
+**The 35-minute soak.** The dash ran at its 60-second cadence for 2,093 s while the real
+installation's new sessions were copied in every 300 s. A 20 ms poll of the storage lock directory
+saw 36 holds, each 0.02-0.39 s long and at least 60 s apart, and never one between two syncs. The
+session wrote 5 attempts, exactly the 5 distinct answers the screen showed (66-100% at start, then
+72, 77, 76 and 79-100% as new prompts arrived), each with one delivery and two shadow rows; every
+other recompute was the same reading and wrote nothing. Ctrl+Z stopped the process without the lock
+held and `fg` resumed and redrew it. `snack dash | cat` and `snack dash --json` exited 2. The
+captured frames held no privacy canary, no path from the copied rollouts, no home or temporary path
+and no term on the vocabulary test's forbidden list.
+
+### What migration 019 costs the person upgrading
+
+100,000-prompt histories backfilled by the published `@snack-ai/cli@1.5.0` (schema 018), then
+opened by this tree, five times each:
+
+| | Codex CLI, 200,000 reported capacity rows | Claude Code |
+| --- | --- | --- |
+| First `sync` after the upgrade, spawned, backup included | **1.22-1.26 s** at 87-100% idle (1.61 s once, at 63%) | **1.26-1.42 s** at 89-99% idle (2.31 s once, at 58%) |
+| The `sync` after that | 0.93-1.01 s | 1.14-1.21 s |
+| Database file, before | 165.3 MB | 74.0 MB |
+| Database file, after | 165.3 MB (+8,192 B) | 74.0 MB (+8,192 B) |
+| Where it went (`dbstat`) | one page each for `prediction_shadow` and its primary-key index | one page each for `prediction_shadow` and its primary-key index |
+| Rows in every pre-existing table, before and after | identical (`schema_migration` 18 → 19) | identical (`schema_migration` 18 → 19) |
+| `integrity_check` / `foreign_key_check` | ok / no violations | ok / no violations |
+
+019 creates `prediction_shadow` and its two immutability triggers, empty, and touches no existing
+table: two pages and the pre-migration backup. From then on each `status` writes two shadow rows per
+source beside its attempt, and none when the variant's ladder ended at the plan prior.
+`upgrade:smoke` applies 019 over a database each published floor from `0.6.0` to `1.5.0` wrote,
+`1.5.0` included.
+
+**After `06340e7`.** The fixes that followed the measurement — the dash opening busy when another
+command holds the lock at start, delivering a snapshot only with the `next N` row it was recorded
+with, the busy banner, and documentation — touch no `status`, `stats` or `sync` path:
+`git diff 06340e7..HEAD -- packages/cli/src` changes only `dash.js`, `dash-view.js` and the `dash`
+action in `main.js`. Inside the dash they add a counter and one comparison per recompute and per
+delivery, and a fallback that runs only when the lock is busy at start; the dash rows above were not
+re-measured.
+
 ## 1.5.0
 
 - Date: 2026-10-03

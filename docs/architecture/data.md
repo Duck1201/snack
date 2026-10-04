@@ -237,8 +237,8 @@ Prediction attempts are fully immutable.
 
 - prediction-attempt ID;
 - delivered timestamp;
-- output channel/format;
-- process invocation ID.
+- output channel/format (`human`, `json`, and from 1.6 `dash` for a forecast `snack dash` drew);
+- process invocation ID (one per `snack dash` session).
 
 This append-only record confirms that the attempt was successfully flushed to the requested output. The delivered attempt is the domain prediction snapshot. The record stores no rendered output.
 
@@ -283,7 +283,7 @@ One row per stated window per statement, unique by installation, observation key
 - whether the interval was too wide to inform, and the width-policy version;
 - posterior alpha and beta.
 
-Written by migration `016`, in the transaction that inserts its parent attempt. Immutable like the parent, and deleted only by `data purge` together with it. Delivery, evidence, period and completeness are the parent's and are not repeated. Not linked by `prediction_evaluation`, not calibrated and not exported in 1.4: a sequence scored against one prompt would corrupt the live calibration stream (ADR-0008).
+Written by migration `016`, in the transaction that inserts its parent attempt — by `status --sequence`, and from 1.6 by `snack dash` while its `next N` row is shown, for every source's attempt at the `N` on screen. Immutable like the parent, and deleted only by `data purge` together with it. Delivery, evidence, period and completeness are the parent's and are not repeated. Not linked by `prediction_evaluation`, not calibrated and not exported in 1.4: a sequence scored against one prompt would corrupt the live calibration stream (ADR-0008).
 
 ### 8.18 `prediction_reported_capacity` (1.5+)
 
@@ -302,6 +302,15 @@ Written by migration `017`, in the transaction that inserts its parent attempt, 
 - `stale_from`: the earliest instant from which its stated bands may be out of date, the empty string for the whole active period, or null when current.
 
 Written by migration `018`. The ingestion transaction that stores, revises or attributes a prompt or stores a statement lowers `stale_from` to that instant, normalized to UTC; a purge sets it to the empty string in its own transaction. The recomputation after each synchronization and purge starts there and clears it in the transaction that writes the bands, only if it still holds the value it read. No row, or another policy version, recomputes the source's whole active period. Content-free by shape, and not exported.
+
+### 8.20 `prediction_shadow` (1.6+)
+
+- prediction-attempt ID, method ID and method version (the key: one row per attempt and method);
+- model-policy and evidence-policy versions (`recency-hl50-v1`, `recency-hl100-v1`; `stage5-evidence-v2`);
+- lower/point/upper and coverage target, risk label, evidence level and backoff level;
+- posterior alpha and beta.
+
+Written by migration `019`, in the transaction that inserts its parent attempt, one row per weighting variant the invocation computed (`bayesian-pressure-band-hl50@1`, `bayesian-pressure-band-hl100@1`); a variant whose ladder ended at the plan prior leaves no row. The attempt is the answer's; these rows are the shadows that did not answer. Immutable on `UPDATE` and deletable only by `data purge` together with the attempt (the `009` pattern), counted with the predictions. No cross-column CHECK that the interval contains its point, so a shadow can never abort the answer's transaction. It feeds the variants' entries of `calibration.by_method` and is not exported. `prediction_reported_capacity` keeps the `reported-capacity` shadow.
 
 ## 9. Reconciliation Rules
 

@@ -88,6 +88,10 @@ _Avoid_: Usage level, quota state, remaining capacity
 A forecast a separately named method computes, records and calibrates beside the estimate SNACK answers with, and never shows as the answer. It exists so the method's calibration can be compared with the answering method's on the same prompts before it is ever allowed to answer; only `--verbose` and `--json` show it, always saying it is not the answer.
 _Avoid_: Second opinion, alternative answer, backup prediction
 
+**Recency half-life**:
+How many later prompts in the same cell halve an outcome's weight. The estimate SNACK answers with uses one; longer ones run only as shadow estimates, and every one decays, so older outcomes always weigh less than newer ones. Said as a "30-prompt recency half-life", the count always hyphenated.
+_Avoid_: Memory, lookback, window
+
 **Client**:
 The tool through which the user submits prompts, such as OpenCode, Claude Code, or Codex CLI.
 _Avoid_: Provider

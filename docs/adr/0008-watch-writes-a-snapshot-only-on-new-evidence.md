@@ -11,6 +11,19 @@ status: accepted
 > faster than evidence arrives, and it applies to `snack dash` word for word — read `--watch` as
 > "the live screen" throughout. `dash` keys its snapshots on the rendered estimate, which is this
 > rule stated in terms of what the reader actually saw.
+>
+> **Note, 2026-10-03 (`1.6.0`).** `snack dash` keys a snapshot on what is shown of a source's answer
+> — the interval as printed, the risk label, the evidence level, the method and policy versions and
+> the capacity period — and writes one only when that differs from the last it delivered in the
+> session. That is narrower than "only when the set of observations changed" in one respect: outcome
+> weights decay with age, so time alone can carry the printed interval across a whole percent, and
+> the dash then writes a snapshot with no new observation. A `status` run at that instant would have
+> printed, and recorded, the same new numbers, so the two still write the same number of snapshots
+> (`test/dash-snapshots.test.js` holds them to it over eight virtual hours). The cadence is a
+> synchronization 60 seconds after the previous one ended, not the 30-second `--watch` tick. While
+> its `next N` row is shown, each snapshot the dash writes carries the sequence for the `N` on
+> screen as a `prediction_sequence` row, in the attempt's transaction, as `status --sequence` does;
+> stepping `N` writes nothing, because a key press is not new evidence.
 
 A `--watch` tick that ingested no new observation redraws the estimate already on screen and writes
 nothing. A new prediction snapshot is written only when the set of observations behind the estimate

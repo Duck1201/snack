@@ -198,25 +198,49 @@ test("every command's JSON document validates against the published envelope sch
           .every((/** @type {object} */ report) => !("shadow" in report)),
         "a source no Codex installation feeds grew a shadow",
       );
+      // Non-vacuity for the 1.6.0 addition: `shadows` on every report, the `reported-capacity`
+      // entry first where it runs and the very object `shadow` holds, then both weighting
+      // variants, computed -- so the entry schema really validated a computed forecast.
+      for (const report of reports) {
+        const ids = report.shadows.map(
+          (/** @type {{method: {id: string}}} */ entry) => entry.method.id,
+        );
+        assert.deepEqual(
+          ids,
+          [
+            ...(report.source.alias === "codex" ? ["reported-capacity"] : []),
+            "bayesian-pressure-band-hl50",
+            "bayesian-pressure-band-hl100",
+          ],
+          report.source.alias,
+        );
+        assert.equal(Object.keys(report).at(-1), "shadows", "shadows is not the last member");
+        assert.ok(
+          report.shadows.every((/** @type {{computed: boolean}} */ entry) => entry.computed),
+          `${report.source.alias}: a shadow was not computed`,
+        );
+      }
+      assert.deepEqual(codex?.shadows[0], codex?.shadow);
     }
     if (invocation.name === "stats") {
       const reports = document.data.sources ?? [document.data];
-      const withMethods = reports.filter(
-        (/** @type {{calibration: object}} */ report) => "by_method" in report.calibration,
-      );
-      assert.deepEqual(
-        withMethods.map((/** @type {{source: {alias: string}}} */ report) => report.source.alias),
-        ["codex"],
-      );
-      assert.deepEqual(
-        withMethods[0].calibration.by_method.map(
-          (/** @type {{id: string, role: string}} */ entry) => [entry.id, entry.role],
-        ),
-        [
-          ["bayesian-pressure-band", "answer"],
-          ["reported-capacity", "shadow"],
-        ],
-      );
+      // Every source from 1.6.0: the weighting variants run everywhere.
+      for (const report of reports) {
+        assert.deepEqual(
+          report.calibration.by_method.map((/** @type {{id: string, role: string}} */ entry) => [
+            entry.id,
+            entry.role,
+          ]),
+          [
+            ["bayesian-pressure-band", "answer"],
+            ...(report.source.alias === "codex" ? [["reported-capacity", "shadow"]] : []),
+            ["bayesian-pressure-band-hl50", "shadow"],
+            ["bayesian-pressure-band-hl100", "shadow"],
+          ],
+          report.source.alias,
+        );
+      }
+      assert.equal(reports.length, 3, "by_method was validated on fewer sources than it claims");
     }
     if (invocation.name === "status-sequence") {
       const reports = document.data.sources ?? [document.data];
@@ -287,6 +311,30 @@ test("an error document is an envelope too", async () => {
   assert.equal(document.errors.length, 1);
 });
 
+test("dash publishes no payload: its one document is the error envelope refusing --json", async () => {
+  // `snack dash` draws a screen (ADR-0008): no success document exists to freeze, so it has no
+  // payload schema, and the only envelope it can produce is the refusal -- which must still be an
+  // envelope, with the new reason on the existing usage exit code.
+  const validate = await compileSchema("envelope.schema.json");
+  const fixture = await makeConfiguredFixture();
+  await run(["node", "snack", "setup", "opencode", ...setupFlags("work")], fixture.options);
+  fixture.stdout.value = "";
+  const exitCode = await run(["node", "snack", "dash", "--json"], fixture.options);
+
+  assert.equal(exitCode, ExitCode.usage);
+  const document = JSON.parse(fixture.stdout.value);
+  assert.ok(validate(document), JSON.stringify(validate.errors, null, 2));
+  assert.equal(document.command, "dash");
+  assert.equal(document.data, null);
+  assert.deepEqual(
+    document.errors.map((/** @type {{code: string}} */ error) => error.code),
+    ["dash_json_unsupported"],
+  );
+  const published = await readdir(new URL("../schemas/commands/", import.meta.url));
+  assert.ok(!published.includes("dash.schema.json"));
+  assert.ok(!invocations.some((invocation) => invocation.command === "dash"));
+});
+
 test("the export schema and the exported columns cannot drift apart", async () => {
   // This is what makes the schema file trustworthy without generating it: the declared columns are
   // the contract, and a column added to the exporter without being declared here fails.
@@ -340,9 +388,13 @@ test("an export validates against the published export schema", async () => {
  *
  * `1.4` was captured at `v1.4.0` before any 1.5 change: thirteen documents, the first corpus with a
  * `sequence` member (`status-sequence.json`, `--sequence 10`).
+ *
+ * `1.5` was captured at `v1.5.0` before any 1.6 change: the same thirteen documents, the first
+ * corpus with a computed `shadow` on the Codex source's `status` and a `calibration.by_method` on its
+ * `stats`.
  */
 const PRE_FREEZE_VERSIONS = ["0.6", "0.7", "0.8"];
-const FROZEN_VERSIONS = ["0.9", "1.2", "1.3", "1.4"];
+const FROZEN_VERSIONS = ["0.9", "1.2", "1.3", "1.4", "1.5"];
 const CAPTURED_VERSIONS = [...PRE_FREEZE_VERSIONS, ...FROZEN_VERSIONS];
 
 /**
@@ -395,6 +447,37 @@ function declaredProperties(schema) {
   return names;
 }
 
+test("a computed shadow entry carries no reason; one not computed says why", async () => {
+  const validate = await compileSchema("commands/status.schema.json");
+  // The `1.5` capture's Codex report: its `shadow` is computed, and is what `shadows` repeats.
+  const { data } = JSON.parse(
+    await readFile(new URL("./fixtures/contracts/1.5/status.json", import.meta.url), "utf8"),
+  );
+  const report = data.sources.find(
+    (/** @type {{source: {alias: string}}} */ entry) => entry.source.alias === "codex",
+  );
+  const computed = report.shadow;
+  assert.equal(computed?.computed, true, "no computed shadow to hold to the schema");
+  /** @param {object} entry */
+  const withEntry = (entry) => ({ ...report, shadows: [entry] });
+  assert.ok(validate(withEntry(computed)), JSON.stringify(validate.errors));
+  assert.ok(
+    !validate(withEntry({ ...computed, reason: "no_local_outcomes" })),
+    "a computed shadow was allowed a reason",
+  );
+  assert.ok(
+    validate(
+      withEntry({
+        method: computed.method,
+        computed: false,
+        reason: "no_local_outcomes",
+        policy_version: computed.policy_version,
+      }),
+    ),
+    JSON.stringify(validate.errors),
+  );
+});
+
 test("the declared report keys are the report's own, not those of a nested definition", async () => {
   const declared = declaredProperties(await readSchema("commands/status.schema.json"));
   for (const nested of ["level", "label", "gates"]) assert.ok(!declared.has(nested), nested);
@@ -408,6 +491,7 @@ test("the declared report keys are the report's own, not those of a nested defin
     "sequence",
     "reported_capacity",
     "shadow",
+    "shadows",
   ]) {
     assert.ok(declared.has(own), own);
   }
@@ -624,6 +708,9 @@ test("the published command and flag surface has not changed", async () => {
       "--json",
       "--help",
     ],
+    // 1.6.0: a live screen with no flags of its own (decision D1). `--json` is a program-level
+    // option, so `dash --json` parses -- and is refused with `dash_json_unsupported`.
+    dash: ["--help"],
     doctor: ["--source", "--json", "--help"],
     export: ["--format", "--output", "--source", "--since", "--until", "--json", "--help"],
     "setup claude": [

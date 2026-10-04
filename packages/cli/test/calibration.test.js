@@ -7,10 +7,13 @@ import {
   CALIBRATION_POLICY,
   backtest,
   backtestReported,
+  backtestWeightings,
   liveByMethod,
+  scoreVariant,
   summarizeCalibration,
 } from "../src/calibration.js";
-import { buildForecast } from "../src/prediction.js";
+import { PREDICTION_POLICY, WEIGHTING_VARIANTS, buildForecast } from "../src/prediction.js";
+import { backtestAsReleased } from "./fixtures/backtest-1.5.0.js";
 import { labelStatedBands } from "../src/reported-capacity.js";
 
 /**
@@ -206,7 +209,7 @@ test("backtesting a long history stays linear in the number of prompts", () => {
     return Number(process.hrtime.bigint() - startedAt) / 1e6;
   };
 
-  // Both sizes are warmed, and both are measured as a median of several runs.
+  // Both sizes are warmed, then measured interleaved, and each is read as its fastest run.
   //
   // The first version of this warmed only `short` and then timed `long` cold, so the larger input
   // paid JIT and allocation costs the smaller one had already paid, and the ratio it reported was
@@ -214,22 +217,27 @@ test("backtesting a long history stays linear in the number of prompts", () => {
   // idle machine against a threshold of 8 -- under two-fold headroom on a wall-clock comparison --
   // and a loaded macOS runner read 9.7 and failed the build on `main`.
   //
+  // The second measured each size as a median of five consecutive runs, `short`'s all before
+  // `long`'s, and still failed under CPU contention: a burst of load landing on `long`'s runs alone
+  // moved its median and not `short`'s. Contention only ever adds time, so the fastest run is the
+  // best estimate of what the replay costs, and alternating the two sizes makes a burst land on
+  // both. The ratio of the minima is what is compared.
+  //
   // The algorithm is linear, which is why this is a fix to the measurement rather than to the code:
   // measured across 400 to 6400 prompts the cost per prompt stays flat at 0.022-0.026 ms and each
   // doubling costs about 2.05x. The signal this test exists for -- a quadratic replay, 16x at four
   // times the input -- is nowhere near the noise floor once both sides are measured the same way.
-  const median = (/** @type {import("../src/prediction.js").OutcomeRow[]} */ rows) => {
-    for (let run = 0; run < 3; run += 1) time(rows);
-    const runs = Array.from({ length: 5 }, () => time(rows)).sort((a, b) => a - b);
-    const middle = runs[2];
-    // Thrown rather than defaulted: a default here would be a made-up duration, and both of the
-    // plausible ones lie in the direction that hides a failure.
-    if (middle === undefined) throw new Error("timing produced no samples");
-    return middle;
-  };
-
-  const shortMs = Math.max(median(short), 1);
-  const longMs = median(long);
+  for (let run = 0; run < 3; run += 1) {
+    time(short);
+    time(long);
+  }
+  let shortMs = Number.POSITIVE_INFINITY;
+  let longMs = Number.POSITIVE_INFINITY;
+  for (let run = 0; run < 9; run += 1) {
+    shortMs = Math.min(shortMs, time(short));
+    longMs = Math.min(longMs, time(long));
+  }
+  shortMs = Math.max(shortMs, 1);
 
   // Four times the history must not cost sixteen times the work; a quadratic replay would.
   assert.ok(
@@ -450,4 +458,198 @@ test("the paired comparison scores the shadow and the baseline on the same outco
     brier: ((0.9 - 1) ** 2 + (0.3 - 0) ** 2) / 2,
     baseline_brier: summarizeCalibration(both).brier.value,
   });
+});
+
+// --- Weighting variants: one walk, several weightings (1.6.0) ---
+
+/** Arbitrary histories over two bands and three categories, out of order, with ties. */
+const replayHistory = fc.array(
+  fc.record({
+    minute: fc.integer({ min: 0, max: 30 * 24 * 60 }),
+    outcome: fc.constantFrom("success", "success", "success", "restricted", "excluded"),
+    pressure_band: fc.option(fc.constantFrom("low", "moderate", "high"), { nil: undefined }),
+    size_category: fc.option(fc.constantFrom("small", "typical", "large"), { nil: null }),
+  }),
+  // `size: "max"`, or fast-check's small default keeps most histories under the ten prompts a
+  // replay needs before it scores anything, and the property holds over nothing.
+  { minLength: 12, maxLength: 160, size: "max" },
+);
+
+/** @param {{minute: number, outcome: string, pressure_band?: string | undefined, size_category: string | null}[]} rows */
+const asOutcomes = (rows) =>
+  rows.map((row) => ({
+    started_at: minute(row.minute),
+    outcome: /** @type {"success" | "restricted" | "excluded"} */ (row.outcome),
+    ...(row.pressure_band === undefined ? {} : { pressure_band: row.pressure_band }),
+    size_category: row.size_category,
+  }));
+
+const POLICIES = [PREDICTION_POLICY, ...WEIGHTING_VARIANTS.map((variant) => variant.policy)];
+/**
+ * Not a shipped weighting: one whose time half-life differs from the answer's, so a walk that
+ * re-anchored every slot with slot 0's time decay would score it wrongly and be seen to.
+ */
+const ONE_HOUR = Object.freeze({
+  ...PREDICTION_POLICY,
+  version: "test-time-1h",
+  decay_half_life_seconds: 3600,
+});
+
+test("the shared walk scores every weighting exactly as the released backtest does, double for double", () => {
+  const policies = [...POLICIES, ONE_HOUR];
+  fc.assert(
+    fc.property(replayHistory, (rows) => {
+      const outcomes = asOutcomes(rows);
+      const results = backtestWeightings(outcomes, { prior: PRIOR, policies });
+      assert.equal(results.length, policies.length);
+      for (const [index, policy] of policies.entries()) {
+        const released = backtestAsReleased(outcomes, { now: new Date(), prior: PRIOR, policy });
+        const result = /** @type {(typeof results)[number]} */ (results[index]);
+        // Bit for bit: `deepStrictEqual` compares doubles with Object.is.
+        assert.deepEqual(
+          {
+            forecasts: result.forecasts,
+            scored: result.scored,
+            calibration: result.calibration,
+            policy_version: result.policy_version,
+          },
+          released,
+          policy.version,
+        );
+        assert.deepEqual(backtest(outcomes, { now: new Date(), prior: PRIOR, policy }), released);
+      }
+    }),
+    { numRuns: 200 },
+  );
+});
+
+test("the shared walk is not vacuous: the weightings it scores really differ", () => {
+  const outcomes = history(400, (index) =>
+    index % 13 === 5 || index > 360 ? "restricted" : "success",
+  );
+  const [answer, hl50, hl100] = backtestWeightings(outcomes, { prior: PRIOR, policies: POLICIES });
+  assert.ok(answer && hl50 && hl100);
+  assert.equal(answer.forecasts, hl50.forecasts);
+  assert.notDeepEqual(answer.scored, hl50.scored);
+  assert.notDeepEqual(hl50.scored, hl100.scored);
+});
+
+test("a variant is scored only where its own ladder reads an outcome, paired with the answer there", () => {
+  fc.assert(
+    fc.property(replayHistory, (rows) => {
+      const outcomes = asOutcomes(rows);
+      const [answer, ...variants] = backtestWeightings(outcomes, {
+        prior: PRIOR,
+        policies: POLICIES,
+      });
+      assert.ok(answer);
+      for (const variant of variants) {
+        const scored = scoreVariant(variant, answer);
+        const kept = variant.scored.filter((_forecast, index) => !variant.from_prior[index]);
+        assert.deepEqual(scored.scored, kept);
+        assert.equal(scored.forecasts, kept.length);
+        assert.deepEqual(scored.calibration, summarizeCalibration(kept));
+        /** @type {import("../src/calibration.js").ScoredForecast[]} */
+        const baseline = answer.scored.filter((_forecast, index) => !variant.from_prior[index]);
+        // The same outcomes on both sides, in the same order.
+        assert.deepEqual(
+          scored.paired,
+          comparePairedOf(kept, baseline),
+          "paired is not the answer at the variant's own prompts",
+        );
+        assert.deepEqual(
+          kept.map((forecast) => forecast.outcome),
+          baseline.map((forecast) => forecast.outcome),
+        );
+      }
+    }),
+    { numRuns: 150 },
+  );
+  // Non-vacuity: a history whose early prompts are all excluded scores prompts at the prior,
+  // which the answer keeps (as `initial-generic@1`) and every variant leaves out.
+  const outcomes = history(30, (index) => (index < 20 ? "excluded" : "success"));
+  const [answer, hl50] = backtestWeightings(outcomes, { prior: PRIOR, policies: POLICIES });
+  assert.ok(answer && hl50);
+  assert.ok(hl50.from_prior.some(Boolean), "no prompt was scored at the prior");
+  const scored = scoreVariant(hl50, answer);
+  assert.ok(scored.forecasts < answer.forecasts);
+});
+
+/**
+ * @param {import("../src/calibration.js").ScoredForecast[]} shadow
+ * @param {import("../src/calibration.js").ScoredForecast[]} baseline
+ */
+function comparePairedOf(shadow, baseline) {
+  return {
+    sample_size: summarizeCalibration(shadow).brier.sample_size,
+    restrictions: shadow.filter((forecast) => forecast.outcome === "restricted").length,
+    brier: summarizeCalibration(shadow).brier.value,
+    baseline_brier: summarizeCalibration(baseline).brier.value,
+  };
+}
+
+test("a weighting variant's live stream reads its own rows, joined to the answer's pairs by attempt", () => {
+  /**
+   * @param {number} id
+   * @param {string} method
+   * @param {"success" | "restricted" | "excluded"} outcome
+   */
+  const pair = (id, method, outcome, version = "1") => ({
+    prediction_attempt_id: id,
+    lower: 0.6,
+    point: 0.8,
+    upper: 0.9,
+    outcome,
+    method_id: method,
+    method_version: version,
+    shadow_method_id: null,
+    shadow_method_version: null,
+    shadow_lower: null,
+    shadow_point: null,
+    shadow_upper: null,
+  });
+  const pairs = [
+    pair(1, "bayesian-pressure-band", "success"),
+    pair(2, "bayesian-pressure-band", "restricted"),
+    pair(3, "initial-generic", "success"),
+    pair(4, "bayesian-pressure-band", "success", "2"),
+    pair(5, "bayesian-pressure-band", "excluded"),
+  ];
+  /** @param {number} id @param {string} method @param {number} point */
+  const row = (id, method, point, version = "1") => ({
+    prediction_attempt_id: id,
+    method_id: method,
+    method_version: version,
+    lower: point - 0.1,
+    point,
+    upper: point + 0.05,
+  });
+  const rows = [
+    row(1, "bayesian-pressure-band-hl50", 0.9),
+    row(1, "bayesian-pressure-band-hl100", 0.7),
+    row(2, "bayesian-pressure-band-hl50", 0.4),
+    // Beside an attempt no baseline version answered: in the variant's own stream, not paired.
+    row(4, "bayesian-pressure-band-hl50", 0.5),
+    // A later version of the variant is never pooled with version 1.
+    row(2, "bayesian-pressure-band-hl50", 0.1, "2"),
+    row(5, "bayesian-pressure-band-hl50", 0.95),
+  ];
+  const method = { id: "bayesian-pressure-band-hl50", version: "1" };
+  const live = liveByMethod(pairs, method, rows);
+  // The answer's entry is the answer's whole stream, whatever the shadow rows.
+  assert.deepEqual(live.baseline, summarizeCalibration(pairs.slice(0, 3).concat(pairs.slice(4))));
+  assert.deepEqual(live.baseline, liveByMethod(pairs, method).baseline);
+  assert.equal(live.shadow.brier.sample_size, 3);
+  assert.equal(live.shadow.excluded, 1);
+  assert.equal(live.shadow.brier.value, ((0.9 - 1) ** 2 + (0.4 - 0) ** 2 + (0.5 - 1) ** 2) / 3);
+  assert.deepEqual(live.paired, {
+    sample_size: 2,
+    restrictions: 1,
+    brier: ((0.9 - 1) ** 2 + (0.4 - 0) ** 2) / 2,
+    baseline_brier: ((0.8 - 1) ** 2 + (0.8 - 0) ** 2) / 2,
+  });
+  // The other variant reads only its own row.
+  const hl100 = liveByMethod(pairs, { id: "bayesian-pressure-band-hl100", version: "1" }, rows);
+  assert.equal(hl100.shadow.brier.sample_size, 1);
+  assert.equal(hl100.paired.sample_size, 1);
 });

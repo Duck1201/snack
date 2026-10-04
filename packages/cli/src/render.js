@@ -1,5 +1,7 @@
 import { styleText } from "node:util";
 
+import { PREDICTION_POLICY, WEIGHTING_VARIANTS } from "./prediction.js";
+
 /**
  * Human formatting. Explicitly **not** a public contract (`docs/compatibility.md`): every line here
  * is free to change while behaviour and data are preserved, which is what lets the whole 1.x
@@ -43,6 +45,22 @@ const LABEL = 13;
  * @property {ShadowStatusView} [shadow] present only when a Codex installation feeds the source
  * @property {ReportedCapacityView[]} [reported_capacity] present only when a Codex installation feeds
  *   the source
+ * @property {WeightingShadowStatusView[]} [shadows] every shadow estimate, from 1.6.0: the
+ *   `reported-capacity` one first where it runs (the same object as `shadow`), then the weighting
+ *   variants
+ */
+
+/**
+ * One entry of `shadows`, as the panel reads a weighting variant from it.
+ *
+ * @typedef {object} WeightingShadowStatusView
+ * @property {{id: string, version: string}} method
+ * @property {boolean} computed
+ * @property {string | null} reason
+ * @property {string} policy_version
+ * @property {{lower: number, upper: number}} [viability]
+ * @property {{label: string}} [risk]
+ * @property {{level: string}} [evidence]
  */
 
 /**
@@ -113,9 +131,14 @@ const LABEL = 13;
  * @typedef {object} StatsReportView
  * @property {{alias: string, provider: string, plan: string, plan_profile: {id: string, version: string, provenance: string, as_of: string | null}}} source
  * @property {{band: string, baseline_kind: string, policy_version: string, trend?: {status: string, direction?: string | null, reason?: string | null}}} pressure
- * @property {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string, by_method?: MethodCalibrationView[]}} calibration
+ * @property {CalibrationView | {snapshots: number}} calibration The full calibration, or, for a
+ *   report that will not be rendered verbose, its snapshots headline alone.
  * @property {HorizonView[]} horizons
  * @property {ClientComparisonView} [by_client]
+ */
+
+/**
+ * @typedef {{snapshots: number, undelivered_attempts: number, live: CalibrationStream, backtest: CalibrationStream, policy_version: string, by_method?: MethodCalibrationView[]}} CalibrationView
  */
 
 /**
@@ -223,6 +246,18 @@ const OVERVIEW = [
     style: (status) => (status.synchronization.status === "ok" ? undefined : "red"),
   },
 ];
+
+/**
+ * The overview's layout without its readers: each column's header, minimum width, alignment and
+ * sacrifice rank. `snack dash` draws its list from this, so its columns, their widths and the order
+ * a narrow terminal gives them up in are the overview's, while what each cell reads -- `LAST SEEN`
+ * from the frame's clock, `SYNC` from the dash's own synchronization -- is the dash's.
+ */
+export const OVERVIEW_LAYOUT = Object.freeze(
+  OVERVIEW.map(({ header, width, align, sacrifice }) =>
+    Object.freeze({ header, width, align, ...(sacrifice === undefined ? {} : { sacrifice }) }),
+  ),
+);
 
 /**
  * The counting columns of the statistics report, one row per analysis horizon.
@@ -502,6 +537,9 @@ function describeCalibration(calibration, verbose) {
       ? "  no forecasts checked against an outcome yet"
       : `  ${snapshots} ${snapshots === 1 ? "forecast" : "forecasts"} checked against what happened next`;
   if (!verbose) return [headline];
+  if (!("backtest" in calibration)) {
+    throw new Error("A verbose statistics report needs the full calibration, not its headline.");
+  }
   return [
     headline,
     `  live      ${describeStream(calibration.live)}`,
@@ -776,7 +814,7 @@ function spans(statuses, columns) {
  * @param {(value: string, style?: Style) => string} paint
  * @param {Style} [style]
  */
-function place(value, width, align, paint, style) {
+export function place(value, width, align, paint, style) {
   const padding = Math.max(0, width - measure(value));
   const before = align === "center" ? Math.floor(padding / 2) : 0;
   return " ".repeat(before) + paint(value, style) + " ".repeat(padding - before);
@@ -792,7 +830,7 @@ function place(value, width, align, paint, style) {
  *
  * @param {string} value
  */
-function measure(value) {
+export function measure(value) {
   let width = 0;
   // eslint-disable-next-line no-control-regex -- an escape sequence is exactly what is being removed
   for (const character of value.replace(/\u001B\[[0-9;]*m/gu, "")) {
@@ -908,11 +946,7 @@ function renderSource(status, paint, verbose) {
     ...(status.sequence === undefined ? [] : [sequenceRow(status.sequence, paint)]),
     row(paint, "evidence", [
       [status.evidence.level, undefined, 0],
-      [
-        ` — ${EVIDENCE_MEANS[status.evidence.level] ?? "how far the local history reaches"}`,
-        "dim",
-        0,
-      ],
+      [` — ${describeEvidence(status.evidence.level)}`, "dim", 0],
     ]),
     row(paint, "pressure", [
       [status.pressure.band, band, 0],
@@ -941,9 +975,7 @@ function renderSource(status, paint, verbose) {
       : [row(paint, "reported", [[describeReported(status.reported_capacity), undefined, 0]])]),
     // `--verbose` only, and after the stated figure it reads: the shadow is not the estimate this
     // panel answers with, and it is never on the default panel, where it could be taken for one.
-    ...(verbose && status.shadow !== undefined
-      ? shadowRows(status.shadow, status.reported_capacity ?? [], paint)
-      : []),
+    ...(verbose ? allShadowRows(status, paint) : []),
     row(paint, "as of", [
       [
         [
@@ -971,7 +1003,7 @@ function renderSource(status, paint, verbose) {
  *
  * @param {ReportedCapacityView[]} reported
  */
-function describeReported(reported) {
+export function describeReported(reported) {
   if (reported.length === 0) return "no figure stated by Codex yet";
   return reported
     .map((entry) => {
@@ -1060,6 +1092,116 @@ function shadowRows(shadow, reported, paint) {
   ];
 }
 
+/**
+ * Every shadow row of a panel, under one `shadow` label: the `reported-capacity` lines where a Codex
+ * installation feeds the source, then the weighting variants. "Not the answer above" is said once,
+ * on the first line that says what a shadow would say.
+ *
+ * @param {SourceStatusView} status
+ * @param {(value: string, style?: Style) => string} paint
+ * @returns {string[]}
+ */
+function allShadowRows(status, paint) {
+  const reported =
+    status.shadow === undefined
+      ? []
+      : shadowRows(status.shadow, status.reported_capacity ?? [], paint);
+  const reportedKey =
+    status.shadow === undefined
+      ? null
+      : `${status.shadow.method.id}@${status.shadow.method.version}`;
+  const variants = (status.shadows ?? []).filter(
+    (entry) => `${entry.method.id}@${entry.method.version}` !== reportedKey,
+  );
+  if (variants.length === 0) return reported;
+  const disclaimed = status.shadow?.computed === true;
+  return [...reported, ...weightingRows(variants, paint, reported.length === 0, !disclaimed)];
+}
+
+/**
+ * The weighting variants, as `--verbose` shows them: what each would say -- its interval, risk and
+ * evidence, never as the answer -- or, when it was not computed, why; then one line naming what
+ * they are, the half-lives in words and the policy versions that identify them. A count before
+ * "prompt" is always hyphenated ("50-prompt"), never a number of prompts.
+ *
+ * @param {WeightingShadowStatusView[]} variants
+ * @param {(value: string, style?: Style) => string} paint
+ * @param {boolean} labelled whether these are the panel's first shadow rows
+ * @param {boolean} disclaim whether the "not the answer above" suffix is still owed
+ * @returns {string[]}
+ */
+function weightingRows(variants, paint, labelled, disclaim) {
+  /** @type {string[]} */
+  const lines = [];
+  const label = () => (labelled && lines.length === 0 ? "shadow" : "");
+  const notComputed = variants.filter((entry) => !entry.computed || !entry.viability);
+  const sharedReason =
+    notComputed.length > 1 && notComputed.every((entry) => entry.reason === notComputed[0]?.reason);
+  let owed = disclaim;
+  let groupedDone = false;
+  for (const entry of variants) {
+    const identifier = `${entry.method.id}@${entry.method.version}`;
+    if (!entry.computed || !entry.viability || !entry.risk || !entry.evidence) {
+      if (sharedReason && groupedDone) continue;
+      const names = sharedReason
+        ? notComputed.map((other) => `${other.method.id}@${other.method.version}`).join(" and ")
+        : identifier;
+      groupedDone = true;
+      const reason = SHADOW_REASONS[entry.reason ?? ""] ?? "not computed";
+      lines.push(row(paint, label(), [[`${names} not computed — ${reason}`, "dim", 0]]));
+      continue;
+    }
+    lines.push(
+      row(paint, label(), [
+        [
+          `${identifier} would say ${interval(entry.viability)} · risk ${entry.risk.label} · evidence ${entry.evidence.level}`,
+          undefined,
+          0,
+        ],
+        ...(owed
+          ? [
+              /** @type {[string, Style, number]} */ ([
+                " — recorded to compare, not the answer above",
+                "dim",
+                0,
+              ]),
+            ]
+          : []),
+      ]),
+    );
+    owed = false;
+  }
+  const halfLives = variants
+    .map(
+      (entry) =>
+        WEIGHTING_VARIANTS.find(
+          (variant) =>
+            variant.method.id === entry.method.id &&
+            variant.method.version === entry.method.version,
+        )?.policy.recency_half_life_prompts,
+    )
+    .filter((value) => value !== undefined);
+  if (halfLives.length > 0) {
+    const named = halfLives.map((value, index) =>
+      index === halfLives.length - 1 ? `a ${value}-prompt` : `a ${value}-`,
+    );
+    const spoken =
+      named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+    lines.push(
+      row(paint, label(), [
+        [
+          // The policy versions identify the variants rather than state them, and would carry the
+          // line well past a terminal's width: they stay in `--json`.
+          `the answer's model with ${spoken} recency half-life instead of the answer's ${PREDICTION_POLICY.recency_half_life_prompts}-prompt`,
+          "dim",
+          0,
+        ],
+      ]),
+    );
+  }
+  return lines;
+}
+
 /** @param {number} minutes */
 function windowLength(minutes) {
   if (minutes % 1440 === 0) return `${minutes / 1440}d`;
@@ -1112,6 +1254,15 @@ const EVIDENCE_MEANS = {
 };
 
 /**
+ * What an evidence level buys the reader, in the words of the `evidence` row.
+ *
+ * @param {string} level
+ */
+export function describeEvidence(level) {
+  return EVIDENCE_MEANS[level] ?? "how far the local history reaches";
+}
+
+/**
  * Whether this estimate is the plan-profile prior and nothing else.
  *
  * `buildForecast` names the method `initial-generic` exactly when it backed off past every local
@@ -1134,7 +1285,7 @@ function isInitialHeuristic(status) {
  *
  * @param {number} [score]
  */
-function describePercentile(score) {
+export function describePercentile(score) {
   if (typeof score !== "number") return "no baseline to compare against yet";
   // The ends are statements rather than percentages. `percentileRank` is the fraction of baseline
   // windows at or below the observed one, counting ties as half, so a score of 0 means no window in
@@ -1187,7 +1338,7 @@ function row(paint, label, cells) {
  * @param {{dimension: string, percentile: number | null, contribution: number | null}[]} contributors
  * @param {boolean} verbose
  */
-function describeContributors(contributors, verbose) {
+export function describeContributors(contributors, verbose) {
   const ranked = contributors
     .filter((contributor) => contributor.contribution !== null)
     .sort((left, right) => Number(right.contribution) - Number(left.contribution))
@@ -1314,15 +1465,49 @@ function plainly(dimension) {
  * holds even odds strictly inside it -- always shows 50 strictly inside it too. `--json` carries
  * the unrounded values; only this human formatting rounds.
  *
+ * Returned as the two whole percents, so the dash's snapshot key and every printed interval are
+ * the same arithmetic rather than two copies of it.
+ *
  * @param {{lower: number, upper: number}} viability
+ * @returns {{lower: number, upper: number}}
  */
-function interval(viability) {
+export function shownInterval(viability) {
   const lower = clampPercent(Math.floor(snap(viability.lower * 100)));
   const upper = clampPercent(Math.ceil(snap(viability.upper * 100)));
   const low = viability.lower < 0.5 ? Math.min(lower, 49) : lower;
   const high = viability.upper > 0.5 ? Math.max(upper, 51) : upper;
   // The sign belongs to the range, not to each end of it.
-  return `${low}-${Math.max(low, high)}%`;
+  return { lower: low, upper: Math.max(low, high) };
+}
+
+/**
+ * A viability interval as every human surface prints it: `shownInterval`, formatted.
+ *
+ * @param {{lower: number, upper: number}} viability
+ */
+export function formatInterval(viability) {
+  const { lower, upper } = shownInterval(viability);
+  return `${lower}-${upper}%`;
+}
+
+/** The private name every panel row already used. */
+const interval = formatInterval;
+
+/**
+ * Everything a human surface states about one source's answer, already rounded: the interval as
+ * `shownInterval` rounds it, the risk word and the evidence level. `snack dash` keys its snapshots
+ * on exactly this (ADR-0008), so a snapshot is written when, and only when, what a reader is shown
+ * changes.
+ *
+ * @param {{viability: {lower: number, upper: number}, risk: {label: string}, evidence: {level: string}}} report
+ * @returns {{interval: {lower: number, upper: number}, risk: string, evidence: string}}
+ */
+export function shownForecast(report) {
+  return {
+    interval: shownInterval(report.viability),
+    risk: report.risk.label,
+    evidence: report.evidence.level,
+  };
 }
 
 /**
@@ -1341,7 +1526,7 @@ function clampPercent(value) {
 }
 
 /** @param {number} seconds */
-function age(seconds) {
+export function age(seconds) {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
@@ -1349,7 +1534,7 @@ function age(seconds) {
 }
 
 /** @param {string | null} timestamp */
-function day(timestamp) {
+export function day(timestamp) {
   return timestamp === null ? "unknown" : (timestamp.split("T")[0] ?? "unknown");
 }
 

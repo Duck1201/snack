@@ -1,4 +1,4 @@
-import { betaQuantile } from "./beta.js";
+import { betaInterval } from "./beta.js";
 import { ExitCode, SnackError } from "./errors.js";
 
 const HORIZON_PATTERN = /^P(?!$)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
@@ -221,6 +221,19 @@ export const TREND_POLICY = Object.freeze({
   version: "stage6-trend-v1",
   windows: 5,
   minimum_windows: 3,
+});
+
+/**
+ * How many windows the `snack dash` plot draws.
+ *
+ * A drawing, not a direction: `TREND_POLICY` decides `rising`/`steady`/`falling`, is published in
+ * every `--json` document and stays at five windows for the reasons above. A day of hourly windows
+ * is what a reader glancing at a screen left open wants to see, and nothing is computed from it, so
+ * it is versioned apart and never stamped on a stored row.
+ */
+export const PLOT_POLICY = Object.freeze({
+  version: "dash-plot-v1",
+  windows: 24,
 });
 
 /**
@@ -732,10 +745,11 @@ function restrictionShare(restricted, eligible, policy) {
   const tail = (1 - policy.coverage_target) / 2;
   const alpha = 1 + restricted;
   const beta = 1 + (eligible - restricted);
+  const { lower, upper } = betaInterval(tail, 1 - tail, alpha, beta);
   return {
     value: eligible === 0 ? null : restricted / eligible,
-    lower: betaQuantile(tail, alpha, beta),
-    upper: betaQuantile(1 - tail, alpha, beta),
+    lower,
+    upper,
     coverage_target: policy.coverage_target,
   };
 }
