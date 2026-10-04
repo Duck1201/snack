@@ -111,6 +111,36 @@ test("doctor warns about a spool writer lock that was abandoned", async () => {
   }
 });
 
+test("doctor warns about an abandoned writer lock on the pending spool too", async () => {
+  // The plugin writes an event whose provider is bound to no source under `_pending`, behind the
+  // same lock, and `sync` reads and takes that lock over too. Checking only each source's own
+  // directory left an abandoned `_pending` lock blocking that capture with nothing saying so.
+  for (const ageMs of [10 * 60_000, 5_000]) {
+    const report = await runOpenCodeDoctor([[pluginPackageSpec, pluginOptions]], async (paths) => {
+      const directory = join(paths.spoolDir, "_pending");
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await chmod(paths.spoolDir, 0o700);
+      const lock = join(directory, ".writer.lock");
+      await writeFile(lock, `${JSON.stringify({ pid: 1, token: "abandoned" })}\n`, {
+        mode: 0o600,
+      });
+      const modified = new Date(now.getTime() - ageMs);
+      await utimes(lock, modified, modified);
+    });
+    const check = report.checks.find((candidate) => candidate.id === "spool_lock:_pending");
+    if (ageMs > 120_000) {
+      assert.equal(check?.status, "warn", JSON.stringify(report.checks));
+      assert.match(String(check?.message), /lock/u);
+    } else {
+      assert.equal(check, undefined, "a lock a writer may still hold is not reported");
+    }
+    assert.equal(
+      report.checks.find((candidate) => candidate.id === "spool_lock:work"),
+      undefined,
+    );
+  }
+});
+
 test("doctor warns rather than fails when the registered plugin version is merely outdated", async () => {
   // A correct install running a published plugin newer than the pinned specifier must not be
   // reported as a failure: it captures fine, it just has an upgrade available.

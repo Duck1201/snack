@@ -264,16 +264,8 @@ export async function runDoctor(paths, options = {}) {
       checks.push(
         ...(await checkSpoolDirectory(join(paths.spoolDir, source.alias), source.alias, cursors)),
       );
-      // Reported only when it is wrong: a writer holds this lock for milliseconds, so seeing it
-      // at all is normal and seeing it old is not.
-      if (await lockIsStale(join(paths.spoolDir, source.alias, ".writer.lock"), now.getTime())) {
-        checks.push(
-          warn(
-            `spool_lock:${source.alias}`,
-            "An abandoned spool writer lock is blocking live capture; the next sync removes it.",
-          ),
-        );
-      }
+      const abandoned = await abandonedSpoolLock(paths, source.alias, now);
+      if (abandoned) checks.push(abandoned);
     }
     try {
       // Named for ingestion, and outside the spool branch, because that is what it counts: the
@@ -294,12 +286,40 @@ export async function runDoctor(paths, options = {}) {
     }
   }
 
+  // Events whose provider no source is bound to go to `_pending`, behind the same lock, and `sync`
+  // reads that directory and takes its lock over as it does a source's. An abandoned lock there
+  // blocks that capture just the same.
+  if (spoolExists) {
+    const abandoned = await abandonedSpoolLock(paths, "_pending", now);
+    if (abandoned) checks.push(abandoned);
+  }
+
   const status = checks.some((check) => check.status === "fail")
     ? "error"
     : checks.some((check) => check.status === "warn")
       ? "degraded"
       : "ok";
   return { status, checks };
+}
+
+/**
+ * Report a spool writer lock old enough to have been abandoned, or nothing.
+ *
+ * Reported only when it is wrong: a writer holds this lock for milliseconds, so seeing it at all is
+ * normal and seeing it old is not.
+ *
+ * @param {import("./paths.js").SnackPaths} paths
+ * @param {string} directory a source alias, or `_pending`
+ * @param {Date} now
+ */
+async function abandonedSpoolLock(paths, directory, now) {
+  if (!(await lockIsStale(join(paths.spoolDir, directory, ".writer.lock"), now.getTime()))) {
+    return null;
+  }
+  return warn(
+    `spool_lock:${directory}`,
+    "An abandoned spool writer lock is blocking live capture; the next sync removes it.",
+  );
 }
 
 /** @param {string} directory @param {string} alias @param {Map<string, number> | null} cursors */
