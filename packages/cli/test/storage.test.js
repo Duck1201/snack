@@ -1926,3 +1926,123 @@ test("the same revision string in another revision domain is not the same revisi
   assert.equal(result.rejected_invalid, 0);
   assert.deepEqual(readIssueReasons(databaseFile), []);
 });
+
+/**
+ * What a `@snack-ai/opencode` up to 1.0.4 wrote for a prompt the user cancelled on OpenCode
+ * 1.18.15: `session.idle` follows the abort, and the plugin read every idle as a success.
+ */
+function idleSuccessFromPlugin() {
+  return {
+    ...observation(1, "2026-01-02T01:00:00.000Z"),
+    revision: "2026-01-02T01:00:05.000Z:session.idle",
+    revision_domain: "opencode-plugin-v1",
+    parser_version: "opencode-plugin-v1",
+    completed_at: "2026-01-02T01:00:05.000Z",
+    duration_ms: null,
+    outcome: "success",
+  };
+}
+
+/** The same prompt as OpenCode's database records it: finalized, with the abort as its error. */
+function cancelledFromBackfill() {
+  return {
+    ...slicedObservation(),
+    outcome: "excluded",
+    exclusion: {
+      class: "cancelled",
+      source_code: "MessageAbortedError",
+      classifier_version: "opencode-error-v1",
+    },
+  };
+}
+
+/** @param {string} databaseFile */
+function readOutcome(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return /** @type {{outcome: string}} */ (
+      database.prepare("SELECT outcome FROM prompt_source_outcome").get()
+    ).outcome;
+  } finally {
+    database.close();
+  }
+}
+
+for (const order of ["spool first", "backfill first"]) {
+  test(`a cancelled prompt the plugin called a success is excluded without a conflict (${order})`, async () => {
+    // Every cancelled prompt raised one `incomparable_outcome_conflict`, so `doctor` warned once
+    // per cancellation. The plugin's `success` was never independent evidence: OpenCode emits
+    // `session.idle` after an abort, an error or a retried 429 as well as after a success, and
+    // the database records how the turn ended. The prompt is excluded either way.
+    const { paths } = await makeStorage();
+    await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+    seedSource(paths.databaseFile);
+    const source = configuredSource(paths.databaseFile);
+    const spool = () =>
+      storeObservations(
+        paths.databaseFile,
+        source,
+        { observations: [idleSuccessFromPlugin()], cursor: null },
+        now,
+        { path: "spool" },
+      );
+    const backfill = () =>
+      storeObservations(
+        paths.databaseFile,
+        source,
+        { observations: [cancelledFromBackfill()], cursor: cursorAt(2000) },
+        now,
+      );
+    if (order === "spool first") {
+      spool();
+      backfill();
+    } else {
+      backfill();
+      spool();
+    }
+    // A second sync re-reads both paths; it must not count the cancellation again.
+    backfill();
+    spool();
+
+    assert.equal(readOutcome(paths.databaseFile), "excluded");
+    assert.deepEqual(readIssueReasons(paths.databaseFile), []);
+    assert.equal(readSpoolIssueCount(paths.databaseFile, source.alias), 0);
+    assert.deepEqual(readStoredUsage(paths.databaseFile).slices, 3);
+  });
+}
+
+test("a plugin exclusion still conflicts with a backfill success", async () => {
+  // The exemption is for the one disagreement the plugin's `success` cannot carry evidence
+  // into. A backfill `success` against a plugin `excluded` is still a conflict.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  storeObservations(
+    paths.databaseFile,
+    source,
+    {
+      observations: [
+        {
+          ...idleSuccessFromPlugin(),
+          revision: "2026-01-02T01:00:05.000Z:session.error",
+          outcome: "excluded",
+        },
+      ],
+      cursor: null,
+    },
+    now,
+    { path: "spool" },
+  );
+  storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [slicedObservation()], cursor: cursorAt(2000) },
+    now,
+  );
+
+  assert.deepEqual(
+    readIssueReasons(paths.databaseFile).map((row) => /** @type {{reason: string}} */ (row).reason),
+    ["incomparable_outcome_conflict"],
+  );
+});

@@ -10,6 +10,7 @@ import { createSourceAdapter } from "./source-adapter.js";
 import { inspectPluginRegistration } from "./opencode-config.js";
 import { resolvePlanProfile } from "./plan-profile.js";
 import { setupJournalFile } from "./setup-journal.js";
+import { lockIsStale } from "./spool.js";
 import {
   inspectDatabase,
   readPendingMappingCount,
@@ -263,6 +264,16 @@ export async function runDoctor(paths, options = {}) {
       checks.push(
         ...(await checkSpoolDirectory(join(paths.spoolDir, source.alias), source.alias, cursors)),
       );
+      // Reported only when it is wrong: a writer holds this lock for milliseconds, so seeing it
+      // at all is normal and seeing it old is not.
+      if (await lockIsStale(join(paths.spoolDir, source.alias, ".writer.lock"), now.getTime())) {
+        checks.push(
+          warn(
+            `spool_lock:${source.alias}`,
+            "An abandoned spool writer lock is blocking live capture; the next sync removes it.",
+          ),
+        );
+      }
     }
     try {
       // Named for ingestion, and outside the spool branch, because that is what it counts: the
