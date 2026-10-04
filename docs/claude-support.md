@@ -34,10 +34,11 @@ appended to a resumed session, past the head of the file — refuses the whole h
 `source_schema_unsupported` (exit `4`) before anything is written. Before `1.6.1` only the first 200
 records of each file were checked, so a family appended past them would have been read under
 `cc-jsonl-turntree-v1`'s rules. `snack setup claude` and `snack doctor` check every record too, so
-`doctor` fails a history `sync --full` would refuse. Each `sync` still samples the head of every
-file before reading, which keeps a sync with nothing new to read proportional to the number of
-files; the per-record check runs on the files that sync actually reads, which are the ones Claude
-Code has written to since the last one.
+`doctor` fails a history `sync --full` would refuse; both read every file to its end, so their
+time grows with the history's bytes (on a real 1.1 GB history `doctor` went from 2.3 s to 4.8 s).
+Each `sync` still samples the head of every file before reading, which keeps a sync with nothing new
+to read proportional to the number of files; the per-record check runs on the files that sync
+actually reads, which are the ones Claude Code has written to since the last one.
 
 A turn record of the right shape whose `timestamp` is not a time, and a line in the middle of a file
 that does not parse, are damage rather than a different family: each is counted as rejected and

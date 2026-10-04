@@ -121,7 +121,7 @@ audit adds is evidence that the confirmation is real rather than asserted:
 | A document from `1.3` still validates, unchanged (from `1.4.0`) | `packages/cli/test/fixtures/contracts/1.3/`, twelve documents captured at `v1.3.0` before any `1.4` change — the first corpus with `setup codex` and a `status` carrying `reported_capacity`; `1.3` is the third entry in `FROZEN_VERSIONS` |
 | A document from `1.4` still validates, unchanged (from `1.5.0`) | `packages/cli/test/fixtures/contracts/1.4/`, thirteen documents captured at `v1.4.0` before any `1.5` change — the `1.3` set plus `status-sequence.json` (`status --no-sync --sequence 10`), the first corpus with a `sequence` member; `1.4` is the fourth entry in `FROZEN_VERSIONS` |
 | A document from `1.5` still validates, unchanged (from `1.6.0`) | `packages/cli/test/fixtures/contracts/1.5/`, thirteen documents captured at `v1.5.0` before any `1.6` change — the `1.4` set, the first corpus whose Codex `status` carries a computed `shadow` and whose Codex `stats` carries `calibration.by_method`; `1.5` is the fifth entry in `FROZEN_VERSIONS` |
-| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2`, `0.9.0`, `1.2.1` (from `1.3.0`), `1.3.0` (from `1.4.0`), `1.4.0` (from `1.5.0`) and `1.5.0` (from `1.6.0`) from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
+| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2`, `0.9.0`, `1.2.1` (from `1.3.0`), `1.3.0` (from `1.4.0`), `1.4.0` (from `1.5.0`), `1.5.0` (from `1.6.0`) and `1.6.0` (from `1.6.1`) from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
 | The published matrix names families the product reads    | `contracts.test.js` compares the family identifiers in these documents against the adapters |
 | The artifacts are what passed the gates                  | `npm run release:evidence` — per-tarball checksums, a CycloneDX SBOM per package, and two packs of the same source compared entry by entry |
 
@@ -573,6 +573,56 @@ other index; immutable on `UPDATE`, deletable only by `data purge` (the `009` pa
 neither moved nor touched. The table is **not exported**: a new table would fail every version-2
 validator. `storage.test.js` upgrades every published schema level, `1.5.0`'s included, straight to
 `019`, and `npm run upgrade:smoke` upgrades a database the published `1.5.0` wrote.
+
+## What 1.6.1 fixes, and why it is a patch
+
+Four defect fixes, none of which removes, renames, or changes the meaning of anything documented.
+Three are ingestion guards found by the `1.3.0` and `1.5.0` reviews and by the `1.6.0` build; the
+fourth corrects a value of the frozen envelope that was never inside its documented meaning.
+
+**The Claude Code reader holds every record to its family, not only the first 200 of each file.**
+`1.6.1` tightens the reader's fail-closed rule: drift anywhere in a transcript yields
+`source_schema_unsupported` under exit `4`, as drift in a file's first 200 records always did. The
+reason and the exit code are unchanged. What changes is reach: a history a `1.6.0` `sync` read may
+now be refused, if a later Claude Code appended records of another shape to a resumed session —
+which is exactly the history the old sample would have read under the wrong family's rules (the
+Codex P1 of `1.3.0`, `docs/history/specs/ingestion-drift-guards/`). `setup claude` and `doctor`
+check every record too, so `doctor` fails a history `sync --full` would refuse; they pay for it in
+time proportional to the history's bytes ([performance](./release/performance.md#161)).
+
+**A prompt re-read at its stored revision, by the same parser version, with different content is
+refused and counted instead of replacing what was stored.** Ingestion refusing data it cannot
+reconcile is the documented fail-closed rule (`docs/architecture/data.md` §9, rule 2). The refused
+observation is counted in `sync`'s existing `rejected_invalid` and reported by `doctor`'s existing
+`source_ingestion:<alias>` warning; no field, reason code or exit code is added, and a sync with no
+such observation is byte-identical. A changed `parser_version` still re-reads deliberately.
+
+**Client instants are stored in one canonical spelling.** `1.6.1` adds migration
+`020_canonical_instants` — data only, no schema change — which rewrites the instants a client
+supplied to the `toISOString` spelling (UTC, millisecond precision), after the pre-migration backup.
+No envelope, payload, export column, exit code or flag moves. Exported `started_at`, `completed_at`
+and restriction `observed_at` are byte-identical for canonical data, which is every history written
+by a supported client; a history that held another spelling exports the same instant in the
+canonical spelling. The observation hash is taken over the observation as delivered, so the
+migration produces no false `updated` on the next `sync`. An instant that does not parse is now
+refused as `rejected_invalid`, a count `sync` already reported.
+
+**The error envelope's `command` names the command after a leading `--json`.** `--json` is a
+program-level option, and Commander accepts it on either side of the command. Since `0.9`, every
+error envelope of `snack --json <command>` said `command: "snack"`, because the walk that names the
+command stopped at the first flag. It now reads past the options the program declares — `--json`,
+`-V`/`--version` — and still stops at any other flag, so an option's value or a stray positional
+never reaches the field. Success envelopes are unchanged. This is a fix, not a change to the frozen
+envelope: `command` is documented as the command as the user would type it after `snack`, and
+`"snack"` is not one — the reasoning the `0.9` beta applied when `command` stopped carrying a
+rejected positional argument. The schema constrains `command` only to a non-empty string and payload
+routing skips error documents, so every frozen corpus still validates unchanged. The `1.6.0`
+section's parenthetical about `command: "snack"` describes behaviour this release removes.
+
+**No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
+`PREDICTION_POLICY.version` stays `stage5-prediction-v2`. No flag, exit code, reason code or
+configuration key is added. `npm run upgrade:smoke` upgrades a database the published `1.6.0` wrote,
+applying `020`.
 
 ## Upgrading from 0.6+
 

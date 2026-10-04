@@ -576,3 +576,30 @@ widgets are covered by tests with no terminal.
 **The eight-hour session ran in virtual time.** §8.7 of the spec asked for eight real hours of the candidate on a real database. The equality it was to corroborate is proved by `dash-snapshots.test.js` over eight virtual hours; the real binary ran the 35-minute soak above instead, and its count of snapshots matched the distinct answers it showed.
 
 **Follow-ups.** [envelope-command-after-leading-flag](./specs/envelope-command-after-leading-flag/spec.md) records one found while building the dash and left unchanged because `command` is a field of the frozen envelope: an error envelope after a leading `--json` names `snack`, not the command, `dash` included. [ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) and [instants-compared-as-text](./specs/instants-compared-as-text/spec.md) stay open from `1.3.0` and `1.5.0`. All three were fixed in [`1.6.1`](#161---three-ingestion-guards-and-the-envelope-after-a-leading---json--shipped) and archived from `.scratch/`.
+
+### 1.6.1 - three ingestion guards and the envelope after a leading `--json` — **shipped**
+
+Four defects, none observed on a real history, all closing specs that `1.3.0`, `1.5.0` and the
+`1.6.0` build left open. The record of each is in
+[compatibility.md](../compatibility.md#what-161-fixes-and-why-it-is-a-patch):
+
+- the Claude Code reader holds every consumed record to `cc-jsonl-turntree-v1`, not the first 200
+  of each file, so a session resumed by a later Claude Code that appends another shape is refused
+  with `source_schema_unsupported` rather than read under the old family's rules. `doctor` and
+  `setup claude` now take time in proportion to the history's bytes — 2.3 s to 4.8 s for `doctor` on
+  a real 1.1 GB history — under no PLAN budget ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 01);
+- a prompt re-read at its stored revision, by the same parser version, with different content is
+  refused and counted in `rejected_invalid` instead of replacing the stored usage — the storage half
+  of the `1.3.0` Codex P1 ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 02);
+- client instants are stored in the canonical UTC spelling, and migration `020` rewrites those
+  already stored, so no window or frontier compared as text sorts them out of time order
+  ([instants-compared-as-text](./specs/instants-compared-as-text/spec.md));
+- the error envelope's `command` names the command after a leading `--json` instead of `snack`
+  ([envelope-command-after-leading-flag](./specs/envelope-command-after-leading-flag/spec.md)). The
+  npm description, the README openings and `snack --help` now say what SNACK estimates in their
+  first sentence.
+
+**Exit:** on real Claude Code (1.1 GB), Codex and OpenCode (1.3 GB) histories six full and
+incremental runs refuse nothing and write no ingestion issue; a database the published `1.6.0` wrote
+upgrades through `020` with every table's row count and `status --json` unchanged; `upgrade:smoke`
+passes from all ten floors. Measurements in [performance.md](../release/performance.md#161).

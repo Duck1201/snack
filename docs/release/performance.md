@@ -25,6 +25,65 @@ loads modules once and hides roughly 100 ms that the installed command pays ever
 in-process measurement of `status --no-sync` read 144 ms against a 250 ms budget while the real
 spawn was 279 ms and over it.
 
+## 1.6.1
+
+- Date: 2026-10-04
+- Commit: `release/1.6.1` at `985ba88`, with the Claude reader holding every record to its family,
+  the same-revision refusal, migration 020 (`canonical_instants`) and the envelope fix
+- Machine: Linux 6.12.111+deb13-rt-amd64, 12 cores, 87-93% idle by `vmstat` across the run
+- Toolchain: Node `24.18.1`, npm `11.16.0` for the packaging scripts
+- History: 100,000 prompts in the shape of `makeLargeClaudeHistory`; and a real Claude Code history
+  of 1.1 GB in 566 files over 10 projects (1,078 prompts, 0 rejected)
+- Baseline: `1.6.0`, interleaved sample by sample with this tree on copies of the same data, so
+  the column compares versions rather than days
+
+| Measurement | PLAN.md | Measured | `1.6.0`, same session |
+| --- | --- | --- | --- |
+| Initial backfill, 100,000 prompts, Claude Code, spawned | under 30 s | **15.24-15.31 s** | 14.79-14.88 s |
+| Incremental synchronisation, 100,000 prompts, Claude Code | under 2 s | **unchanged** | — |
+| `snack setup claude`, 100,000 prompts | none | **2.07-2.27 s** | 1.91-1.95 s |
+| `snack doctor`, 100,000 prompts | none | **0.83-0.87 s** | 0.67-0.71 s |
+| `snack doctor`, real 1.1 GB history | none | **4.73-4.96 s** | 2.23-2.31 s |
+| `snack setup claude`, real 1.1 GB history | none | **11.4-11.7 s** | 8.4-9.0 s |
+| `snack sync --full`, real 1.1 GB history | none | **7.4-7.6 s** | 6.8-7.0 s |
+
+**Every figure is reported, not asserted.** The load average on this real-time kernel stays above
+half the core count, so `machineIsBusy()` was true for the whole run, as it was for `1.5.0` and
+`1.6.0`, and the guarded assertions stepped aside. The rows above are spawned wall clocks the
+tester recorded beside `1.6.0`.
+
+**`doctor` and `setup claude` now scale with the bytes of the Claude history, not with a fixed
+sample.** Until `1.6.0` the fingerprint read at most 200 records per transcript; it now holds every
+`user` and `assistant` record to `cc-jsonl-turntree-v1`, so it reads every file to the end. On the
+real 1.1 GB history `doctor` went from 2.3 s to 4.8 s, and `setup claude` from about 8.7 s to
+11.5 s; the fingerprint alone took 4.6 s. **No PLAN.md budget covers either command** — the four
+budgets are `status --no-sync`, incremental synchronisation, the initial backfill and steady-state
+memory — so nothing here fails a gate, and nothing here is promised either: a history twice the
+size costs about twice the time. An incremental `sync` does not run the full check and is
+unchanged; the backfill pays it once, inside the 30 s budget.
+
+**What did not move.** On all three real histories (Claude Code 1.1 GB, Codex 37 rollouts, OpenCode
+1.3 GB) six runs — full, incremental, full, incremental, a re-copy of the live data, full — reported
+`rejected_invalid` 0 and wrote no `ingestion_issue` row; `doctor`'s `source_ingestion` and
+fingerprint checks passed. The incremental run over the re-copy updated 2 prompts that had grown and
+refused none.
+
+### What migration 020 costs the person upgrading
+
+020 rewrites every stored client instant to the canonical UTC spelling, in place, after the
+pre-migration backup. Measured on 100,000-prompt Claude Code histories, backup included:
+
+| | Canonical history (every supported client writes one) | Every instant offset-bearing |
+| --- | --- | --- |
+| First open after the upgrade, migration and backup | **425 ms** | **1,067 ms** |
+
+Upgrading a database the published `1.6.0` wrote applied 020 with a `0600` backup; all 26 tables
+kept identical row counts, `integrity_check` returned ok and `foreign_key_check` nothing; the `sync`
+after it reported 0 rejected and 0 updated, and `status --json` under a frozen clock was
+byte-identical to the one before the upgrade. The real histories held no non-canonical instant: 0
+of 1,065 stored `started_at` values, 0 of 178,279 raw timestamps. `upgrade:smoke` applies 020 over
+a database each of the ten published floors wrote, `1.6.0` included.
+
 ## 1.6.0
 
 - Date: 2026-10-03

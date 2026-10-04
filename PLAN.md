@@ -202,6 +202,7 @@ budgets, and the risks.
 | `1.5.0` | `reported_capacity_v1` prediction method, shipped as the shadow method `reported-capacity@1` | shipped |
 | `1.5.1` | alternative recency half-lives as shadow methods | folded into `1.6.0` |
 | `1.6.0` | `snack dash` — superseding `status --watch`; the sequence answer's ceiling, documented; the alternative recency half-lives, in shadow | shipped |
+| `1.6.1` | The Claude reader checks every record; a same-revision re-read cannot replace stored usage; canonical instants (migration `020`); the error envelope names its command after a leading `--json` | shipped |
 
 `snack dash` was specified as part of `1.2.0` and moved to the end of the line rather than pushing
 the three releases behind it down a version each. Renumbering commitments the roadmap has already
