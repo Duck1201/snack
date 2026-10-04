@@ -1,15 +1,8 @@
-import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import process from "node:process";
-import { setTimeout as delay } from "node:timers/promises";
 
-const spoolFilename = "current.open";
+import { appendEvent } from "./spool-writer.js";
+
 const maxPendingWrites = 100;
-const maxSegmentBytes = 1024 * 1024;
-/** A lock is held for the milliseconds one append takes; one this old was abandoned. */
-const staleLockMs = 120_000;
 
 /**
  * Agents OpenCode runs on the side of a prompt, on models of their own: `title` names the session
@@ -252,119 +245,6 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
       }
     },
   };
-}
-
-/** @param {string} spoolDirectory @param {Record<string, unknown>} event */
-async function appendEvent(spoolDirectory, event) {
-  await mkdir(spoolDirectory, { recursive: true, mode: 0o700 });
-  await chmod(spoolDirectory, 0o700);
-  const release = await acquireSpoolLock(spoolDirectory);
-  try {
-    const file = join(spoolDirectory, spoolFilename);
-    try {
-      if ((await stat(file)).size >= maxSegmentBytes) {
-        await rename(file, join(spoolDirectory, `segment-${Date.now()}-${randomUUID()}.ndjson`));
-      }
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-    }
-    const handle = await open(file, "a+", 0o600);
-    try {
-      // A write cut short -- a full disk, a file-size limit, a killed host -- leaves a line with no
-      // newline, and the next event appended to it is glued on and lost with it. Starting on a
-      // fresh line confines the damage to the line that was already broken.
-      const { size } = await handle.stat();
-      const separator = size > 0 && !(await endsWithNewline(handle, size)) ? "\n" : "";
-      try {
-        await handle.writeFile(`${separator}${JSON.stringify(event)}\n`, "utf8");
-        await handle.sync();
-      } catch (error) {
-        // Take back whatever part of this event landed, so the failure leaves no partial line.
-        await handle.truncate(size).catch(() => {});
-        throw error;
-      }
-    } finally {
-      await handle.close();
-    }
-    await chmod(file, 0o600);
-  } finally {
-    await release();
-  }
-}
-
-/** @param {string} spoolDirectory */
-async function acquireSpoolLock(spoolDirectory) {
-  const lock = join(spoolDirectory, ".writer.lock");
-  const token = randomUUID();
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const handle = await open(lock, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, token })}\n`, "utf8");
-      await handle.sync();
-      if ((await readSpoolLock(lock))?.token !== token) {
-        await handle.close();
-        if (attempt < 3) continue;
-        throw new Error("Spool writer lost lock ownership.");
-      }
-      return async () => {
-        await handle.close();
-        if ((await readSpoolLock(lock))?.token === token) await rm(lock, { force: true });
-      };
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-      const owner = await readSpoolLock(lock);
-      // Age decides before the pid does: a pid that answers `kill(pid, 0)` may have been reused,
-      // or belong to another user, and a lock held that long is not being used by anyone.
-      if ((owner !== null && !processIsAlive(owner.pid)) || (await lockIsStale(lock))) {
-        await rm(lock, { force: true });
-        continue;
-      }
-      if (attempt < 3) await delay(2);
-    }
-  }
-  throw new Error("Spool writer is busy.");
-}
-
-/** @param {import("node:fs/promises").FileHandle} handle @param {number} size */
-async function endsWithNewline(handle, size) {
-  const last = Buffer.alloc(1);
-  await handle.read(last, 0, 1, size - 1);
-  return last[0] === 0x0a;
-}
-
-/** @param {string} lock */
-async function lockIsStale(lock) {
-  try {
-    return Date.now() - (await stat(lock)).mtimeMs > staleLockMs;
-  } catch {
-    return false;
-  }
-}
-
-/** @param {string} lock */
-async function readSpoolLock(lock) {
-  try {
-    const value = JSON.parse(await readFile(lock, "utf8"));
-    return recordOrNull(value) &&
-      typeof value.pid === "number" &&
-      Number.isSafeInteger(value.pid) &&
-      value.pid > 0 &&
-      typeof value.token === "string"
-      ? { pid: value.pid, token: value.token }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** @param {number} pid */
-function processIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
 }
 
 /** @param {unknown} output */

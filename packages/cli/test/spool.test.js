@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import * as nodeFs from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +19,7 @@ import {
   writePluginRegistration,
 } from "../src/opencode-config.js";
 import { resolvePaths } from "../src/paths.js";
-import { readSpoolEvents } from "../src/spool.js";
+import { acquireSpoolLock, readSpoolEvents } from "../src/spool.js";
 
 /** @type {string[]} */
 const temporaryRoots = [];
@@ -482,6 +483,119 @@ test("spool rotation waits for the writer lock and rejects schema-invalid restri
   });
   assert.equal(batch.observations.length, 1);
   assert.equal(batch.rejected.length, 1);
+});
+
+/**
+ * A file system whose removals and renames wait for `gate`, and which reports each read of the lock
+ * through `onLockRead`.
+ *
+ * @param {Promise<void>} gate
+ * @param {() => void} [onLockRead]
+ * @returns {import("../src/spool.js").SpoolLockFs}
+ */
+function gatedLockFs(gate, onLockRead = () => {}) {
+  return asLockFs({
+    ...nodeFs,
+    async readFile(/** @type {string} */ path) {
+      const value = await nodeFs.readFile(path, "utf8");
+      if (String(path).endsWith(".writer.lock")) onLockRead();
+      return value;
+    },
+    async rename(/** @type {string} */ from, /** @type {string} */ to) {
+      await gate;
+      return nodeFs.rename(from, to);
+    },
+    async rm(
+      /** @type {string} */ path,
+      /** @type {import("node:fs").RmOptions | undefined} */ options,
+    ) {
+      await gate;
+      return nodeFs.rm(path, options);
+    },
+  });
+}
+
+/** @param {object} value @returns {import("../src/spool.js").SpoolLockFs} */
+function asLockFs(value) {
+  return /** @type {import("../src/spool.js").SpoolLockFs} */ (/** @type {unknown} */ (value));
+}
+
+test("two takers of one abandoned lock never both hold it", async () => {
+  // Both judge the same abandoned lock. A takes it over and creates its own; B, acting on what it
+  // saw a moment earlier, used to remove by path whatever was there -- A's new lock -- and take the
+  // lock too. Interleaved deterministically: A moves the old lock only after B has read it, and B
+  // acts on its judgement only once A holds the lock.
+  const directory = await mkdtemp(join(tmpdir(), "snack-spool-takeover-"));
+  temporaryRoots.push(directory);
+  const lock = join(directory, ".writer.lock");
+  await writeFile(lock, `${JSON.stringify({ pid: process.pid, token: "abandoned" })}\n`, {
+    mode: 0o600,
+  });
+  const old = new Date(Date.now() - 10 * 60_000);
+  await utimes(lock, old, old);
+  /** @type {() => void} */
+  let bJudged = () => {};
+  const judged = new Promise((/** @type {(value?: void) => void} */ resolve) => {
+    bJudged = resolve;
+  });
+  /** @type {() => void} */
+  let aHolds = () => {};
+  const holding = new Promise((/** @type {(value?: void) => void} */ resolve) => {
+    aHolds = resolve;
+  });
+
+  const a = acquireSpoolLock(directory, gatedLockFs(judged));
+  const b = acquireSpoolLock(directory, gatedLockFs(holding, bJudged));
+  const releaseA = await a;
+  aHolds();
+
+  assert.equal(await b, null);
+  assert.ok(releaseA);
+  const owner = JSON.parse(await readFile(lock, "utf8"));
+  assert.notEqual(owner.token, "abandoned");
+  await releaseA();
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test("a taker whose fresh lock was moved aside and put back reclaims it", async () => {
+  // A takeover that moved the wrong lock puts it back, but the taker that created it may have
+  // looked for its token in between, found nothing and given up -- leaving a fresh lock under a
+  // live pid that kept the plugin out for the rest of the sync. Its own token marks it abandoned.
+  const directory = await mkdtemp(join(tmpdir(), "snack-spool-reclaim-"));
+  temporaryRoots.push(directory);
+  let hidden = false;
+  const momentarilyMissing = asLockFs({
+    ...nodeFs,
+    async stat(/** @type {string} */ path) {
+      if (!hidden && String(path).endsWith(".writer.lock")) {
+        hidden = true;
+        throw Object.assign(new Error("moved aside"), { code: "ENOENT" });
+      }
+      return nodeFs.stat(path);
+    },
+  });
+
+  const release = await acquireSpoolLock(directory, momentarilyMissing);
+  assert.equal(hidden, true);
+  assert.ok(release);
+  await release();
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test("releasing a lock another writer took over leaves that writer's lock in place", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snack-spool-release-"));
+  temporaryRoots.push(directory);
+  const lock = join(directory, ".writer.lock");
+  const release = await acquireSpoolLock(directory);
+  assert.ok(release);
+  await rm(lock);
+  await writeFile(lock, `${JSON.stringify({ pid: process.pid, token: "successor" })}\n`, {
+    mode: 0o600,
+  });
+
+  await release();
+
+  assert.equal(JSON.parse(await readFile(lock, "utf8")).token, "successor");
 });
 
 test("a writer lock older than any write is taken over even when its pid looks alive", async () => {
