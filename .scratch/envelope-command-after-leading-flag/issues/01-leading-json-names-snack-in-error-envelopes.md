@@ -1,7 +1,8 @@
 # 01 — a leading `--json` names `snack` in every error envelope
 
-Status: `needs-triage` Severity: **P3** Owner: unassigned Found in: `1.6.0` build of `snack dash`
-(the dash builder's notes) Target: unscheduled — a change to a frozen envelope field
+Status: `fixed` in `1.6.1` Severity: **P3** Owner: unassigned Found in: `1.6.0` build of
+`snack dash` (the dash builder's notes) Target: `1.6.1` — a defect fix on the frozen envelope, not a
+change to it (see "Decision")
 
 ## What happens
 
@@ -36,5 +37,32 @@ at them, and keep stopping at anything else, so an option value or a stray posit
 reaches the field (the reason the walk stops at flags at all — see the comment in `commandName`).
 Decide first whether naming the command is a compatible defect fix (a patch) or needs the freeze
 reset rule; `snack-public-contract-schemas` is the skill for that call.
+
+## Decision: a defect fix, allowed in a patch
+
+`envelope.schema.json` documents `command` as "the command that produced the document, as the user
+would type it after `snack`". `"snack"` is not a command anyone types after `snack`, so the value
+was never inside the field's documented meaning; the field's meaning does not change, the value is
+corrected to match it. The schema constrains `command` only to a non-empty string — there is no
+enum, and nothing lists `"snack"` — and the per-command payload routing applies only to documents
+whose `status` is not `error`, so a corrected error envelope validates exactly as the old one did.
+No frozen corpus (`0.9`, `1.2`–`1.5`) contains `command: "snack"`; the only pin was
+`dash-command.test.js`, written in `1.6.0` to record today's behaviour, not a contract.
+
+This is the precedent `docs/compatibility.md` already set after the freeze: "The error envelope's
+`command` no longer carries a rejected positional argument — `command` still means the command as
+the user would type it. The values it used to carry were never part of that meaning." Under the
+deprecation policy, compatible fixes enter a patch; a removal, a rename or a changed meaning needs a
+major, and this is none of the three. Success envelopes are untouched: each action already names its
+own command.
+
+## Fix
+
+`commandName` (`packages/cli/src/main.js`) reads past the options `program.options` declares — today
+`--json` and `-V`/`--version` — and the value one would take (none does), and still stops at any
+other flag, so an option value or a stray positional still never reaches the field. `main.test.js`
+("an error envelope names its command whichever side of it --json is typed") fails before the fix
+and kills three mutants: reading past every flag, always skipping a value after a program option,
+and not skipping program options at all.
 
 ## Comments

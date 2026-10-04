@@ -3629,3 +3629,34 @@ test("status --verbose without a source prints panels rather than the overview",
   assert.doesNotMatch(fixture.stdout.value, /^ *SOURCE/mu);
   assert.match(fixture.stdout.value, / {2}method {7}/u);
 });
+
+test("an error envelope names its command whichever side of it --json is typed", async () => {
+  // `--json` is a program-level option, and Commander accepts it before the command as well as
+  // after. The error envelope used to stop reading argv at the first flag, so every failure of
+  // `snack --json <command>` said `command: "snack"` -- not a command anyone types after `snack`,
+  // which is the one thing the field is documented to carry.
+  const fixture = await makeRunFixture();
+  const canary = String(privacyCanaries.prompt);
+  const cases = [
+    { argv: ["--json", "status"], command: "status" },
+    { argv: ["--json", "stats"], command: "stats" },
+    { argv: ["--json", "sync"], command: "sync" },
+    { argv: ["--json", "data", "purge", "--all"], command: "data purge" },
+    { argv: ["data", "--json", "purge", "--all"], command: "data purge" },
+    { argv: ["status", "--json"], command: "status" },
+    // Only program-level options are read past. Any other flag still ends the walk, so an
+    // option's value can never become the command, and a stray positional is still not one.
+    { argv: ["--json", "--source", "status", "stats"], command: "snack" },
+    { argv: ["--json", canary], command: "snack" },
+    { argv: ["--json", "doctor", canary], command: "doctor" },
+  ];
+  for (const { argv, command } of cases) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    const exitCode = await run(["node", "snack", ...argv], fixture.options);
+    const document = JSON.parse(fixture.stdout.value);
+    assert.notEqual(exitCode, ExitCode.success, argv.join(" "));
+    assert.equal(document.status, "error", argv.join(" "));
+    assert.equal(document.command, command, argv.join(" "));
+  }
+});
