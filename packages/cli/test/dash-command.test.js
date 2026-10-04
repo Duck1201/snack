@@ -79,9 +79,8 @@ test("dash refuses --json, either side of the command, with one error envelope",
     const result = await dash(fixture, { term: "xterm-256color", argv });
     assert.equal(result.code, 2, argv.join(" "));
     const envelope = JSON.parse(result.stdout);
-    // The command is named when it comes first; `--json dash` reports `snack`, as every command
-    // invoked after a leading flag always has.
-    assert.equal(envelope.command, argv[0] === "dash" ? "dash" : "snack");
+    // Named either way: until 1.6.1 a leading `--json` made every error envelope say `snack`.
+    assert.equal(envelope.command, "dash");
     assert.equal(envelope.status, "error");
     assert.equal(envelope.data, null);
     assert.deepEqual(envelope.errors, [{ code: "dash_json_unsupported", message: JSON_MESSAGE }]);

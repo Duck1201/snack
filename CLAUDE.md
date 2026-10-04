@@ -31,9 +31,9 @@ npm run release:prepare  # changeset version + plugin pin + man page + release e
 npm run collapse:check # scripts/collapse-simulation.mjs — the collapse test per weighting variant
                        # (promotion condition 5); prints counts, promotes nothing
 npm run upgrade:smoke  # scripts/upgrade-smoke.mjs — upgrades the database each published floor
-                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0 1.4.0 1.5.0;
-                       # argv narrows to one) with the candidate. Needs the network; not part of
-                       # `check`.
+                       # leaves behind (0.6.0 0.6.1 0.7.0 0.8.2 0.9.0 1.2.1 1.3.0 1.4.0 1.5.0
+                       # 1.6.0; argv narrows to one) with the candidate. Needs the network; not
+                       # part of `check`.
 ```
 
 Node 24 only (`engines: >=24 <25`), npm 11.16.0, ESM everywhere, JavaScript with JSDoc types — no

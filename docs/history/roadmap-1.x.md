@@ -575,4 +575,61 @@ widgets are covered by tests with no terminal.
 
 **The eight-hour session ran in virtual time.** §8.7 of the spec asked for eight real hours of the candidate on a real database. The equality it was to corroborate is proved by `dash-snapshots.test.js` over eight virtual hours; the real binary ran the 35-minute soak above instead, and its count of snapshots matched the distinct answers it showed.
 
-**Follow-ups.** `.scratch/envelope-command-after-leading-flag/` records one found while building the dash and left unchanged because `command` is a field of the frozen envelope: an error envelope after a leading `--json` names `snack`, not the command, `dash` included. `.scratch/ingestion-drift-guards/` and `.scratch/instants-compared-as-text/` stay open from `1.3.0` and `1.5.0`.
+**Follow-ups.** [envelope-command-after-leading-flag](./specs/envelope-command-after-leading-flag/spec.md) records one found while building the dash and left unchanged because `command` is a field of the frozen envelope: an error envelope after a leading `--json` names `snack`, not the command, `dash` included. [ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) and [instants-compared-as-text](./specs/instants-compared-as-text/spec.md) stay open from `1.3.0` and `1.5.0`. All three were fixed in [`1.6.1`](#161---three-ingestion-guards-the-envelope-after-a-leading---json-and-live-capture-on-opencode-11815--shipped) and archived from `.scratch/`.
+
+### 1.6.1 - three ingestion guards, the envelope after a leading `--json`, and live capture on OpenCode 1.18.15 — **shipped**
+
+Four defects, none observed on a real history, all closing specs that `1.3.0`, `1.5.0` and the
+`1.6.0` build left open. The record of each is in
+[compatibility.md](../compatibility.md#what-161-fixes-and-why-it-is-a-patch):
+
+- the Claude Code reader holds every consumed record to `cc-jsonl-turntree-v1`, not the first 200
+  of each file, so a session resumed by a later Claude Code that appends another shape is refused
+  with `source_schema_unsupported` rather than read under the old family's rules. `doctor` and
+  `setup claude` now take time in proportion to the history's bytes — 2.3 s to 4.8 s for `doctor` on
+  a real 1.1 GB history — under no PLAN budget ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 01);
+- a prompt re-read at its stored revision, by the same parser version, with different content is
+  refused and counted in `rejected_invalid` instead of replacing the stored usage — the storage half
+  of the `1.3.0` Codex P1 ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 02). A
+  refused reading applies none of its restrictions, and a Claude Code revision breaks a
+  same-millisecond tie by append order, so a record appended in the newest millisecond under a lower
+  uuid moves it instead of being refused;
+- client instants are stored in the canonical UTC spelling, and migration `020` rewrites those
+  already stored, so no window or frontier compared as text sorts them out of time order; an instant
+  that names no zone is refused rather than read in local time
+  ([instants-compared-as-text](./specs/instants-compared-as-text/spec.md));
+- the error envelope's `command` names the command after a leading `--json` instead of `snack`
+  ([envelope-command-after-leading-flag](./specs/envelope-command-after-leading-flag/spec.md)). The
+  npm description, the README openings and `snack --help` now say what SNACK estimates in their
+  first sentence.
+
+A bug hunt against a real `opencode serve` `1.18.15` then found live capture wrong on that host, and
+the capture plugin moves to `1.0.5` (`docs/opencode-support.md`, "What OpenCode `1.18.15` changed
+under live capture"). **One P1:** the first prompt of every session was filed under the provider of
+`small_model`, the model OpenCode names the session with, because its `title` call's `chat.params`
+arrives first — recorded as a success, on the wrong capacity source. The plugin now routes a prompt
+from the user message `chat.message` carries or from its own `chat.params` only. With it:
+
+- live events carry the model name, which was always `null`;
+- a cancelled prompt is one `excluded` terminal instead of being followed by `success` events, and
+  the idles after `/shell` or `/summarize` re-emit nothing;
+- a turn OpenCode retried after a 429 — reported only as a free-text `session.status` `retry` —
+  writes no terminal and is finalized by backfill, because `spool-event-v1` cannot state anything
+  truer than `success` for its idle;
+- an interrupted append no longer swallows the next event, a queued prompt no longer drops the
+  previous one's buffered start, an out-of-range host timestamp no longer writes an unreadable line,
+  and `null` plugin options no longer throw at initialization;
+- a spool writer lock older than two minutes is taken over by the plugin and by `sync` whatever
+  process id it names, atomically, so two takers never both hold it, and `doctor` reports one with
+  `spool_lock:<alias>` or `spool_lock:_pending`;
+- `sync` keeps the exclusion OpenCode's database records over a plugin `success` for the same turn
+  without recording an `incomparable_outcome_conflict`, which every cancellation captured by a plugin
+  up to `1.0.4` raised on every `sync`.
+
+`spool-event-v1` and both copies of its schema are unchanged. OpenCode `1.18.15` joins the support
+matrix on the tester's backfill of a real 1.3 GB database and the plugin builder's live run.
+
+**Exit:** on real Claude Code (1.1 GB), Codex and OpenCode (1.3 GB) histories six full and
+incremental runs refuse nothing and write no ingestion issue; a database the published `1.6.0` wrote
+upgrades through `020` with every table's row count and `status --json` unchanged; `upgrade:smoke`
+passes from all ten floors. Measurements in [performance.md](../release/performance.md#161).

@@ -142,6 +142,12 @@ export async function initializeDatabase(paths, options = {}) {
     database = opened;
     opened.pragma("foreign_keys = ON");
     opened.pragma("busy_timeout = 5000");
+    // Migration 020 rewrites stored instants with the same function the ingestion stores them
+    // with, so an upgraded row and a newly read one can never disagree by a rounding rule. A value
+    // that does not parse is returned as it is: a migration keeps a row it cannot interpret.
+    opened.function("snack_canonical_instant", { deterministic: true }, (value) =>
+      typeof value === "string" ? (canonicalInstant(value) ?? value) : value,
+    );
     await chmod(paths.databaseFile, 0o600);
 
     const applied = readAppliedMigrations(opened);
@@ -429,7 +435,12 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
  *   cursor, and its counts are returned only when the batch carried it, so a batch from a client
  *   that states nothing reports exactly the counts it always has.
  * @param {Date} now
- * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null}} [options]
+ * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null, revisionIdentifiesContent?: boolean}} [options]
+ *   `revisionIdentifiesContent` says whether the reader's revisions name content (an append-only
+ *   source, or a spool event) or only a clock over rows updated in place. It defaults to `true`,
+ *   which is the closed answer: a prompt re-read at its stored revision by the same parser with
+ *   different content is refused and counted. With `false` that is refused only when the reading
+ *   would lose a usage slice already stored.
  */
 export function storeObservations(databaseFile, source, batch, now, options = {}) {
   const database = new Database(databaseFile);
@@ -514,7 +525,15 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const normalized = Number.isNaN(ms) ? "" : new Date(ms).toISOString();
         if (staleFrom === null || normalized < staleFrom) staleFrom = normalized;
       };
-      for (const observation of batch.observations) {
+      for (const delivered of batch.observations) {
+        // Stored in the canonical spelling, so text order is time order everywhere storage
+        // compares instants; hashed as delivered, so a prompt read again in the spelling it was
+        // first read in -- and every row stored before 1.6.1 -- is unchanged.
+        const observation = withCanonicalInstants(delivered);
+        if (observation === null) {
+          counts.rejected_invalid += 1;
+          continue;
+        }
         if (
           tombstones.length > 0 &&
           observation.started_at !== null &&
@@ -551,7 +570,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.source_prompt_id,
               observation.provider,
               observation.revision,
-              JSON.stringify(observation),
+              JSON.stringify(delivered),
               timestamp,
             );
           }
@@ -591,7 +610,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.source_prompt_id,
               observation.provider ?? "unknown",
               observation.revision,
-              JSON.stringify(observation),
+              JSON.stringify(delivered),
               timestamp,
             );
           }
@@ -602,11 +621,11 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           counts.rejected_invalid += 1;
           continue;
         }
-        const observationHash = hashObservation(observation);
+        const observationHash = hashObservation(delivered);
         const existing = database
           .prepare(
             `SELECT id, source_revision, observation_hash, completion, revision_domain,
-                    installation_id, started_at
+                    installation_id, started_at, parser_version
               FROM prompt_execution
              WHERE source_alias = ? AND source_prompt_id = ?`,
           )
@@ -728,7 +747,45 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             )
             .run(timestamp, existing.id);
         }
+        // Whether this reading is refused is decided before anything of it is applied. The guard
+        // below used to run after the union of restrictions, so a reading it refused could still
+        // add a rate-limit refusal and flip the stored outcome to `restricted` -- the heaviest
+        // signal there is, from a reading SNACK had just declined to trust. A refused reading now
+        // contributes only the provenance recorded above: which installation it came from, filled
+        // only where none was recorded, and that the prompt was seen through the spool, and when
+        // -- a flag that only goes from 0 to 1, stamped with SNACK's own clock. None of it is
+        // something the observation says about the prompt, and none moves a count, slice or
+        // outcome. The equal-hash reading still unions: nothing in it differs from what is stored,
+        // so the union re-inserts rows already there.
+        const keptAsOlder =
+          typeof existing === "object" &&
+          existing !== null &&
+          "source_revision" in existing &&
+          typeof existing.source_revision === "string" &&
+          "completion" in existing &&
+          ((existing.completion === "completed" && observation.completion === "provisional") ||
+            (existingRevisionDomain === observation.revision_domain &&
+              existing.completion === observation.completion &&
+              compareRevision(observation.revision, existing.source_revision) < 0));
+        const unchangedReading =
+          typeof existing === "object" &&
+          existing !== null &&
+          "source_revision" in existing &&
+          existing.source_revision === observation.revision &&
+          "observation_hash" in existing &&
+          existing.observation_hash === observationHash;
+        const sameRevisionConflict =
+          !keptAsOlder &&
+          !unchangedReading &&
+          storedRow !== null &&
+          typeof storedRow.id === "number" &&
+          storedRow.revision_domain === observation.revision_domain &&
+          storedRow.source_revision === observation.revision &&
+          storedRow.parser_version === observation.parser_version &&
+          ((options.revisionIdentifiesContent ?? true) ||
+            losesStoredSlice(database, storedRow.id, observation));
         if (
+          !sameRevisionConflict &&
           observation.restrictions.length > 0 &&
           typeof existing === "object" &&
           existing !== null &&
@@ -756,29 +813,45 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             )
             .run(existing.id);
         }
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          "source_revision" in existing &&
-          typeof existing.source_revision === "string" &&
-          "completion" in existing &&
-          ((existing.completion === "completed" && observation.completion === "provisional") ||
-            (existingRevisionDomain === observation.revision_domain &&
-              existing.completion === observation.completion &&
-              compareRevision(observation.revision, existing.source_revision) < 0))
-        ) {
+        if (keptAsOlder) {
           counts.unchanged += 1;
           continue;
         }
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          "source_revision" in existing &&
-          existing.source_revision === observation.revision &&
-          "observation_hash" in existing &&
-          existing.observation_hash === observationHash
-        ) {
+        if (unchangedReading) {
           counts.unchanged += 1;
+          continue;
+        }
+        if (sameRevisionConflict) {
+          // The same revision, read by the same parser, with different content. A source that
+          // re-emits a revision claims nothing changed (docs/architecture/data.md §9, rule 2), so
+          // content that differs under that claim is either a client rewriting history without
+          // moving its revision or -- far more likely -- a reader interpreting the same bytes
+          // differently than it did last time. That was the Codex P1 of 1.3.0: unchanged turns came
+          // back with fewer slices at an unchanged revision, and the update path below replaced 3
+          // slices and 435 tokens with 1 and 11, reported as an ordinary `updated` prompt.
+          //
+          // Fail closed on data: keep the row already stored, which a regressed reader cannot be
+          // trusted to improve on, and record the refusal where `doctor` reads it. A changed parser
+          // version is the declared way to read unchanged bytes differently, so it falls through
+          // to the update; so does a differing revision domain, whose revisions are not comparable.
+          //
+          // Where a revision is only a clock over rows updated in place (OpenCode's database), a
+          // write in the millisecond already read legitimately changes a prompt at the same
+          // revision, so only the Codex signature is refused there: a reading that drops a usage
+          // slice already stored. Rows are never deleted by such a write, and a deletion that
+          // lowers the revision is already kept as `unchanged` above.
+          //
+          // Only provenance was recorded above; the restrictions of a refused reading are not
+          // applied (see `sameRevisionConflict`). One row per occurrence, as the collision guard
+          // records them; the issue holds a reason and a path, never the prompt's identity.
+          database
+            .prepare(
+              `INSERT INTO ingestion_issue
+                 (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+               VALUES (?, ?, 'same_revision_content_conflict', NULL, NULL, ?, ?, 1)`,
+            )
+            .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
+          counts.rejected_invalid += 1;
           continue;
         }
 
@@ -803,15 +876,39 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             existingOutcome !== null &&
             "outcome" in existingOutcome &&
             existingOutcome.outcome === "restricted";
+          const storedOutcome =
+            typeof existingOutcome === "object" &&
+            existingOutcome !== null &&
+            "outcome" in existingOutcome &&
+            typeof existingOutcome.outcome === "string"
+              ? existingOutcome.outcome
+              : null;
+          // The plugin's `success` is its reading of `session.idle`, and OpenCode 1.18.x emits that
+          // after a cancelled prompt, an error, or a 429 it retried itself, as well as after a
+          // success: it is not evidence against the database recording that the turn ended without
+          // one. Up to `@snack-ai/opencode` 1.0.4 every cancelled prompt arrived as such a
+          // `success`, and each raised an `incomparable_outcome_conflict` on every sync. The
+          // recorded exclusion stands in either arrival order; it is what the conflict resolved to
+          // as well, so only the false warning goes.
+          const pluginIdleBeforeRecordedEnd =
+            (options.path ?? "backfill") === "backfill"
+              ? existingRevisionDomain === "opencode-plugin-v1" &&
+                storedOutcome === "success" &&
+                observation.outcome === "excluded" &&
+                observation.completion === "completed"
+              : observation.revision_domain === "opencode-plugin-v1" &&
+                observation.outcome === "success" &&
+                storedOutcome === "excluded" &&
+                existingRecord?.completion === "completed";
           const compatibleBackfill =
             (options.path ?? "backfill") === "backfill" &&
             (existingIsRestricted ||
-              (typeof existingOutcome === "object" &&
-                existingOutcome !== null &&
-                "outcome" in existingOutcome &&
-                existingOutcome.outcome === observation.outcome));
+              storedOutcome === observation.outcome ||
+              pluginIdleBeforeRecordedEnd);
           if (compatibleBackfill) {
             // Backfill supplies finalized boundaries and usage; live restrictions remain dominant.
+          } else if (pluginIdleBeforeRecordedEnd) {
+            counts.unchanged += 1;
           } else if (
             observation.restrictions.length > 0 &&
             existingRecord !== null &&
@@ -1202,7 +1299,10 @@ function storeReportedCapacity(
       counts.pending_mapping += 1;
       continue;
     }
-    if (tombstones.length > 0 && isTombstoned(tombstones, snapshot.observed_at)) {
+    // Validated as UTC with an optional millisecond fraction, and stored always with one, so
+    // `12:00:00Z` does not sort after `12:00:00.500Z`.
+    const observedAt = /** @type {string} */ (canonicalInstant(snapshot.observed_at));
+    if (tombstones.length > 0 && isTombstoned(tombstones, observedAt)) {
       counts.tombstoned += 1;
       continue;
     }
@@ -1213,12 +1313,12 @@ function storeReportedCapacity(
         source.alias,
         source.installation_id,
         snapshot.observation_key,
-        snapshot.observed_at,
+        observedAt,
         snapshot.limit_id,
         snapshot.plan_type,
         window.window_minutes,
         window.used_percent,
-        window.resets_at,
+        window.resets_at === null ? null : canonicalInstant(window.resets_at),
         snapshot.parser_version,
         timestamp,
       );
@@ -1233,11 +1333,11 @@ function storeReportedCapacity(
         source.installation_id,
         snapshot.limit_id ?? "",
         snapshot.observation_key,
-        snapshot.observed_at,
+        observedAt,
         newestRow,
       );
       counts.inserted += 1;
-      stale?.(snapshot.observed_at);
+      stale?.(observedAt);
     } else counts.unchanged += 1;
   }
   return counts;
@@ -2308,9 +2408,81 @@ function hashOpaque(value) {
   return createHash("sha256").update(`${SESSION_FINGERPRINT_SALT}\0${value}`).digest("hex");
 }
 
+const rfc3339Instant =
+  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u;
+
+/**
+ * The canonical spelling of an instant -- `Date#toISOString`, UTC, milliseconds -- or null when it
+ * does not parse. Storage compares and orders instants as text, which is time order only in one
+ * spelling: an offset (`01:30:00-03:00` is 04:30 UTC) or a fraction of another length sorts out of
+ * it. A finer fraction is truncated to the millisecond, as `Date.parse` reads it.
+ *
+ * Only an RFC 3339 date-time with `Z` or an offset is an instant -- the rule the spool contract's
+ * `date-time` format states. `Date.parse` alone reads a date-time without an offset in the local
+ * time zone, so the same line would be stored as a different instant on another machine, and it
+ * accepts spellings no client writes. Every timestamp in a real Claude Code and Codex history
+ * names its zone.
+ *
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function canonicalInstant(value) {
+  if (typeof value !== "string" || !rfc3339Instant.test(value)) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/**
+ * An observation with every instant storage keeps in the canonical spelling, or null when one of
+ * them does not parse: refused as invalid rather than stored as something that is not a time.
+ *
+ * @param {Observation} observation
+ * @returns {Observation | null}
+ */
+function withCanonicalInstants(observation) {
+  const startedAt = canonicalInstant(observation.started_at);
+  const completed = observation.completed_at;
+  const completedAt =
+    completed === null || completed === undefined ? completed : canonicalInstant(completed);
+  if (
+    startedAt === null ||
+    (completed !== null && completed !== undefined && completedAt === null)
+  ) {
+    return null;
+  }
+  const restrictions = [];
+  for (const restriction of observation.restrictions) {
+    const observedAt = canonicalInstant(restriction.observed_at);
+    if (observedAt === null) return null;
+    restrictions.push({ ...restriction, observed_at: observedAt });
+  }
+  return { ...observation, started_at: startedAt, completed_at: completedAt, restrictions };
+}
+
 /** @param {Observation} observation */
 function hashObservation(observation) {
   return createHash("sha256").update(JSON.stringify(observation)).digest("hex");
+}
+
+/**
+ * Whether storing `observation` over the stored prompt would delete a usage slice it holds.
+ *
+ * @param {Database.Database} database
+ * @param {number} promptId
+ * @param {Observation} observation
+ */
+function losesStoredSlice(database, promptId, observation) {
+  const incoming = new Set(observation.usage_slices.map((slice) => slice.source_slice_id));
+  return database
+    .prepare("SELECT source_slice_id FROM prompt_usage_slice WHERE prompt_execution_id = ?")
+    .all(promptId)
+    .some(
+      (row) =>
+        typeof row === "object" &&
+        row !== null &&
+        "source_slice_id" in row &&
+        !incoming.has(/** @type {string} */ (row.source_slice_id)),
+    );
 }
 
 /** @param {string} left @param {string} right */

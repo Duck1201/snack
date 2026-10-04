@@ -182,6 +182,10 @@ export function isCodexSource(source) {
 export function createCodexAdapter(options) {
   const home = dirname(options.sessionsDirectory);
   return {
+    // Codex never rewrites a rollout, and a revision names a prompt's newest record by thread and
+    // ordinal, so the same revision read again is the same prompt: storage keeps what it stored
+    // when the content differs -- the guard the 1.3.0 P1 (spec R1) would have tripped.
+    revisionIdentifiesContent: true,
     detect() {
       const versions = new Set();
       for (const file of listRolloutFiles(home).files) {

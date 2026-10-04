@@ -12,7 +12,9 @@ O OpenCode já anota o que você fez. Este plugin assiste isso acontecer, em vez
 Essa diferença importa mais do que parece. Algumas coisas simplesmente não sobrevivem até o disco —
 um prompt que o provedor recusa de cara pode não deixar rastro durável no banco do próprio OpenCode,
 e uma recusa que o SNACK não enxerga é uma recusa com a qual ele não aprende. O plugin pega essas no
-ato.
+ato — quando o OpenCode reporta uma com código de status. O OpenCode `1.18.15` repete sozinho um 429
+e reporta a nova tentativa só como texto livre do provedor, então nesse turno o plugin não declara
+desfecho algum e deixa isso para a leitura que o SNACK faz do banco.
 
 Ele é propositalmente minúsculo. Acrescenta uma linha de JSON por evento num arquivo privado e sai
 da frente. Nunca abre banco, nunca importa a CLI do SNACK, nunca liga para lugar nenhum, e nunca —
@@ -42,12 +44,12 @@ byte-idêntica. Todo campo é metadado:
 
 - a qual prompt e sessão pertence, por identificador;
 - o provedor e o modelo, e quando aconteceu;
-- como terminou: completado, cancelado, um erro operacional, ou uma restrição observada e sua
-  classe;
-- contagens de tokens e custo, como o provedor reportou.
+- como terminou: completado, cancelado, um erro operacional, ou uma restrição observada e sua classe
+  — uma vez por prompt, e nenhuma para um turno que o OpenCode repetiu.
 
-Não existe campo para texto de prompt nem de resposta, e o schema recusa campos desconhecidos de
-forma categórica.
+Contagens de tokens e custo não estão entre eles: o schema tem lugar para uso, mas o plugin o deixa
+vazio e o SNACK tira o uso do banco do OpenCode. Não existe campo para texto de prompt nem de
+resposta, e o schema recusa campos desconhecidos de forma categórica.
 
 Com `--enable-prospective-analysis`, cada prompt carrega também algumas features não semânticas de
 formato: contagem estimada de tokens, contagem de linhas em faixas, contagem de blocos de código em
@@ -77,12 +79,23 @@ não reconhece carregaria um significado inventado rio abaixo por todo o tempo e
 
 Eventos são acrescentados como NDJSON em arquivos de segmento com permissão `0600` num diretório
 `0700`. Acrescentar é a única operação de escrita; nada é reescrito no lugar, e é isso que torna uma
-queda no meio da escrita recuperável em vez de corruptora.
+queda no meio da escrita recuperável em vez de corruptora. Uma escrita que falha é cortada de volta
+até onde começou, e um acréscimo a um segmento que termina no meio de uma linha começa numa linha
+nova, então uma linha quebrada nunca leva o evento seguinte junto.
 
 Uma linha cortada por uma queda é exatamente o que a recuperação de truncamento espera: o leitor
 valida cada linha, descarta a incompleta com um diagnóstico sanitizado, e mantém tudo que veio
 antes. A contagem de registros recusados aparece no `snack sync` como `rejected_invalid` em vez de
 sumir.
+
+Cada acréscimo segura um lock de escrita pelos milissegundos que dura. Um lock com mais de dois
+minutos foi abandonado, então o plugin e o `snack sync` o assumem seja qual for o id de processo que
+ele nomeia, e o `snack doctor` avisa com `spool_lock:<alias>` enquanto houver um. A tomada é
+atômica: dois escritores que julgam o mesmo lock abandonado ao mesmo tempo nunca o seguram juntos, e
+um acréscimo que falhou só é truncado de volta por um escritor que ainda segura o lock. A idade é
+lida no relógio de parede, então um salto de relógio de mais de dois minutos, ou um notebook que
+volta da suspensão no meio de um acréscimo, pode tomar um lock ainda em uso; isso custa no máximo o
+evento sendo escrito.
 
 Segmentos só são removidos depois que **toda fonte configurada commitou além deles**. Um cursor que
 avançasse sem sua transação commitar descartaria histórico em silêncio, então cursores só se movem
@@ -108,7 +121,8 @@ qualquer byte escrito quebra o build.
 
 O **código** de erro do provedor é armazenado de propósito — é o que distingue um rate limit de um
 timeout, e classificar essa diferença corretamente é a razão inteira de o SNACK não tratar o seu
-Wi-Fi instável como evento de quota. A _mensagem_ de erro não é armazenada.
+Wi-Fi instável como evento de quota. A _mensagem_ de erro não é armazenada. Um status de nova
+tentativa é lido só pelo seu tipo; a mensagem dele nunca é guardada nem classificada.
 
 ## Compatibilidade
 
@@ -116,6 +130,11 @@ Requer Node.js 24 e uma `@snack-ai/cli` que aceite `spool-event-v1`. O `schema_v
 `1` e está estável desde a primeira release do plugin, então uma CLI atual lê qualquer versão
 publicada dele. O `snack doctor` reporta um registro fixado numa versão antiga como desatualizado, e
 não como incompatível; rodar `snack setup opencode --install-plugin` de novo atualiza o pin.
+
+No OpenCode `1.18.15`, use a `1.0.5` ou posterior. As versões anteriores registram o primeiro prompt
+de toda sessão sob o provedor do `small_model` do OpenCode, que dá nome à sessão, gravam eventos de
+`success` depois de um prompt cancelado, e deixam o nome do modelo vazio. Um `snack sync` atual
+mantém a exclusão que o banco do OpenCode registra para esse cancelamento.
 
 Apache-2.0. Relatos de segurança vão pelo canal privado descrito em
 [SECURITY.md](https://github.com/Duck1201/snack/blob/main/SECURITY.md).

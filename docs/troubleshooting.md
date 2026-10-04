@@ -63,12 +63,12 @@ creates every one of these privately and never widens them.
 
 | Check | Looks at | Verdicts |
 | --- | --- | --- |
-| `source_fingerprint:<alias>:<client>` | Whether the client's history is a shape this build reads | **fail** — unsupported or inaccessible. SNACK fails closed here on purpose. For Codex CLI it passes while every family present is one SNACK reads, whether or not the family recorded at setup is still present, because one Codex history holds several supported families at once and the old rollouts may since have been deleted. **warn** — a Codex history with no rollout yet: nothing to read until Codex writes one |
+| `source_fingerprint:<alias>:<client>` | Whether the client's history is a shape this build reads | **fail** — unsupported or inaccessible. SNACK fails closed here on purpose. For Codex CLI it passes while every family present is one SNACK reads, whether or not the family recorded at setup is still present, because one Codex history holds several supported families at once and the old rollouts may since have been deleted. **warn** — a Codex history with no rollout yet: nothing to read until Codex writes one. For Claude Code, from 1.6.1 every `user` and `assistant` record of every transcript is checked rather than the first 200 of each file, so a history a 1.6.0 `sync` read can now fail here when a later Claude Code appended another shape to a resumed session, and `doctor` takes time in proportion to the history's size — about 5 s on 1.1 GB |
 | `source_coverage:<alias>:codex:<what>` | Codex CLI history SNACK deliberately does not read | **warn** — `forked_subagents`: forked subagent rollouts from Codex 0.147 or earlier, whose copied parent turns cannot be told apart, so only turns a later Codex added on resuming them are read; `subagent_turns`: subagent turns from Codex 0.147 or earlier, which name no prompt to join; `stated_figures`: figures Codex stated that could not be quoted (a percentage outside 0-100, or a label that is not an identifier); `compressed_rollouts`: `rollout-*.jsonl.zst` files, not read in 1.3. `sync` keeps working; the prompts in them are not observed. See [the Codex support matrix](./codex-support.md) |
 | `plan_profile:<alias>` | The plan profile named in configuration | **warn** — unusable, so the bundled `generic` profile is used instead. Estimates stay honest but lean harder on a weak prior |
 | `source_mapping:<alias>` | Observations waiting on a provider mapping | **warn** — pending mappings, or the count is unknown. They are not lost; they are not attributed yet |
 | `source_freshness:<alias>` | How old the synchronized usage is | **warn** — nothing synchronized yet, older than 24 hours, or unknown. Run `snack sync` |
-| `source_ingestion:<alias>` | Records ingestion refused | **warn** — some were refused, or the count is unknown. Refused records are counted rather than guessed at, and `sync --json` reports `rejected_invalid` |
+| `source_ingestion:<alias>` | Records ingestion refused | **warn** — some were refused, or the count is unknown. Refused records are counted rather than guessed at, and `sync --json` reports `rejected_invalid`. Since 1.6.1 this includes a prompt that read differently at the revision already stored, by the same parser version: the stored prompt is kept, because a reader disagreeing with itself is the likelier cause. A warning that grows on every `sync` names a reader defect worth reporting |
 
 ## The OpenCode live-capture plugin
 
@@ -84,6 +84,7 @@ Reported only when an OpenCode source is configured.
 | `spool_truncation:<alias>` | Segments cut mid-write | **warn** — a truncated tail. A segment the plugin is still writing is normal; a persistent one is not |
 | `spool_rotation:<alias>` | Segment rotation | **warn** — rotation is not keeping up |
 | `spool_cursor:<alias>` | Whether closed segments were fully consumed | **warn** — a closed segment is not yet acknowledged. Segments are removed only after every configured source has committed past them |
+| `spool_lock:<alias>` | A `.writer.lock` older than two minutes | **warn** — reported only then. A writer holds the lock for milliseconds, so an old one was abandoned by a writer that crashed; since SNACK 1.6.1 (plugin `1.0.5`) the plugin and the next `snack sync` remove it whatever process id it names. `spool_lock:_pending` reports the same for the directory of live events bound to no source |
 
 ## `snack dash`
 

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir as systemHomedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import { ExitCode, SnackError } from "./errors.js";
 import { numberOrNull } from "./guards.js";
@@ -32,11 +33,13 @@ const requiredUsageFields = [
 ];
 
 /**
- * How many records of a session file the fingerprint inspects.
+ * How many records of a session file the check before every read inspects.
  *
- * The fingerprint answers a structural question, so it does not need the whole history to answer
- * it: a family that holds for the head of a session holds for the rest, and a family that broke
- * shows up in the first records written under the new client version.
+ * A sample of the head of a file is cheap enough to run on every `sync`, and it refuses a history
+ * whose files start in a shape SNACK does not read before any of it is parsed. It proves nothing
+ * about the rest of the file: a session a later client resumed holds that client's records at its
+ * tail. So the sample is never the guard -- `readRecords` holds every turn record it consumes to
+ * the shape, and `fingerprint()` (setup and `doctor`) inspects every record.
  */
 const fingerprintSampleSize = 200;
 
@@ -65,17 +68,24 @@ export function resolveClaudeProjectsDirectory(options = {}) {
  */
 export function createClaudeAdapter(options) {
   return {
+    // Claude Code only appends, and a revision names a turn's newest record, so the same revision
+    // read again is the same turn: storage keeps what it stored when the content differs.
+    revisionIdentifiesContent: true,
     detect() {
       const versions = new Set();
       for (const sessionFile of listSessionFiles(options.projectsDirectory)) {
-        for (const record of readRecords(sessionFile)) {
+        eachRecord(sessionFile, Infinity, (record) => {
           if (typeof record.version === "string") versions.add(record.version);
-        }
+        });
       }
       return { detected: true, client: "claude", versions: [...versions].sort() };
     },
     fingerprint() {
-      const supported = hasSupportedStructure(options.projectsDirectory);
+      // Setup and `doctor` answer the question `sync --full` would, so they hold every record to
+      // the shape, not a sample: a family a later client appended to the tail of a resumed session
+      // is exactly what a sample of the head cannot see. The records are streamed, so this costs
+      // the history's I/O once but never holds more than one chunk of it.
+      const supported = hasSupportedStructure(options.projectsDirectory, Infinity);
       return {
         adapter: "claude-jsonl",
         fingerprint_version: 1,
@@ -91,11 +101,12 @@ export function createClaudeAdapter(options) {
       // Setup checks the fingerprint once; the client keeps shipping afterwards. Every read has to
       // check it too, or a release that moves a usage field turns the next sync into a history
       // stored with null tokens -- partial, plausible-looking data.
-      if (!hasSupportedStructure(options.projectsDirectory)) {
-        throw new SnackError("The Claude Code history fingerprint is unsupported.", {
-          code: ExitCode.unavailable,
-          reason: "source_schema_unsupported",
-        });
+      //
+      // This check samples the head of every file, which keeps a sync with nothing new to read
+      // O(files) rather than O(history). It is not the guard: `read()` holds every record it
+      // consumes to the same shape, which is what catches a family appended past the sample.
+      if (!hasSupportedStructure(options.projectsDirectory, fingerprintSampleSize)) {
+        throw drift();
       }
       return read(options.projectsDirectory, cursor);
     },
@@ -130,17 +141,31 @@ export function createClaudeAdapter(options) {
  * hold is the shape of the two record types the turn tree is built from.
  *
  * @param {string} projectsDirectory
+ * @param {number} limit records to inspect per file: `fingerprintSampleSize`, or `Infinity`
  */
-function hasSupportedStructure(projectsDirectory) {
+function hasSupportedStructure(projectsDirectory, limit) {
   let recognized = 0;
   for (const sessionFile of listReadableFiles(projectsDirectory)) {
-    for (const record of readSampleRecords(sessionFile, fingerprintSampleSize).records) {
-      if (record.type !== "user" && record.type !== "assistant") continue;
-      if (!isSupportedTurnRecord(record)) return false;
+    let supported = true;
+    eachRecord(sessionFile, limit, (record) => {
+      if (record.type !== "user" && record.type !== "assistant") return true;
+      if (!isSupportedTurnRecord(record)) {
+        supported = false;
+        return false;
+      }
       recognized += 1;
-    }
+      return true;
+    });
+    if (!supported) return false;
   }
   return recognized > 0;
+}
+
+function drift() {
+  return new SnackError("The Claude Code history fingerprint is unsupported.", {
+    code: ExitCode.unavailable,
+    reason: "source_schema_unsupported",
+  });
 }
 
 /**
@@ -153,9 +178,9 @@ function hasSupportedStructure(projectsDirectory) {
  * `sync` with nothing to read: O(total history) where the cursor was designed to make the work
  * O(new data).
  *
- * Reading forward in chunks and stopping at the sample bounds it by the sample instead. This is the
- * same class of sampling the check already did — it never looked past 200 records per file — so
- * what it can conclude is unchanged; only what it reads to conclude it moves.
+ * Reading forward in chunks and stopping at the sample bounds it by the sample instead. A sample
+ * only proves the head of a file, so it is never the guard on what `read()` consumes: `readRecords`
+ * holds every turn record to the shape itself.
  *
  * @param {string} sessionFile
  * @param {number} limit records to collect
@@ -164,6 +189,26 @@ function hasSupportedStructure(projectsDirectory) {
 export function readSampleRecords(sessionFile, limit) {
   /** @type {Record<string, unknown>[]} */
   const records = [];
+  const bytesRead = eachRecord(sessionFile, limit, (record) => {
+    records.push(record);
+  });
+  return { records, bytesRead };
+}
+
+/**
+ * Stream the parseable records of a transcript to `visit`, holding one chunk of the file at a time,
+ * until `limit` records were visited or `visit` returns `false`.
+ *
+ * A line that does not parse is skipped: the callers ask what shape the readable records have, and
+ * `readRecords` is the reader that reports damage. A final line with no trailing newline is a
+ * session being written right now, which `readRecords` skips for the same reason.
+ *
+ * @param {string} sessionFile
+ * @param {number} limit
+ * @param {(record: Record<string, unknown>) => boolean | void} visit
+ * @returns {number} bytes read
+ */
+function eachRecord(sessionFile, limit, visit) {
   let bytesRead = 0;
   let handle;
   try {
@@ -171,37 +216,45 @@ export function readSampleRecords(sessionFile, limit) {
   } catch {
     // A transcript deleted between listing and reading is absence of evidence, exactly as it is
     // for a subagent file in `readRecords`.
-    return { records, bytesRead };
+    return bytesRead;
   }
   try {
     const chunk = Buffer.allocUnsafe(64 * 1024);
+    // A multi-byte character can straddle two chunks; the decoder holds its first bytes back.
+    const decoder = new StringDecoder("utf8");
     let pending = "";
-    while (records.length < limit) {
+    let visited = 0;
+    for (;;) {
       const read = readSync(handle, chunk, 0, chunk.length, null);
       if (read === 0) break;
       bytesRead += read;
-      pending += chunk.toString("utf8", 0, read);
-      let newline = pending.indexOf("\n");
-      while (newline !== -1 && records.length < limit) {
-        const line = pending.slice(0, newline);
-        pending = pending.slice(newline + 1);
-        if (line !== "") {
-          try {
-            records.push(JSON.parse(line));
-          } catch {
-            // The fingerprint asks what shape the readable records have. A line that does not parse
-            // is `readRecords`' problem to report, and it reads the file properly.
-          }
+      pending += decoder.write(chunk.subarray(0, read));
+      // Lines are cut by index and the remainder kept once per chunk. Slicing the remainder off
+      // per line copies the chunk once for every line in it, which a whole-history scan cannot
+      // afford.
+      let start = 0;
+      let newline = pending.indexOf("\n", start);
+      while (newline !== -1) {
+        const line = pending.slice(start, newline);
+        start = newline + 1;
+        newline = pending.indexOf("\n", start);
+        if (line === "") continue;
+        /** @type {Record<string, unknown>} */
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          continue;
         }
-        newline = pending.indexOf("\n");
+        visited += 1;
+        if (visit(record) === false || visited >= limit) return bytesRead;
       }
+      pending = pending.slice(start);
     }
-    // A final line with no trailing newline is a session being written right now; `readRecords`
-    // skips it for the same reason.
   } finally {
     closeSync(handle);
   }
-  return { records, bytesRead };
+  return bytesRead;
 }
 
 /** @param {Record<string, unknown>} record */
@@ -358,22 +411,62 @@ function readSessionObservations(records, readSubagent) {
 }
 
 /**
+ * Where each record was read from: its file and its line, which is the order Claude Code appended
+ * it in. Held beside the records rather than on them, so nothing SNACK adds can be mistaken for a
+ * field Claude Code wrote.
+ *
+ * @type {WeakMap<Record<string, unknown>, {file: string, line: number}>}
+ */
+const appendPosition = new WeakMap();
+
+/**
  * Describe how far a turn has been written, as a revision storage can order.
  *
  * Claude Code only appends, so the newest record of a turn says how complete the reading is. The
- * numeric timestamp leads because storage orders revisions by that prefix; the record identity
- * breaks ties between records written in the same millisecond, and keeps the revision stable when
- * the same unchanged history is read again.
+ * numeric timestamp leads because storage orders revisions by that prefix, and the rest is compared
+ * as text.
+ *
+ * Records written in the same millisecond tie on that prefix. The tie used to be broken by uuid
+ * alone, and a record appended later in the millisecond under a uuid that sorts lower added
+ * content -- a usage slice, or the terminal -- without moving the revision; storage then refused
+ * the turn as a same-revision conflict until some later record arrived. So the tie is broken by
+ * append order: the revision names the highest uuid of the newest millisecond, as it always did,
+ * followed by how many of that millisecond's records were appended after it (`+000001`, ...). The
+ * suffix sorts after the bare uuid and grows with every such append, and a record with a higher
+ * uuid replaces the name and sorts higher still, so every append moves the revision forward.
+ *
+ * Where nothing was appended after that record -- every turn without a tie, and every tie written
+ * in uuid order -- the revision is exactly the one earlier releases wrote, so an upgraded database
+ * reads its unchanged history as unchanged and nothing is re-written. A record in another file (a
+ * subagent transcript) has no append order relative to the session file, so it counts as after.
  *
  * @param {Record<string, unknown>[]} records
  */
 function readRevision(records) {
-  const newest = records
-    .map((record) => ({ at: Date.parse(String(record.timestamp)), uuid: String(record.uuid) }))
-    .filter((entry) => Number.isFinite(entry.at))
-    .sort((left, right) => left.at - right.at || left.uuid.localeCompare(right.uuid))
+  const timed = records
+    .map((record) => ({
+      record,
+      at: Date.parse(String(record.timestamp)),
+      uuid: String(record.uuid),
+    }))
+    .filter((entry) => Number.isFinite(entry.at));
+  const at = Math.max(...timed.map((entry) => entry.at));
+  const newestMillisecond = timed.filter((entry) => entry.at === at);
+  const named = newestMillisecond
+    .toSorted((left, right) => left.uuid.localeCompare(right.uuid))
     .at(-1);
-  return `${newest?.at ?? 0}:${newest?.uuid ?? ""}`;
+  if (named === undefined) return "0:";
+  const namedAt = appendPosition.get(named.record);
+  const appendedAfter = newestMillisecond.filter((entry) => {
+    if (entry.record === named.record) return false;
+    const position = appendPosition.get(entry.record);
+    if (position === undefined || namedAt === undefined || position.file !== namedAt.file) {
+      return true;
+    }
+    return position.line > namedAt.line;
+  }).length;
+  const suffix = appendedAfter === 0 ? "" : `+${String(appendedAfter).padStart(6, "0")}`;
+  return `${at}:${named.uuid}${suffix}`;
 }
 
 /**
@@ -684,13 +777,20 @@ function readRecords(sessionFile, rejected = undefined) {
     // adding record types -- session titles, agent names, queue operations -- and the ones this
     // reader never looks at need not carry a time; refusing them would break SNACK on a client
     // release that changed nothing SNACK reads.
-    if (
-      (record.type === "user" || record.type === "assistant") &&
-      !Number.isFinite(Date.parse(String(record.timestamp)))
-    ) {
+    //
+    // Those two types are first held to the family's shape -- here, on every record, and not only
+    // in the fingerprint `readSince` runs, which samples the head of each file. A session resumed
+    // by a later client gains that client's records at its tail. A turn record of another shape is
+    // not damage this reader can step over: read under these rules it becomes a prompt stored with
+    // null tokens. So it refuses the whole history, before anything is written, as drift at the
+    // head of a file does.
+    const turnRecord = record.type === "user" || record.type === "assistant";
+    if (turnRecord && !isSupportedTurnRecord(record)) throw drift();
+    if (turnRecord && !Number.isFinite(Date.parse(String(record.timestamp)))) {
       rejected?.push({ segment: hashPath(sessionFile), line_offset: index + 1 });
       continue;
     }
+    appendPosition.set(record, { file: sessionFile, line: index });
     records.push(record);
   }
   return records;

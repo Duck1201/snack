@@ -1,7 +1,7 @@
 {
   "name": "@snack-ai/cli",
-  "version": "1.6.0",
-  "description": "Local-first AI usage metadata and next-prompt assessment CLI",
+  "version": "1.6.1",
+  "description": "Local CLI that estimates the chance your next AI prompt goes through without hitting a provider rate or usage limit, from usage metadata only",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

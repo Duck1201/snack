@@ -28,6 +28,22 @@ turn tree is built from: every `user` and `assistant` record must carry `type`, 
 `message.usage.input_tokens`, `output_tokens`, `cache_creation_input_tokens`, and
 `cache_read_input_tokens`. Drift in either shape fails closed and produces no canonical writes.
 
+Every `user` and `assistant` record SNACK reads is held to that shape on every read, not on a
+sample. From `1.6.1` a violation anywhere in a file — including a record a later Claude Code
+appended to a resumed session, past the head of the file — refuses the whole history with
+`source_schema_unsupported` (exit `4`) before anything is written. Before `1.6.1` only the first 200
+records of each file were checked, so a family appended past them would have been read under
+`cc-jsonl-turntree-v1`'s rules. `snack setup claude` and `snack doctor` check every record too, so
+`doctor` fails a history `sync --full` would refuse; both read every file to its end, so their
+time grows with the history's bytes (on a real 1.1 GB history `doctor` went from 2.3 s to 4.8 s).
+Each `sync` still samples the head of every file before reading, which keeps a sync with nothing new
+to read proportional to the number of files; the per-record check runs on the files that sync
+actually reads, which are the ones Claude Code has written to since the last one.
+
+A turn record of the right shape whose `timestamp` is not a time, and a line in the middle of a file
+that does not parse, are damage rather than a different family: each is counted as rejected and
+skipped, and the rest of the file is read.
+
 Record types SNACK does not read are skipped rather than refused. Claude Code introduces them
 continuously and none of them are the turn tree, so refusing an unread type would fail a client
 release that changed nothing SNACK reads.

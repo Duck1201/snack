@@ -2,6 +2,10 @@
 
 **Saiba antes de alimentar o modelo.**
 
+O SNACK estima a chance de o seu próximo prompt passar sem que o provedor o recuse por um limite de
+requisições ou de uso. Trabalha só com metadados de uso, e nunca guarda nem julga o que os seus
+prompts dizem.
+
 In English: [README.md](./README.md).
 
 ## A versão amigável

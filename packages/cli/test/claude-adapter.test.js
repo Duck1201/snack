@@ -267,6 +267,88 @@ test("a turn still being written revises upward instead of duplicating", async (
   assert.equal(reread.revision, provisional.revision);
 });
 
+test("a Claude revision is the one earlier releases wrote unless a record was appended after it in its millisecond", async () => {
+  // Databases written before 1.6.1 hold `<ms>:<uuid of the newest record>`, ties broken by uuid. A
+  // revision that moved for an unchanged turn would send every stored prompt through the update
+  // path on the first sync after the upgrade, so it must stay byte for byte what it was wherever no
+  // record was appended after the one it names.
+  const projectsDirectory = await createFixtureProjects("version-2-1-220.jsonl");
+  const sessionFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  );
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const revision = () => adapter.readAll().observations[0]?.revision;
+  const terminalAt = Date.parse("2026-07-30T10:00:07.000Z");
+  assert.equal(revision(), `${terminalAt}:44444444-4444-4444-8444-444444444444`);
+
+  const lines = (await readFile(sessionFile, "utf8")).trimEnd().split("\n");
+  const terminal = JSON.parse(/** @type {string} */ (lines.at(-1)));
+  /** @param {string} uuid */
+  const sameMillisecond = (uuid) =>
+    JSON.stringify({ ...terminal, uuid, parentUuid: terminal.uuid, type: "user", message: {} });
+
+  // A tie written in uuid order names the last record, exactly as before.
+  await appendFile(sessionFile, `${sameMillisecond("55555555-5555-4555-8555-555555555555")}\n`);
+  assert.equal(revision(), `${terminalAt}:55555555-5555-4555-8555-555555555555`);
+
+  // Appended after it under a lower uuid: the name stays, and the revision moves past it.
+  const before = /** @type {string} */ (revision());
+  await appendFile(sessionFile, `${sameMillisecond("00000000-0000-4000-8000-000000000001")}\n`);
+  const after = /** @type {string} */ (revision());
+  assert.equal(after, `${terminalAt}:55555555-5555-4555-8555-555555555555+000001`);
+  await appendFile(sessionFile, `${sameMillisecond("00000000-0000-4000-8000-000000000002")}\n`);
+  const twice = /** @type {string} */ (revision());
+  assert.equal(twice, `${terminalAt}:55555555-5555-4555-8555-555555555555+000002`);
+  // Storage compares what follows the millisecond as text, with `localeCompare`.
+  const tail = (/** @type {string} */ value) => value.slice(value.indexOf(":") + 1);
+  assert.ok(tail(after).localeCompare(tail(before)) > 0);
+  assert.ok(tail(twice).localeCompare(tail(after)) > 0);
+
+  // A higher uuid in the same millisecond names the revision again, and still sorts later.
+  await appendFile(sessionFile, `${sameMillisecond("66666666-6666-4666-8666-666666666666")}\n`);
+  const renamed = /** @type {string} */ (revision());
+  assert.equal(renamed, `${terminalAt}:66666666-6666-4666-8666-666666666666`);
+  assert.ok(tail(renamed).localeCompare(tail(twice)) > 0);
+});
+
+test("a subagent record written in the turn's newest millisecond moves the revision", async () => {
+  // A subagent transcript is another file, so nothing orders its records against the session's:
+  // one in the newest millisecond counts as appended after the record the revision names.
+  const projectsDirectory = await createFixtureProjects("subagent-parent.jsonl", {
+    subagents: { f1f1f1f1f1f1f1f1: "subagent-child.jsonl" },
+  });
+  const agentFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001",
+    "subagents",
+    "agent-f1f1f1f1f1f1f1f1.jsonl",
+  );
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const before = /** @type {string} */ (adapter.readAll().observations[0]?.revision);
+  const terminalAt = Date.parse("2026-07-30T10:00:25.000Z");
+  assert.equal(before, `${terminalAt}:44444444-4444-4444-8444-444444444444`);
+
+  const lines = (await readFile(agentFile, "utf8")).trimEnd().split("\n");
+  const last = JSON.parse(/** @type {string} */ (lines.at(-1)));
+  await appendFile(
+    agentFile,
+    `${JSON.stringify({
+      ...last,
+      uuid: "00000000-0000-4000-8000-000000000003",
+      parentUuid: last.uuid,
+      timestamp: "2026-07-30T10:00:25.000Z",
+    })}\n`,
+  );
+
+  assert.equal(
+    adapter.readAll().observations[0]?.revision,
+    `${terminalAt}:44444444-4444-4444-8444-444444444444+000001`,
+  );
+});
+
 test("an incremental Claude read skips sessions that did not move", async () => {
   const projectsDirectory = await createFixtureProjects("version-2-1-220.jsonl");
   const adapter = createClaudeAdapter({ projectsDirectory });
@@ -499,6 +581,103 @@ test("drift inside a subagent transcript fails closed too", async () => {
     () => adapter.readAll(),
     (error) => error instanceof SnackError && error.reason === "source_schema_unsupported",
   );
+});
+
+// A Claude Code session resumed by a later client gains that client's records at its tail. The
+// fixture's first 202 records are `cc-jsonl-turntree-v1`; record 204 is an assistant record whose
+// usage shape moved, past the 200 records the fingerprint samples per file. Its `version` is
+// synthetic -- no Claude Code release has shipped a second family yet.
+const resumedPastTheSample = "resumed-2-1-220-by-drifted-usage.jsonl";
+
+test("a family appended past the fingerprint sample refuses the read", async () => {
+  const projectsDirectory = await createFixtureProjects(resumedPastTheSample);
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const fixture = await readFixture(resumedPastTheSample);
+  const canaries = JSON.parse(
+    await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url), "utf8"),
+  );
+
+  // Guard against a vacuous pass: the drifted record really is beyond the sample, and the head
+  // really is a history this reader would otherwise accept.
+  const lines = fixture.trimEnd().split("\n");
+  const drifted = lines.findIndex(
+    (line) => !line.includes('"input_tokens"') && /"assistant"/u.test(line),
+  );
+  assert.ok(drifted >= 200, `the drifted record is record ${drifted + 1}`);
+  for (const name of ["prompt", "response", "path", "branch"]) {
+    assert.match(fixture, new RegExp(String(canaries[name]), "u"), `${name} was never planted`);
+  }
+
+  // Only the records `read()` consumes can prove which family a resumed session holds; a sample of
+  // the head proves the head. Reading the appended record under the old family's rules would store
+  // a prompt with null tokens, so the whole history is refused before anything is written, exactly
+  // as drift at the head of a file is.
+  for (const read of [() => adapter.readAll(), () => adapter.readSince(null)]) {
+    assert.throws(read, (error) => {
+      assert.ok(error instanceof SnackError);
+      assert.equal(error.reason, "source_schema_unsupported");
+      assert.equal(error.exitCode, 4);
+      for (const canary of Object.values(canaries)) {
+        assert.doesNotMatch(String(error.message), new RegExp(String(canary), "u"));
+      }
+      return true;
+    });
+  }
+});
+
+test("an incremental read refuses a family appended to a session it already read", async () => {
+  const head = (await readFixture(resumedPastTheSample)).split("\n").slice(0, 202).join("\n");
+  const projectsDirectory = await createFixtureProjects(resumedPastTheSample);
+  const sessionFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  );
+  await writeFile(sessionFile, `${head}\n`, { mode: 0o600 });
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const first = adapter.readAll();
+  assert.equal(first.observations.length, 101);
+
+  // Claude Code appends the resumed turn; the file's mtime moves, so the cursor re-reads it.
+  const tail = (await readFixture(resumedPastTheSample)).split("\n").slice(202).join("\n");
+  await appendFile(sessionFile, tail);
+  await utimes(sessionFile, new Date(), new Date(Date.now() + 60_000));
+
+  assert.throws(
+    () => adapter.readSince(first.cursor),
+    (error) => error instanceof SnackError && error.reason === "source_schema_unsupported",
+  );
+});
+
+test("a family appended past the sample of a subagent transcript refuses the read", async () => {
+  const projectsDirectory = await createFixtureProjects("subagent-parent.jsonl", {
+    subagents: { f1f1f1f1f1f1f1f1: resumedPastTheSample },
+  });
+  const adapter = createClaudeAdapter({ projectsDirectory });
+
+  assert.throws(
+    () => adapter.readAll(),
+    (error) => error instanceof SnackError && error.reason === "source_schema_unsupported",
+  );
+});
+
+test("doctor's fingerprint sees a family appended past the sample", async () => {
+  const projectsDirectory = await createFixtureProjects(resumedPastTheSample);
+  const adapter = createClaudeAdapter({ projectsDirectory });
+
+  // `doctor` and setup answer the question `sync --full` would: a history `read()` refuses is not a
+  // supported one, wherever in a file the refusing record sits.
+  assert.deepEqual(adapter.fingerprint(), {
+    adapter: "claude-jsonl",
+    fingerprint_version: 1,
+    family: null,
+    supported: false,
+  });
+  assert.deepEqual(adapter.health(), {
+    status: "incompatible",
+    accessible: true,
+    fingerprint: { family: null, supported: false },
+  });
 });
 
 /**

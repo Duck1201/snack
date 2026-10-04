@@ -98,6 +98,12 @@ function openSource(databaseFile) {
  */
 export function createOpenCodeAdapter(options) {
   return {
+    // OpenCode updates its rows in place, and a revision is the newest `time_updated` -- a
+    // millisecond clock. A write landing in the millisecond already read changes a prompt without
+    // moving its revision, which is why `readSince` re-reads rows at the cursor's own timestamp.
+    // Storage therefore accepts different content at the same revision here, unless it would lose
+    // a usage slice already stored.
+    revisionIdentifiesContent: false,
     detect() {
       const database = openSource(options.databaseFile);
       try {

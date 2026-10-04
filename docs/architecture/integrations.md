@@ -19,9 +19,9 @@ An unknown critical fingerprint aborts that path before canonical writes. `docto
 
 ### 10.2 OpenCode Plugin Path
 
-The plugin uses documented OpenCode hooks/events where they provide stable boundaries. Likely event families include message updates, session errors/status, and session idle, but exact mapping remains an implementation validation item.
+The plugin uses documented OpenCode hooks/events where they provide stable boundaries: `chat.message` starts a prompt, `chat.params` supplies its provider and model when `chat.message` does not (only the prompt's own call — never the `title`, `compaction` or `summary` agents'), `session.error` and `session.idle` end it, and `session.status` is read for its `type` alone, to notice a turn OpenCode retried. Each prompt gets at most one terminal event; a retried turn gets none and is finalized by backfill. The per-version mapping, and what OpenCode `1.18.15` changed in it, is in [opencode-support.md](../opencode-support.md).
 
-The plugin does not import the CLI package or native SQLite dependency. It writes one validated event per line to a private spool segment using append/flush behavior designed not to corrupt earlier lines on crash.
+The plugin does not import the CLI package or native SQLite dependency. It writes one validated event per line to a private spool segment using append/flush behavior designed not to corrupt earlier lines on crash: an append starts on a fresh line when the segment ends mid-line, and a failed write is truncated back to where it began. A writer lock older than two minutes is treated as abandoned, by the plugin and by `sync`, whatever process id it names. The takeover renames the lock aside and proceeds only when what it moved is the lock it judged, putting back (with `link`) one another writer took meanwhile, so two takers never both hold it; a failed write is truncated back only while its writer still holds the lock. Age is wall-clock, so a clock jump past two minutes or a suspend mid-append can take over a held lock, at the cost of the event being written.
 
 ### 10.3 Spool Event Contract
 

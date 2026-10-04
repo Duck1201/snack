@@ -2,6 +2,10 @@
 
 **Know before you feed the model.**
 
+SNACK estimates the chance that your next prompt goes through without the provider refusing it for a
+rate or usage limit. It works from usage metadata alone, and never stores or judges what your
+prompts say.
+
 Em português: [README.pt-BR.md](./README.pt-BR.md).
 
 ## The friendly version

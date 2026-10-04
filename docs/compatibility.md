@@ -121,7 +121,7 @@ audit adds is evidence that the confirmation is real rather than asserted:
 | A document from `1.3` still validates, unchanged (from `1.4.0`) | `packages/cli/test/fixtures/contracts/1.3/`, twelve documents captured at `v1.3.0` before any `1.4` change — the first corpus with `setup codex` and a `status` carrying `reported_capacity`; `1.3` is the third entry in `FROZEN_VERSIONS` |
 | A document from `1.4` still validates, unchanged (from `1.5.0`) | `packages/cli/test/fixtures/contracts/1.4/`, thirteen documents captured at `v1.4.0` before any `1.5` change — the `1.3` set plus `status-sequence.json` (`status --no-sync --sequence 10`), the first corpus with a `sequence` member; `1.4` is the fourth entry in `FROZEN_VERSIONS` |
 | A document from `1.5` still validates, unchanged (from `1.6.0`) | `packages/cli/test/fixtures/contracts/1.5/`, thirteen documents captured at `v1.5.0` before any `1.6` change — the `1.4` set, the first corpus whose Codex `status` carries a computed `shadow` and whose Codex `stats` carries `calibration.by_method`; `1.5` is the fifth entry in `FROZEN_VERSIONS` |
-| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2`, `0.9.0`, `1.2.1` (from `1.3.0`), `1.3.0` (from `1.4.0`), `1.4.0` (from `1.5.0`) and `1.5.0` (from `1.6.0`) from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
+| The migration floor holds from every published release   | `npm run upgrade:smoke` installs `0.6.0`, `0.6.1`, `0.7.0`, `0.8.2`, `0.9.0`, `1.2.1` (from `1.3.0`), `1.3.0` (from `1.4.0`), `1.4.0` (from `1.5.0`), `1.5.0` (from `1.6.0`) and `1.6.0` (from `1.6.1`) from the registry, upgrades each one's database with the candidate, and ends on `PRAGMA integrity_check` |
 | The published matrix names families the product reads    | `contracts.test.js` compares the family identifiers in these documents against the adapters |
 | The artifacts are what passed the gates                  | `npm run release:evidence` — per-tarball checksums, a CycloneDX SBOM per package, and two packs of the same source compared entry by entry |
 
@@ -506,7 +506,9 @@ other byte unchanged.
 program-level option Commander accepts on either side of it — is refused with exit `2` and the
 reason `dash_json_unsupported`, as one error envelope with `command: "dash"` and `data: null`
 (`command: "snack"` when `--json` comes first, as every command's error envelope has said after a
-leading flag since `0.9`; `.scratch/envelope-command-after-leading-flag/`); a
+leading flag since `0.9`; `docs/history/specs/envelope-command-after-leading-flag/` — *note of
+`1.6.1`: that release removes this behaviour, and `snack --json dash` names `dash`; see
+[1.6.1](#what-161-fixes-and-why-it-is-a-patch)*); a
 standard output or input that is not a terminal, or `TERM` unset, empty or `dumb`, is refused with
 exit `2` and `dash_requires_terminal`. Both are new values of the open `errors[].code` under an
 existing exit code, the shape `sequence_length_invalid` took; no exit code moves, and no payload
@@ -572,6 +574,142 @@ neither moved nor touched. The table is **not exported**: a new table would fail
 validator. `storage.test.js` upgrades every published schema level, `1.5.0`'s included, straight to
 `019`, and `npm run upgrade:smoke` upgrades a database the published `1.5.0` wrote.
 
+## What 1.6.1 fixes, and why it is a patch
+
+Defect fixes, none of which removes, renames, or changes the meaning of anything documented. Three
+are ingestion guards found by the `1.3.0` and `1.5.0` reviews and by the `1.6.0` build; one corrects
+a value of the frozen envelope that was never inside its documented meaning; the rest come from a
+bug hunt against a real OpenCode `1.18.15` and fix live capture — in the plugin, which moves to
+`1.0.5`, and in how the CLI reads its spool.
+
+**The Claude Code reader holds every record to its family, not only the first 200 of each file.**
+`1.6.1` tightens the reader's fail-closed rule: drift anywhere in a transcript yields
+`source_schema_unsupported` under exit `4`, as drift in a file's first 200 records always did. The
+reason and the exit code are unchanged. What changes is reach: a history a `1.6.0` `sync` read may
+now be refused, if a later Claude Code appended records of another shape to a resumed session —
+which is exactly the history the old sample would have read under the wrong family's rules (the
+Codex P1 of `1.3.0`, `docs/history/specs/ingestion-drift-guards/`). `setup claude` and `doctor`
+check every record too, so `doctor` fails a history `sync --full` would refuse; they pay for it in
+time proportional to the history's bytes ([performance](./release/performance.md#161)).
+
+**A prompt re-read at its stored revision, by the same parser version, with different content is
+refused and counted instead of replacing what was stored.** Ingestion refusing data it cannot
+reconcile is the documented fail-closed rule (`docs/architecture/data.md` §9, rule 2). The refused
+observation is counted in `sync`'s existing `rejected_invalid` and reported by `doctor`'s existing
+`source_ingestion:<alias>` warning; no field, reason code or exit code is added, and a sync with no
+such observation is byte-identical. A changed `parser_version` still re-reads deliberately. The
+refusal is decided before anything of the observation is applied: a refused reading adds no
+restriction and cannot move the stored outcome to `restricted`, and contributes only provenance —
+which installation reported the prompt, filled only where none was recorded, and that the spool saw
+it. An identical reading at the stored revision still unions its restrictions, which re-inserts rows
+already stored.
+
+**A Claude Code revision moves with every record appended to a turn.** A Claude revision names a
+turn's newest record — its millisecond, then its uuid — and broke a tie inside one millisecond by
+uuid alone, so a record Claude Code appended in that millisecond under a uuid that sorts lower (a
+usage slice, or the terminal) added content without moving the revision, and the guard above
+refused the turn until a later record arrived. A real history held 42 such same-millisecond pairs.
+The tie is now broken by append order: the revision still names the highest uuid of the newest
+millisecond, followed by `+NNNNNN`, the number of that millisecond's records appended after it (a
+record in a subagent transcript counts as after). Where nothing was appended after it the revision
+is byte for byte what earlier releases wrote, so no `parser_version` moves — a bump would have
+re-read every stored Claude prompt as an update. On a real history (1,079 turns), 18 turns take a
+suffixed revision and are counted `updated` once, with identical slices, tokens, restrictions and
+outcomes, on the next `sync --full` or the next write to their file; nothing is refused. The
+revision is internal: no envelope, payload or export column carries it. A session copied whole into
+another file under a new `sessionId` keeps its uuids and times, and so its revision: it is stored
+once, from the file listed first, and the copy is refused as above on each read that reaches it.
+
+**Client instants are stored in one canonical spelling.** `1.6.1` adds migration
+`020_canonical_instants` — data only, no schema change — which rewrites the instants a client
+supplied to the `toISOString` spelling (UTC, millisecond precision), after the pre-migration backup.
+No envelope, payload, export column, exit code or flag moves. Exported `started_at`, `completed_at`
+and restriction `observed_at` are byte-identical for canonical data, which is every history written
+by a supported client; a history that held another spelling exports the same instant in the
+canonical spelling. The observation hash is taken over the observation as delivered, so the
+migration produces no false `updated` on the next `sync`. An instant that does not parse is now
+refused as `rejected_invalid`, a count `sync` already reported — and so is one that names no zone:
+storage holds an instant to the rule the spool contract's `date-time` already states, RFC 3339 with
+`Z` or an offset, where `Date.parse` read a date-time without one in the machine's local time zone.
+Every timestamp in a real Claude Code (181,649) and Codex (23,383) history names its zone, and the
+Codex and OpenCode adapters and the plugin write `toISOString`. Migration `020` leaves such a stored
+value as it is, as it does any value that does not parse.
+
+**The error envelope's `command` names the command after a leading `--json`.** `--json` is a
+program-level option, and Commander accepts it on either side of the command. Since `0.9`, every
+error envelope of `snack --json <command>` said `command: "snack"`, because the walk that names the
+command stopped at the first flag. It now reads past the options the program declares — `--json`,
+`-V`/`--version` — and still stops at any other flag, so an option's value or a stray positional
+never reaches the field. Success envelopes are unchanged. This is a fix, not a change to the frozen
+envelope: `command` is documented as the command as the user would type it after `snack`, and
+`"snack"` is not one — the reasoning the `0.9` beta applied when `command` stopped carrying a
+rejected positional argument. The schema constrains `command` only to a non-empty string and payload
+routing skips error documents, so every frozen corpus still validates unchanged. The `1.6.0`
+section's parenthetical about `command: "snack"` describes behaviour this release removes.
+
+**The capture plugin moves to `1.0.5`, and its live capture changes what it states on OpenCode
+`1.18.15`.** The plugin's spool is a contract both packages read, so what it now writes is recorded
+here; the full account of the host's behaviour is in
+[opencode-support.md](./opencode-support.md#what-opencode-11815-changed-under-live-capture).
+A prompt is routed from the user message `chat.message` carries, or from its own `chat.params`;
+the `title`, `compaction` and `summary` calls never route one, so a session's first prompt is no
+longer filed under the provider of `small_model`. Live events carry the model name instead of
+`null`. Each prompt gets at most one terminal event: a cancellation is one `session_error` with
+outcome `excluded`, and the idles OpenCode emits after it, or after `/shell` and `/summarize`, write
+nothing. **A turn OpenCode retried writes no terminal event at all.** OpenCode `1.18.15` retries a
+429 itself and reports it only as `session.status` `retry`, with the provider's free text and no
+status code; `spool-event-v1` lets `session_idle` say only `success`, and a restriction needs the
+structured evidence the retry does not carry. So the turn stays provisional in the spool and
+backfill, which reads how it ended, finalizes it; a person who runs live capture without backfill
+keeps such a turn provisional. Only the status `type` is read, never its message. Appends start on
+a fresh line when the segment ends mid-line and a failed write is truncated back — only while the
+writer still holds its lock, so a writer whose lock was taken over never cuts off the line its
+successor wrote — so a broken line no longer swallows the next event. The writer now lives in
+`src/spool-writer.js` beside `src/plugin.js`, inside the package's `files`; the package's exports
+are unchanged.
+
+**`sync` keeps a recorded exclusion over the plugin's idle `success` without reporting a
+conflict.** Plugins up to `1.0.4` wrote OpenCode's `session.idle` after a cancelled prompt as
+`success`, and every such prompt raised an `incomparable_outcome_conflict` on every `sync`, with a
+`doctor` warning. A plugin `success` on the `opencode-plugin-v1` revision domain, met by an
+`excluded` and `completed` turn from the database, now resolves to the exclusion in either arrival
+order: backfill arriving second finalizes the record as it finalizes any live one, and a plugin
+`success` arriving second is counted `unchanged`. The exclusion is what the conflict already resolved
+to, so only the false issue goes. Any other outcome disagreement is still recorded. No reason code moves:
+`incomparable_outcome_conflict` keeps its meaning and is simply no longer raised for this pair.
+
+**An abandoned spool writer lock is taken over, and `doctor` says so while it is there.** A writer
+holds `.writer.lock` for the milliseconds one append takes. A lock whose process id still answered
+`kill(pid, 0)` — reused, or another user's — used to block `sync` from closing the open segment
+indefinitely, silently. A lock older than two minutes (`STALE_SPOOL_LOCK_MS`) is now removed whatever
+process id it names, by the plugin and by `sync`, and the lock is taken in the same call. Two
+writers can judge one lock abandoned at once, so the takeover is atomic: the lock is renamed to a
+name of the taker's own, only a taker that moved the very lock it judged (same inode, mtime and
+token) proceeds, and one that moved a lock another writer had just taken puts it back with `link`,
+which never replaces a lock created since. Age is read against the wall clock, so a clock jump of
+more than two minutes, or a machine resumed from suspend in the middle of an append, can take over a
+lock still held; locks are held for milliseconds, so that is accepted, and the takeover above keeps
+it from leaving two holders. `doctor` reports the new check id `spool_lock:<alias>`, a `warn`, only
+while such a lock is present, and `spool_lock:_pending` for the directory that holds events bound to
+no source, which `sync` reads and takes over the same way; check ids are an open set in
+`doctor.schema.json`, as they were when `sqlite_driver` and the Codex checks were added, and no
+existing check changes its verdict.
+
+**The spool contract does not move.** `spool-event-v1` is unchanged, and
+`packages/cli/schemas/spool-event.schema.json` and `packages/opencode/schemas/spool-event.schema.json`
+are unchanged and still byte-identical: every event `1.0.5` writes is one `1.0.4` could have
+written, so a `1.0.4` plugin and a `1.6.1` CLI, or a `1.0.5` plugin and an earlier CLI, interoperate
+in both directions. The plugin's source changed and a published version is immutable, so it takes
+`1.0.5`; `scripts/sync-plugin-pin.mjs`, run by `npm run release:prepare`, moves the CLI's
+`setup opencode --install-plugin` pin with it. `doctor` reports a registration still pinned at
+`1.0.4` as outdated, not incompatible, and re-running `snack setup opencode --install-plugin` moves
+it.
+
+**No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
+`PREDICTION_POLICY.version` stays `stage5-prediction-v2`. No flag, exit code, reason code or
+configuration key is added; `doctor` gains the one check id family above. `npm run upgrade:smoke` upgrades
+a database the published `1.6.0` wrote, applying `020`.
+
 ## Upgrading from 0.6+
 
 Every `0.6+` release preserves supported data and configuration, so the upgrade is an install and a
@@ -584,8 +722,9 @@ npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli
 ```
 
 The flag lets npm 12 build the SQLite driver; without it the install succeeds and the driver is
-missing. If the OpenCode live-capture plugin is installed, take it too. Its behaviour has not changed since
-`0.1.2`; `0.1.3` republishes the corrected spool schema described below.
+missing. If the OpenCode live-capture plugin is installed, take it too. Its behaviour did not change from
+`0.1.2` until `1.0.5`, which SNACK `1.6.1` ships ([1.6.1](#what-161-fixes-and-why-it-is-a-patch));
+`0.1.3` republishes the corrected spool schema described below.
 
 ```bash
 npm install -g @snack-ai/opencode

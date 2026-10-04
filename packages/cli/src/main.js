@@ -176,7 +176,9 @@ export async function run(argv, options = {}) {
 
   program
     .name("snack")
-    .description("Know before you feed the model.")
+    .description(
+      "Estimate the chance your next AI prompt goes through without hitting a provider rate or usage limit, from usage metadata only.",
+    )
     .version(packageJson.version)
     .option("--json", "emit one versioned JSON document")
     .exitOverride()
@@ -1459,6 +1461,7 @@ async function synchronizeSource(options) {
       options.now,
       {
         ...mappings,
+        revisionIdentifiesContent: adapter.revisionIdentifiesContent,
         // Records the adapter could not parse travel with the batch, so a quietly incomplete
         // read is reported rather than looking like a complete one.
         ...("rejected" in backfill ? { rejected: backfill.rejected } : {}),
@@ -2415,9 +2418,30 @@ function commandName(argv, program) {
   // flag, so `snack doctor <pasted-secret>` reported `command: "doctor <pasted-secret>"` and put it
   // in the document. Walking the command tree answers the question the field is actually asking —
   // which command was invoked — and a token that names no command ends the walk.
+  //
+  // Program-level options are the exception to stopping at a flag. Commander reads them on either
+  // side of the command, so `snack --json status` is `status`, and stopping there reported
+  // `command: "snack"` for every such failure. Only those options are read past, together with
+  // the value one declares (none does today), so any other flag still ends the walk.
+  /** @type {Map<string, boolean>} */
+  const programOptions = new Map();
+  for (const option of program.options) {
+    for (const flag of [option.long, option.short]) {
+      if (flag) programOptions.set(flag, option.required || option.optional);
+    }
+  }
   const tokens = [];
   let node = program;
+  let skipValue = false;
   for (const part of argv.slice(2)) {
+    if (skipValue) {
+      skipValue = false;
+      continue;
+    }
+    if (programOptions.has(part)) {
+      skipValue = programOptions.get(part) === true;
+      continue;
+    }
     if (part.startsWith("-")) break;
     const child = node.commands.find(
       (candidate) => candidate.name() === part || candidate.aliases().includes(part),

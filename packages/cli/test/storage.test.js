@@ -530,14 +530,14 @@ test("a database still at an older schema is refused rather than half-read", asy
     // Actionable, or it is no better than the crash it replaces: the message names the command
     // that fixes it.
     assert.match(document.errors[0].message, /snack sync/u);
-    assert.match(document.errors[0].message, /: 10 migrations have not been applied\./u);
+    assert.match(document.errors[0].message, /: 11 migrations have not been applied\./u);
   }
   // Refusing means refusing: nothing was read, so nothing was written either.
   assert.deepEqual(tableCounts(fixture.paths.databaseFile), before);
 });
 
 test("one pending migration is counted in the singular", async () => {
-  // A database one migration behind -- the newest one, `019`, pending -- the case an installation
+  // A database one migration behind -- the newest one, `020`, pending -- the case an installation
   // meets on its first read-only command after an upgrade that adds a single migration.
   const fixture = await makeRunFixture("snack-unmigrated-one-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);
@@ -602,7 +602,10 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // follows is measuring the upgrade rather than an upgrade plus an ingestion.
   const upgrade = await document("config", "set", "analysis.horizons", '["PT1H"]');
   assert.equal(upgrade.exitCode, 0, JSON.stringify(upgrade.document.errors));
-  assert.deepEqual(upgrade.document.data.storage.applied, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+  assert.deepEqual(
+    upgrade.document.data.storage.applied,
+    [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+  );
   assert.equal(upgrade.document.data.storage.backup_created, true);
 
   const status = await document("status", "--no-sync");
@@ -628,7 +631,7 @@ test("a 0.6 database answers every command the frozen release publishes", async 
   // two prediction tables grow by exactly that one -- growing is the command working, and any other
   // table moving at all would be the upgrade losing or inventing history.
   const after = tableCounts(fixture.paths.databaseFile);
-  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 10);
+  assert.equal(after.schema_migration, (before.schema_migration ?? 0) + 11);
   // The tables the upgrade adds arrive empty: a 0.6 install stated no figures to quote, the
   // `status` above asked for no sequence, and no Codex installation feeds it, so no shadow ran.
   assert.equal(after.reported_capacity_observation, 0);
@@ -1215,7 +1218,7 @@ test("upgrading a 1.2 database to 1.3 keeps every row, and every prompt's client
 
   const upgrade = await initializeDatabase(paths, { applicationVersion: "1.3.0", now });
 
-  assert.deepEqual(upgrade.applied, [14, 15, 16, 17, 18, 19]);
+  assert.deepEqual(upgrade.applied, [14, 15, 16, 17, 18, 19, 20]);
   assert.equal(upgrade.backupCreated, true);
   const after = tableContents(paths.databaseFile);
   // The new tables arrive empty; every other table holds exactly the bytes it held.
@@ -1330,8 +1333,9 @@ test("after 1.3 a Codex installation can be bound, and a client SNACK does not s
 test("each published schema level upgrades straight to the newest without losing a row", async () => {
   // An install can skip releases. Every floor the upgrade smoke covers has to reach the newest
   // schema in one step, not only from the release immediately before it. 15 is where 1.3.0 left a
-  // database, 16 is where 1.4.0 left one, 18 is where 1.5.0 left one, and 019 is the 1.6.0 leg.
-  for (const floor of [9, 11, 12, 13, 15, 16, 18]) {
+  // database, 16 is where 1.4.0 left one, 18 is where 1.5.0 left one, 19 is where 1.6.0 left one,
+  // and 020 is the 1.6.1 leg.
+  for (const floor of [9, 11, 12, 13, 15, 16, 18, 19]) {
     const { paths } = await makeStorage();
     await initializeDatabase(paths, {
       migrationsDir: await copyMigrationsThrough(floor),
@@ -1341,9 +1345,9 @@ test("each published schema level upgrades straight to the newest without losing
     seedZeroSixDatabase(paths.databaseFile);
     const before = tableCounts(paths.databaseFile);
 
-    const upgrade = await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+    const upgrade = await initializeDatabase(paths, { applicationVersion: "1.6.1", now });
 
-    assert.equal(upgrade.applied.at(-1), 19, `floor ${floor}`);
+    assert.equal(upgrade.applied.at(-1), 20, `floor ${floor}`);
     const after = tableCounts(paths.databaseFile);
     if (floor < 15) {
       assert.equal(after.reported_capacity_observation, 0, `floor ${floor}`);
@@ -1361,8 +1365,10 @@ test("each published schema level upgrades straight to the newest without losing
       assert.equal(after.stated_band_projection, 0, `floor ${floor}`);
       delete after.stated_band_projection;
     }
-    assert.equal(after.prediction_shadow, 0, `floor ${floor}`);
-    delete after.prediction_shadow;
+    if (floor < 19) {
+      assert.equal(after.prediction_shadow, 0, `floor ${floor}`);
+      delete after.prediction_shadow;
+    }
     assert.deepEqual(
       { ...after, schema_migration: 0 },
       { ...before, schema_migration: 0 },
@@ -1714,4 +1720,401 @@ test("a stated figure holds no content: every column is a key, a time, a number 
   } finally {
     database.close();
   }
+});
+
+/**
+ * @param {number} n
+ * @param {number} tokens
+ * @param {number} [outputTokens]
+ */
+function usageSlice(n, tokens, outputTokens = 0) {
+  return {
+    source_slice_id: `slice-${n}`,
+    provider: "anthropic",
+    model: "claude-sonnet",
+    input_tokens: tokens,
+    output_tokens: outputTokens,
+    reasoning_tokens: null,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    cost_decimal: null,
+    currency: null,
+  };
+}
+
+/**
+ * The prompt the Codex P1 destroyed: three usage slices, 435 tokens, at revision `5`.
+ *
+ * @param {Partial<import("../src/storage.js").Observation>} [overrides]
+ * @returns {import("../src/storage.js").Observation}
+ */
+function slicedObservation(overrides = {}) {
+  return {
+    ...observation(1, "2026-01-02T01:00:00.000Z"),
+    revision: "5",
+    usage_slices: [usageSlice(1, 100), usageSlice(2, 200), usageSlice(3, 135)],
+    ...overrides,
+  };
+}
+
+/** The same prompt as a regressed reader would see it: one slice, 11 tokens. */
+function regressedSlices() {
+  return [usageSlice(1, 11)];
+}
+
+/** Every slice kept, one count moved: what a later write in the same millisecond can do. */
+function recountedSlices() {
+  return [usageSlice(1, 100, 7), usageSlice(2, 200, 7), usageSlice(3, 135, 7)];
+}
+
+/** @param {string} databaseFile */
+function readStoredUsage(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const row = /** @type {{slices: number, tokens: number | null, revision: string}} */ (
+      database
+        .prepare(
+          `SELECT COUNT(prompt_usage_slice.source_slice_id) AS slices,
+                  SUM(prompt_usage_slice.input_tokens) AS tokens,
+                  prompt_execution.source_revision AS revision
+             FROM prompt_execution
+             LEFT JOIN prompt_usage_slice
+               ON prompt_usage_slice.prompt_execution_id = prompt_execution.id
+            WHERE prompt_execution.source_prompt_id = 'prompt-1'
+            GROUP BY prompt_execution.id`,
+        )
+        .get()
+    );
+    return { slices: row.slices, tokens: row.tokens, revision: row.revision };
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile */
+function readIssueReasons(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare("SELECT reason, path, segment, line_offset FROM ingestion_issue ORDER BY id")
+      .all();
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * @param {import("../src/storage.js").Observation} replacement
+ * @param {{revisionIdentifiesContent?: boolean}} [options]
+ */
+async function storeThenReplace(replacement, options = {}) {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  const cursor = cursorAt(2000);
+  storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [slicedObservation()], cursor },
+    now,
+    options,
+  );
+  const result = storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [replacement], cursor },
+    now,
+    options,
+  );
+  return { databaseFile: paths.databaseFile, alias: source.alias, result };
+}
+
+test("a prompt re-read at the same revision with different content keeps what was stored", async () => {
+  // The signature of the Codex P1: the reader read unchanged turns differently, the revision did
+  // not move, and the update path replaced 3 slices and 435 tokens with 1 and 11, reported as one
+  // ordinary `updated` prompt. A source re-emitting a revision claims nothing changed; content that
+  // differs under that claim is a reader regression far more often than a rewritten history, so
+  // the stored row is kept and the conflict is counted where `doctor` reads it.
+  const { databaseFile, alias, result } = await storeThenReplace(
+    slicedObservation({ usage_slices: regressedSlices() }),
+  );
+
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 3, tokens: 435, revision: "5" });
+  assert.equal(result.updated, 0);
+  assert.equal(result.unchanged, 0);
+  assert.equal(result.rejected_invalid, 1);
+  // Content-free: a reason and a path, never the prompt's identity or a location on disk.
+  assert.deepEqual(readIssueReasons(databaseFile), [
+    {
+      reason: "same_revision_content_conflict",
+      path: "backfill",
+      segment: null,
+      line_offset: null,
+    },
+  ]);
+  assert.equal(readSpoolIssueCount(databaseFile, alias), 1);
+});
+
+test("a refused same-revision reading applies none of its restrictions", async () => {
+  // The guard used to run after restrictions were unioned onto the stored prompt, so an observation
+  // it refused could still add a rate-limit refusal and flip the stored outcome to `restricted` --
+  // the heaviest signal the forecast reads, from a reading SNACK had just declined to trust.
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({
+      usage_slices: regressedSlices(),
+      outcome: "restricted",
+      restrictions: [
+        {
+          class: "rate_limit",
+          source_code: "http_429",
+          observed_at: "2026-01-02T01:00:01.000Z",
+          classifier_version: "opencode-error-v1",
+          provenance: "backfill",
+        },
+      ],
+    }),
+  );
+
+  assert.equal(result.rejected_invalid, 1);
+  assert.equal(readOutcome(databaseFile), "success");
+  assert.equal(readRestrictionCount(databaseFile), 0);
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 3, tokens: 435, revision: "5" });
+});
+
+test("an identical reading at the stored revision still unions its restrictions", async () => {
+  // Nothing differs on the equal-hash path, so the union there can only re-insert what the first
+  // reading stored: the restriction stays one row and the outcome stays `restricted`.
+  const restricted = slicedObservation({
+    outcome: "restricted",
+    restrictions: [
+      {
+        class: "rate_limit",
+        source_code: "http_429",
+        observed_at: "2026-01-02T01:00:01.000Z",
+        classifier_version: "opencode-error-v1",
+        provenance: "backfill",
+      },
+    ],
+  });
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  const cursor = cursorAt(2000);
+  storeObservations(paths.databaseFile, source, { observations: [restricted], cursor }, now);
+  const result = storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [restricted], cursor },
+    now,
+  );
+
+  assert.equal(result.unchanged, 1);
+  assert.equal(result.rejected_invalid, 0);
+  assert.equal(readOutcome(paths.databaseFile), "restricted");
+  assert.equal(readRestrictionCount(paths.databaseFile), 1);
+});
+
+/** @param {string} databaseFile */
+function readRestrictionCount(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return /** @type {{count: number}} */ (
+      database.prepare("SELECT COUNT(*) AS count FROM restriction_observation").get()
+    ).count;
+  } finally {
+    database.close();
+  }
+}
+
+test("a later revision of a stored prompt still replaces it, and records no conflict", async () => {
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({ revision: "6", usage_slices: regressedSlices() }),
+  );
+
+  assert.equal(result.updated, 1);
+  assert.equal(result.rejected_invalid, 0);
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 1, tokens: 11, revision: "6" });
+  assert.deepEqual(readIssueReasons(databaseFile), []);
+});
+
+test("a changed parser version re-reads a prompt at the same revision deliberately", async () => {
+  // A new parser version is the declared way to read unchanged bytes differently, so it must still
+  // update -- otherwise a reader fix could never reach a prompt it had already stored.
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({ parser_version: "opencode-session-v2", usage_slices: regressedSlices() }),
+  );
+
+  assert.equal(result.updated, 1);
+  assert.equal(result.rejected_invalid, 0);
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 1, tokens: 11, revision: "5" });
+  assert.deepEqual(readIssueReasons(databaseFile), []);
+});
+
+test("where a revision is a clock, the same revision may carry a later write, but never lose usage", async () => {
+  // OpenCode updates rows in place and its revision is the newest `time_updated`, a millisecond
+  // clock: a write landing in the millisecond already read changes the prompt without moving the
+  // revision, and must still be stored. Losing a stored slice is never such a write.
+  const filled = slicedObservation({ usage_slices: recountedSlices() });
+  const later = await storeThenReplace(filled, { revisionIdentifiesContent: false });
+  assert.equal(later.result.updated, 1);
+  assert.equal(later.result.rejected_invalid, 0);
+  assert.deepEqual(readIssueReasons(later.databaseFile), []);
+
+  const lossy = await storeThenReplace(slicedObservation({ usage_slices: regressedSlices() }), {
+    revisionIdentifiesContent: false,
+  });
+  assert.equal(lossy.result.updated, 0);
+  assert.equal(lossy.result.rejected_invalid, 1);
+  assert.deepEqual(readStoredUsage(lossy.databaseFile), { slices: 3, tokens: 435, revision: "5" });
+  assert.deepEqual(
+    readIssueReasons(lossy.databaseFile).map((row) => /** @type {{reason: string}} */ (row).reason),
+    ["same_revision_content_conflict"],
+  );
+});
+
+test("where a revision names content, any different reading at it is refused, not only a lossy one", async () => {
+  // Every slice survives here and only a count moved. An append-only source cannot have written
+  // that without moving its revision, so it is a reader disagreeing with itself.
+  const recounted = slicedObservation({ usage_slices: recountedSlices() });
+  const { databaseFile, result } = await storeThenReplace(recounted);
+
+  assert.equal(result.updated, 0);
+  assert.equal(result.rejected_invalid, 1);
+  assert.deepEqual(
+    readIssueReasons(databaseFile).map((row) => /** @type {{reason: string}} */ (row).reason),
+    ["same_revision_content_conflict"],
+  );
+});
+
+test("the same revision string in another revision domain is not the same revision", async () => {
+  // Revisions are comparable only within a domain (docs/architecture/data.md §9, rule 3), so two
+  // domains agreeing on a string say nothing about content; the cross-domain merge decides.
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({ revision_domain: "opencode-plugin-v1", usage_slices: regressedSlices() }),
+  );
+
+  assert.equal(result.rejected_invalid, 0);
+  assert.deepEqual(readIssueReasons(databaseFile), []);
+});
+
+/**
+ * What a `@snack-ai/opencode` up to 1.0.4 wrote for a prompt the user cancelled on OpenCode
+ * 1.18.15: `session.idle` follows the abort, and the plugin read every idle as a success.
+ */
+function idleSuccessFromPlugin() {
+  return {
+    ...observation(1, "2026-01-02T01:00:00.000Z"),
+    revision: "2026-01-02T01:00:05.000Z:session.idle",
+    revision_domain: "opencode-plugin-v1",
+    parser_version: "opencode-plugin-v1",
+    completed_at: "2026-01-02T01:00:05.000Z",
+    duration_ms: null,
+    outcome: "success",
+  };
+}
+
+/** The same prompt as OpenCode's database records it: finalized, with the abort as its error. */
+function cancelledFromBackfill() {
+  return {
+    ...slicedObservation(),
+    outcome: "excluded",
+    exclusion: {
+      class: "cancelled",
+      source_code: "MessageAbortedError",
+      classifier_version: "opencode-error-v1",
+    },
+  };
+}
+
+/** @param {string} databaseFile */
+function readOutcome(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return /** @type {{outcome: string}} */ (
+      database.prepare("SELECT outcome FROM prompt_source_outcome").get()
+    ).outcome;
+  } finally {
+    database.close();
+  }
+}
+
+for (const order of ["spool first", "backfill first"]) {
+  test(`a cancelled prompt the plugin called a success is excluded without a conflict (${order})`, async () => {
+    // Every cancelled prompt raised one `incomparable_outcome_conflict`, so `doctor` warned once
+    // per cancellation. The plugin's `success` was never independent evidence: OpenCode emits
+    // `session.idle` after an abort, an error or a retried 429 as well as after a success, and
+    // the database records how the turn ended. The prompt is excluded either way.
+    const { paths } = await makeStorage();
+    await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+    seedSource(paths.databaseFile);
+    const source = configuredSource(paths.databaseFile);
+    const spool = () =>
+      storeObservations(
+        paths.databaseFile,
+        source,
+        { observations: [idleSuccessFromPlugin()], cursor: null },
+        now,
+        { path: "spool" },
+      );
+    const backfill = () =>
+      storeObservations(
+        paths.databaseFile,
+        source,
+        { observations: [cancelledFromBackfill()], cursor: cursorAt(2000) },
+        now,
+      );
+    if (order === "spool first") {
+      spool();
+      backfill();
+    } else {
+      backfill();
+      spool();
+    }
+    // A second sync re-reads both paths; it must not count the cancellation again.
+    backfill();
+    spool();
+
+    assert.equal(readOutcome(paths.databaseFile), "excluded");
+    assert.deepEqual(readIssueReasons(paths.databaseFile), []);
+    assert.equal(readSpoolIssueCount(paths.databaseFile, source.alias), 0);
+    assert.deepEqual(readStoredUsage(paths.databaseFile).slices, 3);
+  });
+}
+
+test("a plugin exclusion still conflicts with a backfill success", async () => {
+  // The exemption is for the one disagreement the plugin's `success` cannot carry evidence
+  // into. A backfill `success` against a plugin `excluded` is still a conflict.
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  storeObservations(
+    paths.databaseFile,
+    source,
+    {
+      observations: [
+        {
+          ...idleSuccessFromPlugin(),
+          revision: "2026-01-02T01:00:05.000Z:session.error",
+          outcome: "excluded",
+        },
+      ],
+      cursor: null,
+    },
+    now,
+    { path: "spool" },
+  );
+  storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [slicedObservation()], cursor: cursorAt(2000) },
+    now,
+  );
+
+  assert.deepEqual(
+    readIssueReasons(paths.databaseFile).map((row) => /** @type {{reason: string}} */ (row).reason),
+    ["incomparable_outcome_conflict"],
+  );
 });

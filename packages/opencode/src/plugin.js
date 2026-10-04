@@ -1,25 +1,42 @@
-import { randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import process from "node:process";
-import { setTimeout as delay } from "node:timers/promises";
 
-const spoolFilename = "current.open";
+import { appendEvent } from "./spool-writer.js";
+
 const maxPendingWrites = 100;
-const maxSegmentBytes = 1024 * 1024;
+
+/**
+ * Agents OpenCode runs on the side of a prompt, on models of their own: `title` names the session
+ * with `small_model` on its first prompt, `compaction` and `summary` rewrite history. Their
+ * `chat.params` describe a call the prompt did not ask for, so they never route one.
+ */
+const auxiliaryAgents = new Set(["title", "compaction", "summary"]);
+
+/**
+ * @typedef {object} PromptState
+ * @property {string} promptId
+ * @property {string | null} agent
+ * @property {string | null} provider
+ * @property {string | null} model
+ * @property {string} spoolDirectory
+ * @property {boolean} retried
+ * @property {Record<string, unknown>[]} buffered
+ */
 
 /**
  * Fail-open OpenCode plugin entrypoint.
  *
  * @param {unknown} _context
- * @param {{installation_id?: unknown, spool_directory?: unknown, prospective_analysis?: unknown, source_bindings?: unknown}} [options]
+ * @param {{installation_id?: unknown, spool_directory?: unknown, prospective_analysis?: unknown, source_bindings?: unknown} | null} [options]
  */
 export async function SnackOpenCodePlugin(_context, options = {}) {
-  const installationId = stringOrNull(options.installation_id);
-  const spoolDirectory = stringOrNull(options.spool_directory);
-  const captureFeatures = options.prospective_analysis === true;
-  const sourceBindings = bindingMap(options.source_bindings);
-  /** @type {Map<string, {promptId: string, provider: string | null, model: string | null, spoolDirectory: string, buffered: Record<string, unknown>[]}>} */
+  // OpenCode passes whatever the configuration tuple holds, `null` and non-objects included; an
+  // initializer that throws there takes the host down with it.
+  const settings = recordOrNull(options) ?? {};
+  const installationId = stringOrNull(settings.installation_id);
+  const spoolDirectory = stringOrNull(settings.spool_directory);
+  const captureFeatures = settings.prospective_analysis === true;
+  const sourceBindings = bindingMap(settings.source_bindings);
+  /** @type {Map<string, PromptState>} */
   const prompts = new Map();
   let writes = Promise.resolve();
   let pendingWrites = 0;
@@ -59,13 +76,14 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
   /**
    * Route a session's spool directory once its provider is known.
    *
-   * OpenCode declares `model` optional on `chat.message` and does not send it on `1.18.10`, so the
-   * routing decision cannot be taken there. An event written to `_pending` is never attributed and
-   * never revisited, so a prompt whose provider is still unknown is held rather than misfiled, and
-   * released as soon as `chat.params` names one. A prompt whose provider never arrives is released
-   * to `_pending` at the terminal event, which is where it would have gone anyway.
+   * OpenCode declares `model` optional on `chat.message` and does not send it on `1.18.10` or
+   * `1.18.15`; the user message on the hook's output names it there, and older hosts may not. An
+   * event written to `_pending` is never attributed and never revisited, so a prompt whose provider
+   * is still unknown is held rather than misfiled, and released as soon as the prompt's own
+   * `chat.params` names one. A prompt whose provider never arrives is released to `_pending` at
+   * its terminal event, or when the next prompt of its session replaces it.
    *
-   * @param {{provider: string | null, model: string | null, spoolDirectory: string, buffered: Record<string, unknown>[]}} prompt
+   * @param {PromptState} prompt
    */
   const release = (prompt) => {
     for (const event of prompt.buffered.splice(0)) {
@@ -75,19 +93,33 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
 
   return {
     async dispose() {
-      for (const prompt of prompts.values()) release(prompt);
-      await writes;
+      try {
+        for (const prompt of prompts.values()) release(prompt);
+        prompts.clear();
+        await writes;
+      } catch {
+        // Capture must never change OpenCode shutdown behavior.
+      }
     },
     async "chat.params"(/** @type {Record<string, unknown>} */ input) {
       try {
         const sessionId = stringOrNull(input.sessionID);
         const prompt = sessionId ? prompts.get(sessionId) : undefined;
         if (!prompt || prompt.provider || !spoolDirectory) return;
+        // Only the call that answers this prompt routes it. On 1.18.15 the session title is
+        // generated with `small_model` -- possibly another provider -- and its `chat.params`
+        // arrives first, on the first prompt of every session.
+        const agent = stringOrNull(input.agent);
+        if (agent !== null && auxiliaryAgents.has(agent)) return;
+        if (prompt.agent !== null && agent !== null && agent !== prompt.agent) return;
+        const answered = stringOrNull(recordOrNull(input.message)?.id);
+        if (answered !== null && answered !== prompt.promptId) return;
         const model = recordOrNull(input.model);
         const provider = stringOrNull(model?.providerID);
         if (!provider) return;
         prompt.provider = provider;
-        prompt.model = stringOrNull(model?.modelID);
+        // `chat.params` carries the provider's model record, which names the model `id`.
+        prompt.model = stringOrNull(model?.id) ?? stringOrNull(model?.modelID);
         prompt.spoolDirectory = sourceBindings.get(provider) ?? join(spoolDirectory, "_pending");
         release(prompt);
       } catch {
@@ -103,20 +135,27 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
         const outputMessage = recordOrNull(recordOrNull(output)?.message);
         const promptId = stringOrNull(input.messageID) ?? stringOrNull(outputMessage?.id);
         if (!sessionId || !promptId || !spoolDirectory) return;
-        const model = recordOrNull(input.model);
+        const model = recordOrNull(input.model) ?? recordOrNull(outputMessage?.model);
         const provider = stringOrNull(model?.providerID);
         const modelId = stringOrNull(model?.modelID);
         const targetDirectory = provider
           ? (sourceBindings.get(provider) ?? join(spoolDirectory, "_pending"))
           : join(spoolDirectory, "_pending");
         if (!targetDirectory) return;
+        /** @type {PromptState} */
         const prompt = {
           promptId,
+          agent: stringOrNull(input.agent) ?? stringOrNull(outputMessage?.agent),
           provider,
           model: modelId,
           spoolDirectory: targetDirectory,
-          /** @type {Record<string, unknown>[]} */ buffered: [],
+          retried: false,
+          buffered: [],
         };
+        // A prompt queued behind one still held for its provider replaces it here; what the
+        // earlier one buffered is released, to `_pending`, rather than dropped.
+        const previous = prompts.get(sessionId);
+        if (previous) release(previous);
         prompts.set(sessionId, prompt);
         const occurredAt = new Date().toISOString();
         const started = {
@@ -148,15 +187,32 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
       try {
         const event = recordOrNull(input.event);
         const type = stringOrNull(event?.type);
-        if (type !== "session.idle" && type !== "session.error") return;
+        if (type !== "session.idle" && type !== "session.error" && type !== "session.status")
+          return;
         const properties = recordOrNull(event?.properties) ?? {};
         const sessionId = stringOrNull(properties.sessionID);
         const prompt = sessionId ? prompts.get(sessionId) : undefined;
         if (!sessionId || !prompt) return;
+        if (type === "session.status") {
+          // Only the status's type is read. Its `message` is the provider's free text and is
+          // never kept, compared, or classified.
+          if (stringOrNull(recordOrNull(properties.status)?.type) === "retry")
+            prompt.retried = true;
+          return;
+        }
+        // One terminal per prompt. 1.18.15 emits `session.idle` after `session.error`, twice after
+        // an abort, and again after every later `/shell` or `/summarize`: a prompt still in the map
+        // would be re-emitted, each time later than the last.
+        prompts.delete(sessionId);
+        release(prompt);
+        // OpenCode retries a 429 itself and reports it only as `session.status` `retry`, which
+        // carries no structured status code; the turn then ends in `session.idle` whether it
+        // succeeded or was cancelled. `spool-event-v1` lets `session_idle` say only `success`, so a
+        // retried turn states no terminal at all and backfill, which reads how it ended, decides.
+        if (type === "session.idle" && prompt.retried) return;
         const occurredAt = timestampOrNow(properties.time);
         const error = recordOrNull(properties.error);
         const restricted = type === "session.error" && isExplicitRateLimit(error);
-        release(prompt);
         append(prompt.spoolDirectory, {
           schema_version: 1,
           event_id: `${type}:${sessionId}:${prompt.promptId}:${occurredAt}`,
@@ -189,103 +245,6 @@ export async function SnackOpenCodePlugin(_context, options = {}) {
       }
     },
   };
-}
-
-/** @param {string} spoolDirectory @param {Record<string, unknown>} event */
-async function appendEvent(spoolDirectory, event) {
-  await mkdir(spoolDirectory, { recursive: true, mode: 0o700 });
-  await chmod(spoolDirectory, 0o700);
-  const release = await acquireSpoolLock(spoolDirectory);
-  try {
-    const file = join(spoolDirectory, spoolFilename);
-    try {
-      if ((await stat(file)).size >= maxSegmentBytes) {
-        await rename(file, join(spoolDirectory, `segment-${Date.now()}-${randomUUID()}.ndjson`));
-      }
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-    }
-    const handle = await open(file, "a", 0o600);
-    try {
-      await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await chmod(file, 0o600);
-  } finally {
-    await release();
-  }
-}
-
-/** @param {string} spoolDirectory */
-async function acquireSpoolLock(spoolDirectory) {
-  const lock = join(spoolDirectory, ".writer.lock");
-  const token = randomUUID();
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const handle = await open(lock, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, token })}\n`, "utf8");
-      await handle.sync();
-      if ((await readSpoolLock(lock))?.token !== token) {
-        await handle.close();
-        if (attempt < 3) continue;
-        throw new Error("Spool writer lost lock ownership.");
-      }
-      return async () => {
-        await handle.close();
-        if ((await readSpoolLock(lock))?.token === token) await rm(lock, { force: true });
-      };
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-      const owner = await readSpoolLock(lock);
-      if (owner !== null && !processIsAlive(owner.pid)) {
-        await rm(lock, { force: true });
-        continue;
-      }
-      if (owner === null && (await lockIsStale(lock))) {
-        await rm(lock, { force: true });
-        continue;
-      }
-      if (attempt < 3) await delay(2);
-    }
-  }
-  throw new Error("Spool writer is busy.");
-}
-
-/** @param {string} lock */
-async function lockIsStale(lock) {
-  try {
-    return Date.now() - (await stat(lock)).mtimeMs > 120_000;
-  } catch {
-    return false;
-  }
-}
-
-/** @param {string} lock */
-async function readSpoolLock(lock) {
-  try {
-    const value = JSON.parse(await readFile(lock, "utf8"));
-    return recordOrNull(value) &&
-      typeof value.pid === "number" &&
-      Number.isSafeInteger(value.pid) &&
-      value.pid > 0 &&
-      typeof value.token === "string"
-      ? { pid: value.pid, token: value.token }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** @param {number} pid */
-function processIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
 }
 
 /** @param {unknown} output */
@@ -346,8 +305,13 @@ function isExplicitRateLimit(error) {
 
 /** @param {unknown} value */
 function timestampOrNow(value) {
-  if (typeof value === "string" && !Number.isNaN(Date.parse(value)))
-    return new Date(value).toISOString();
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    const year = parsed.getUTCFullYear();
+    // `toISOString` spells a year outside 0000-9999 with a sign and six digits, which the schema's
+    // `date-time` refuses -- the line would be read back as corruption.
+    if (!Number.isNaN(parsed.getTime()) && year >= 0 && year <= 9999) return parsed.toISOString();
+  }
   return new Date().toISOString();
 }
 
