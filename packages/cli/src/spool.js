@@ -175,38 +175,56 @@ async function closeOpenSegment(spoolDirectory, protectFromSharedCleanup) {
   }
 }
 
-/** @param {string} spoolDirectory */
+/**
+ * A writer holds `.writer.lock` for the milliseconds one append takes, so a lock older than this
+ * was abandoned whatever its pid says. Exported for `doctor`, which reports one.
+ */
+export const STALE_SPOOL_LOCK_MS = 120_000;
+
+/**
+ * Take the spool's writer lock, or report that a live writer holds it.
+ *
+ * An abandoned lock is removed and the lock taken in the same call: returning empty-handed after
+ * clearing it cost a whole sync interval for nothing.
+ *
+ * @param {string} spoolDirectory
+ */
 async function acquireSpoolLock(spoolDirectory) {
   const lock = join(spoolDirectory, ".writer.lock");
   const token = randomUUID();
-  try {
-    const handle = await open(lock, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify({ pid: process.pid, token })}\n`, "utf8");
-    await handle.sync();
-    if ((await readSpoolLock(lock))?.token !== token) {
-      await handle.close();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(lock, "wx", 0o600);
+      await handle.writeFile(`${JSON.stringify({ pid: process.pid, token })}\n`, "utf8");
+      await handle.sync();
+      if ((await readSpoolLock(lock))?.token !== token) {
+        await handle.close();
+        return null;
+      }
+      return async () => {
+        await handle.close();
+        if ((await readSpoolLock(lock))?.token === token) await rm(lock, { force: true });
+      };
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+      const owner = await readSpoolLock(lock);
+      // Age decides before the pid does: a pid that answers `kill(pid, 0)` may have been reused,
+      // or belong to another user, and a lock held this long is not being used by anyone.
+      if ((owner !== null && !processIsAlive(owner.pid)) || (await lockIsStale(lock))) {
+        await rm(lock, { force: true });
+        continue;
+      }
       return null;
     }
-    return async () => {
-      await handle.close();
-      if ((await readSpoolLock(lock))?.token === token) await rm(lock, { force: true });
-    };
-  } catch (error) {
-    if (isNotFound(error)) return null;
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-    const owner = await readSpoolLock(lock);
-    if (owner !== null && !processIsAlive(owner.pid)) {
-      await rm(lock, { force: true });
-    }
-    if (owner === null && (await lockIsStale(lock))) await rm(lock, { force: true });
-    return null;
   }
+  return null;
 }
 
-/** @param {string} lock */
-async function lockIsStale(lock) {
+/** @param {string} lock @param {number} [now] */
+export async function lockIsStale(lock, now = Date.now()) {
   try {
-    return Date.now() - (await stat(lock)).mtimeMs > 120_000;
+    return now - (await stat(lock)).mtimeMs > STALE_SPOOL_LOCK_MS;
   } catch {
     return false;
   }

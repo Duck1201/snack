@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -33,6 +33,17 @@ const pluginOptions = {
  * @param {unknown[]} plugins
  */
 async function runDoctorWithPlugins(plugins) {
+  const report = await runOpenCodeDoctor(plugins);
+  const check = report.checks.find((candidate) => candidate.id === "opencode_plugin");
+  assert.ok(check, "doctor did not report an opencode_plugin check");
+  return check;
+}
+
+/**
+ * @param {unknown[]} plugins
+ * @param {(paths: import("../src/paths.js").SnackPaths) => Promise<void>} [prepare]
+ */
+async function runOpenCodeDoctor(plugins, prepare) {
   const fixture = await makeRunFixture("snack-doctor-");
   const paths = fixture.paths;
   await initializeDatabase(paths, { applicationVersion: "0.5.0", now });
@@ -65,17 +76,40 @@ async function runDoctorWithPlugins(plugins) {
 
   const opencodeConfigFile = join(fixture.root, "opencode.json");
   await writeFile(opencodeConfigFile, `${JSON.stringify({ plugin: plugins })}\n`, "utf8");
+  if (prepare) await prepare(paths);
 
-  const report = await runDoctor(paths, {
+  return runDoctor(paths, {
     nodeVersion: "24.18.1",
     platform: "linux",
     now,
     opencodeConfigFile,
   });
-  const check = report.checks.find((candidate) => candidate.id === "opencode_plugin");
-  assert.ok(check, "doctor did not report an opencode_plugin check");
-  return check;
 }
+
+test("doctor warns about a spool writer lock that was abandoned", async () => {
+  // A lock is held for the milliseconds one append takes; one left behind by a crashed writer whose
+  // pid was reused kept capture off with nothing saying so.
+  for (const ageMs of [10 * 60_000, 5_000]) {
+    const report = await runOpenCodeDoctor([[pluginPackageSpec, pluginOptions]], async (paths) => {
+      const directory = join(paths.spoolDir, "work");
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await chmod(paths.spoolDir, 0o700);
+      const lock = join(directory, ".writer.lock");
+      await writeFile(lock, `${JSON.stringify({ pid: 1, token: "abandoned" })}\n`, {
+        mode: 0o600,
+      });
+      const modified = new Date(now.getTime() - ageMs);
+      await utimes(lock, modified, modified);
+    });
+    const check = report.checks.find((candidate) => candidate.id === "spool_lock:work");
+    if (ageMs > 120_000) {
+      assert.equal(check?.status, "warn", JSON.stringify(report.checks));
+      assert.match(String(check?.message), /lock/u);
+    } else {
+      assert.equal(check, undefined, "a lock a writer may still hold is not reported");
+    }
+  }
+});
 
 test("doctor warns rather than fails when the registered plugin version is merely outdated", async () => {
   // A correct install running a published plugin newer than the pinned specifier must not be

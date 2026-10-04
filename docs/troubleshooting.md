@@ -84,6 +84,7 @@ Reported only when an OpenCode source is configured.
 | `spool_truncation:<alias>` | Segments cut mid-write | **warn** — a truncated tail. A segment the plugin is still writing is normal; a persistent one is not |
 | `spool_rotation:<alias>` | Segment rotation | **warn** — rotation is not keeping up |
 | `spool_cursor:<alias>` | Whether closed segments were fully consumed | **warn** — a closed segment is not yet acknowledged. Segments are removed only after every configured source has committed past them |
+| `spool_lock:<alias>` | A `.writer.lock` older than two minutes | **warn** — reported only then. A writer holds the lock for milliseconds, so an old one was abandoned by a writer that crashed; since 1.6.1 the plugin and the next `snack sync` remove it whatever process id it names |
 
 ## `snack dash`
 

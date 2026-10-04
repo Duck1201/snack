@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { afterEach, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -481,6 +482,43 @@ test("spool rotation waits for the writer lock and rejects schema-invalid restri
   });
   assert.equal(batch.observations.length, 1);
   assert.equal(batch.rejected.length, 1);
+});
+
+test("a writer lock older than any write is taken over even when its pid looks alive", async () => {
+  // A lock is held for the milliseconds one append takes. One whose pid still answers
+  // `kill(pid, 0)` -- reused after a crash, or another user's process -- kept every later sync
+  // from closing the open segment, and nothing reported it.
+  const root = await mkdtemp(join(tmpdir(), "snack-spool-stale-lock-"));
+  temporaryRoots.push(root);
+  const directory = join(root, "spool");
+  await mkdir(directory, { recursive: true });
+  const plugin = await SnackOpenCodePlugin(
+    {},
+    { installation_id: "installation-1", spool_directory: root },
+  );
+  await plugin["chat.message"](
+    {
+      sessionID: "session-1",
+      messageID: "prompt-1",
+      model: { providerID: "anthropic", modelID: "claude-sonnet" },
+    },
+    { parts: [] },
+  );
+  await plugin.dispose();
+  const pending = join(root, "_pending");
+  const lock = join(pending, ".writer.lock");
+  await writeFile(lock, `${JSON.stringify({ pid: process.pid, token: "abandoned" })}\n`);
+  const old = new Date(Date.now() - 10 * 60_000);
+  await utimes(lock, old, old);
+
+  const batch = await readSpoolEvents({
+    spoolDirectory: pending,
+    installationId: "installation-1",
+    cursors: new Map(),
+    segmentPrefix: "_pending",
+  });
+  assert.equal(batch.observations.length, 1);
+  await assert.rejects(readFile(lock, "utf8"), { code: "ENOENT" });
 });
 
 test("setup registers the global plugin without exposing unrelated OpenCode settings", async () => {
