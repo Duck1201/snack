@@ -12,7 +12,10 @@ afterwards.
 
 That difference matters more than it sounds. Some things simply do not survive to disk — a prompt
 the provider refuses outright can leave no durable trace in OpenCode's own database, and a refusal
-SNACK cannot see is a refusal it cannot learn from. The plugin catches those as they happen.
+SNACK cannot see is a refusal it cannot learn from. The plugin catches those as they happen — when
+OpenCode reports one with a status code. OpenCode `1.18.15` retries a 429 itself and reports the
+retry only as the provider's free text, so for such a turn the plugin states no ending at all and
+leaves it to SNACK's reading of the database.
 
 It is deliberately tiny. It appends one line of JSON per event to a private file and gets out of the
 way. It never opens a database, never imports the SNACK CLI, never phones anywhere, and never —
@@ -42,11 +45,12 @@ metadata:
 
 - which prompt and session it belongs to, by identifier;
 - the provider and model, and when it happened;
-- how it ended: completed, cancelled, an operational error, or an observed restriction and its
-  class;
-- token counts and cost as the provider reported them.
+- how it ended: completed, cancelled, an operational error, or an observed restriction and its class
+  — once per prompt, and not at all for a turn OpenCode retried.
 
-There is no field for prompt text or response text, and the schema refuses unknown fields outright.
+Token counts and cost are not among them: the schema has room for usage, but the plugin leaves it
+empty and SNACK takes usage from OpenCode's database. There is no field for prompt text or response
+text, and the schema refuses unknown fields outright.
 
 With `--enable-prospective-analysis`, each prompt additionally carries a few non-semantic shape
 features: an estimated token count, a bucketed line count, a bucketed count of fenced code blocks,
@@ -75,11 +79,17 @@ would carry an invented meaning downstream for as long as it lived.
 
 Events are appended as NDJSON to segment files with `0600` permissions in a `0700` directory. Append
 is the only write operation; nothing is ever rewritten in place, which is what makes a crash
-mid-write recoverable rather than corrupting.
+mid-write recoverable rather than corrupting. A write that fails is cut back to where it began, and
+an append to a segment that ends mid-line starts on a fresh line, so a broken line never takes the
+next event with it.
 
 A line cut short by a crash is exactly what truncation recovery expects: the reader validates each
 line, discards the incomplete one with a sanitized diagnostic, and keeps everything before it. The
 count of refused records surfaces in `snack sync` as `rejected_invalid` rather than disappearing.
+
+Each append takes a writer lock for the milliseconds it lasts. A lock older than two minutes was
+abandoned, so the plugin and `snack sync` take it over whatever process id it names, and
+`snack doctor` warns with `spool_lock:<alias>` while one is there.
 
 Segments are removed only after **every configured source has committed past them**. A cursor that
 advanced without its transaction committing would silently drop history, so cursors move only inside
@@ -104,7 +114,8 @@ and driven through the capture path in tests; a canary reaching any written byte
 
 The provider's own error **code** is stored on purpose — it is what distinguishes a rate limit from
 a timeout, and classifying that difference correctly is the entire reason SNACK does not treat your
-flaky Wi-Fi as a quota event. The error _message_ is not stored.
+flaky Wi-Fi as a quota event. The error _message_ is not stored. A retry status is read for its type
+alone; its message is never kept or classified.
 
 ## Compatibility
 
@@ -112,6 +123,11 @@ Requires Node.js 24 and a `@snack-ai/cli` that accepts `spool-event-v1`. Event `
 `1` and has been stable since the plugin's first release, so a current CLI reads any published
 version of this plugin. `snack doctor` reports a registration pinned at an older version as outdated
 rather than incompatible, and re-running `snack setup opencode --install-plugin` updates the pin.
+
+On OpenCode `1.18.15`, use `1.0.5` or later. Earlier versions file the first prompt of every session
+under the provider of OpenCode's `small_model`, which names the session, follow a cancelled prompt
+with `success` events, and leave the model name empty. A current `snack sync` keeps the exclusion
+OpenCode's database records for such a cancellation.
 
 Apache-2.0. Security reports go through the private channel in
 [SECURITY.md](https://github.com/Duck1201/snack/blob/main/SECURITY.md).
