@@ -2408,17 +2408,26 @@ function hashOpaque(value) {
   return createHash("sha256").update(`${SESSION_FINGERPRINT_SALT}\0${value}`).digest("hex");
 }
 
+const rfc3339Instant =
+  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u;
+
 /**
  * The canonical spelling of an instant -- `Date#toISOString`, UTC, milliseconds -- or null when it
  * does not parse. Storage compares and orders instants as text, which is time order only in one
  * spelling: an offset (`01:30:00-03:00` is 04:30 UTC) or a fraction of another length sorts out of
  * it. A finer fraction is truncated to the millisecond, as `Date.parse` reads it.
  *
+ * Only an RFC 3339 date-time with `Z` or an offset is an instant -- the rule the spool contract's
+ * `date-time` format states. `Date.parse` alone reads a date-time without an offset in the local
+ * time zone, so the same line would be stored as a different instant on another machine, and it
+ * accepts spellings no client writes. Every timestamp in a real Claude Code and Codex history
+ * names its zone.
+ *
  * @param {unknown} value
  * @returns {string | null}
  */
 function canonicalInstant(value) {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || !rfc3339Instant.test(value)) return null;
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }

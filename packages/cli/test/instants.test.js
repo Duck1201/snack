@@ -232,6 +232,33 @@ test("an instant that does not parse is refused, never stored", async () => {
   assert.deepEqual(storedInstants(paths.databaseFile), { prompts: [], restrictions: [] });
 });
 
+test("an instant that names no offset is refused, not read in the local time zone", async () => {
+  // `Date.parse` reads a date-time without an offset as local time and accepts spellings no client
+  // writes, so the same line stored a different instant on machines in different zones. Storage
+  // holds an instant to the rule the spool contract already states: RFC 3339, with `Z` or an
+  // offset. Every Claude Code and Codex timestamp in a real history is spelled that way.
+  const paths = await makeStorage();
+  const source = configuredSource(paths.databaseFile);
+  const counts = storeObservations(
+    paths.databaseFile,
+    source,
+    {
+      observations: [
+        { ...observation("local", "2026-01-02T04:00:00.000"), completed_at: null },
+        { ...observation("date", "2026-01-02"), completed_at: null },
+        { ...observation("prose", "Fri, 02 Jan 2026 04:00:00 GMT"), completed_at: null },
+        { ...observation("end", "2026-01-02T04:00:00.000Z"), completed_at: "2026-01-02T04:01:00" },
+        observation("restriction", "2026-01-02T04:00:00.000Z", "2026-01-02T04:00:30"),
+      ],
+      cursor: null,
+    },
+    now,
+  );
+  assert.equal(counts.inserted, 0);
+  assert.equal(counts.rejected_invalid, 5);
+  assert.deepEqual(storedInstants(paths.databaseFile), { prompts: [], restrictions: [] });
+});
+
 test("migration 020 rewrites stored instants in place, and the next read finds them unchanged", async () => {
   // A 1.6.0 database: stored as the source wrote them, hashed as the source wrote them.
   const paths = await makeStorage(await copyMigrationsThrough(19));
