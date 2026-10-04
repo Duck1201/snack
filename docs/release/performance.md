@@ -84,6 +84,15 @@ byte-identical to the one before the upgrade. The real histories held no non-can
 of 1,065 stored `started_at` values, 0 of 178,279 raw timestamps. `upgrade:smoke` applies 020 over
 a database each of the ten published floors wrote, `1.6.0` included.
 
+### The plugin and spool fixes were not timed
+
+The live-capture fixes merged after `985ba88` — the plugin's `1.0.5`, the spool lock takeover and
+the outcome pair `sync` no longer reports as a conflict — were not measured. On the live write path
+they add one `fstat` and one last-byte read to each append, to start on a fresh line after a broken
+one; the lock takeover reads the lock's age only when the lock is already held; the conflict rule is
+a comparison on a row `sync` already reads. None of it was timed, so this section claims no figure
+for it.
+
 ## 1.6.0
 
 - Date: 2026-10-03
