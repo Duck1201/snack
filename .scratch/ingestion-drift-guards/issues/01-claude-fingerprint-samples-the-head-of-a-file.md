@@ -1,7 +1,9 @@
 # 01 — The Claude fingerprint samples the head of each file, so a family appended later is unseen
 
-Status: `needs-triage` Severity: **P2** (P1 the day Claude Code ships a second family) Owner:
-unassigned Found in: `1.3.0` review, by analogy with the Codex P1 Target: unscheduled
+Status: `fixed` in `1.6.1` (commit `f0a4230`,
+`fix(claude): hold every consumed record to the turn-tree shape`) Severity: **P2** (P1 the day
+Claude Code ships a second family) Owner: unassigned Found in: `1.3.0` review, by analogy with the
+Codex P1 Target: `1.6.1`
 
 ## What happens
 
@@ -42,3 +44,42 @@ becomes that the first time Claude Code changes the shape of a record SNACK read
   then only a mid-file change within one session.
 - Should the check move to `read()` (every consumed record) and the fingerprint keep sampling for
   `doctor`, as the Codex reader splits it?
+
+## Resolution — 1.6.1
+
+**Decision: a turn record of another shape anywhere in a file refuses the history.** `readRecords`
+holds every `user`/`assistant` record it consumes to `isSupportedTurnRecord` and throws
+`source_schema_unsupported` (exit `4`) on a mismatch, before any canonical write. It is not counted
+as rejected and stepped over, because:
+
+- It is drift, not damage. A record that parses but has the wrong shape is a client writing another
+  family; skipping it drops a prompt's tokens without a trace, or keeps the prompt with fewer usage
+  slices — the Codex P1's silent loss. `docs/codex-support.md` refuses the same case.
+- It is the rule drift at the head of a file already followed (the sampled fingerprint returned
+  `false`). Refusing at record 201 but not at record 199 would make the outcome depend on where in
+  the file the new family landed.
+- The deliberate Claude/Codex difference survives where it was argued: an unparseable mid-file line
+  and a turn record whose `timestamp` is not a time are still damage, counted as rejected and
+  skipped.
+
+**What it keeps.** The per-sync check in `readSince` still samples 200 records per file, so a sync
+with nothing new stays O(files); the per-record check costs no extra I/O, because it runs on the
+records `read()` already parses for files whose mtime moved. `fingerprint()` — setup and `doctor` —
+now streams every record (one 64 KiB chunk in memory), so `doctor` fails what `sync --full` refuses.
+Claude backfill of 100k prompts (`performance.test.js`): 14.1 / 16.0 / 15.5 s before, 15.1 / 15.3 s
+after, against a 30 s budget.
+
+**Open questions, answered.** Whether Claude Code appends to a transcript on resume or starts a new
+file no longer matters: either way the record is checked when read. The check moved to `read()` and
+the per-sync fingerprint keeps sampling, as the issue proposed; the Codex reader's `doctor` likewise
+parses every file.
+
+**Not covered.** A file read before `1.6.1` and not written to since is not re-read by an
+incremental `sync`; `sync --full` or `doctor` re-checks it.
+
+Tests: `claude-adapter.test.js` ("a family appended past the fingerprint sample refuses the read",
+the incremental, subagent and `doctor` variants) and `doctor.test.js` (sync → resume → sync is
+degraded, writes nothing, leaks no canary; `doctor` fails), on the synthetic fixture
+`packages/cli/test/fixtures/claude/resumed-2-1-220-by-drifted-usage.jsonl` (202 supported records,
+then a drifted turn at record 203–204). Mutation-checked: removing the per-record check fails the
+read tests; sampling again in `fingerprint()` fails the `doctor` test.

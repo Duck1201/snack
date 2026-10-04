@@ -11,10 +11,13 @@ Authoritative: `packages/cli/src/claude-adapter.js`, `docs/claude-support.md`, A
 - **Version per record:** each record carries `version`, so recipe 1 in `structure-recipes.md`
   becomes a per-record count rather than a per-file one — which also shows a resumed session that
   two versions wrote.
-- **The fingerprint samples.** It inspects at most `fingerprintSampleSize` (200) records per file.
-  That is the resume trap's exact shape: a new family appended to the tail of an old session is
-  outside the sample. Before claiming a new Claude family is detected, prove the read path refuses
-  or reads the appended shape, not only the fingerprint.
+- **The per-sync check samples; the read path does not.** `readSince` first inspects at most
+  `fingerprintSampleSize` (200) records per file, which is the resume trap's exact shape: a new
+  family appended to the tail of an old session is outside it. From `1.6.1` `readRecords` holds
+  every `user`/`assistant` record it consumes to the family and refuses on a mismatch, and
+  `fingerprint()` (setup, `doctor`) streams every record. Before claiming a new Claude family is
+  detected, prove the read path reads the appended shape — `resumed-2-1-220-by-drifted-usage.jsonl`
+  is the fixture to copy.
 - **Boundaries already found:** a prompt is a `user` record with `promptSource`; a `toolUseResult`
   without one is inside a turn; `isSidechain` turns attach to the prompt that started them; a
   resumed session roots its continued turn at a record that is not a submission; an interrupted

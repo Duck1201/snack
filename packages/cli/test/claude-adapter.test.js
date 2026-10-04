@@ -501,6 +501,103 @@ test("drift inside a subagent transcript fails closed too", async () => {
   );
 });
 
+// A Claude Code session resumed by a later client gains that client's records at its tail. The
+// fixture's first 202 records are `cc-jsonl-turntree-v1`; record 204 is an assistant record whose
+// usage shape moved, past the 200 records the fingerprint samples per file. Its `version` is
+// synthetic -- no Claude Code release has shipped a second family yet.
+const resumedPastTheSample = "resumed-2-1-220-by-drifted-usage.jsonl";
+
+test("a family appended past the fingerprint sample refuses the read", async () => {
+  const projectsDirectory = await createFixtureProjects(resumedPastTheSample);
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const fixture = await readFixture(resumedPastTheSample);
+  const canaries = JSON.parse(
+    await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url), "utf8"),
+  );
+
+  // Guard against a vacuous pass: the drifted record really is beyond the sample, and the head
+  // really is a history this reader would otherwise accept.
+  const lines = fixture.trimEnd().split("\n");
+  const drifted = lines.findIndex(
+    (line) => !line.includes('"input_tokens"') && /"assistant"/u.test(line),
+  );
+  assert.ok(drifted >= 200, `the drifted record is record ${drifted + 1}`);
+  for (const name of ["prompt", "response", "path", "branch"]) {
+    assert.match(fixture, new RegExp(String(canaries[name]), "u"), `${name} was never planted`);
+  }
+
+  // Only the records `read()` consumes can prove which family a resumed session holds; a sample of
+  // the head proves the head. Reading the appended record under the old family's rules would store
+  // a prompt with null tokens, so the whole history is refused before anything is written, exactly
+  // as drift at the head of a file is.
+  for (const read of [() => adapter.readAll(), () => adapter.readSince(null)]) {
+    assert.throws(read, (error) => {
+      assert.ok(error instanceof SnackError);
+      assert.equal(error.reason, "source_schema_unsupported");
+      assert.equal(error.exitCode, 4);
+      for (const canary of Object.values(canaries)) {
+        assert.doesNotMatch(String(error.message), new RegExp(String(canary), "u"));
+      }
+      return true;
+    });
+  }
+});
+
+test("an incremental read refuses a family appended to a session it already read", async () => {
+  const head = (await readFixture(resumedPastTheSample)).split("\n").slice(0, 202).join("\n");
+  const projectsDirectory = await createFixtureProjects(resumedPastTheSample);
+  const sessionFile = join(
+    projectsDirectory,
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  );
+  await writeFile(sessionFile, `${head}\n`, { mode: 0o600 });
+  const adapter = createClaudeAdapter({ projectsDirectory });
+  const first = adapter.readAll();
+  assert.equal(first.observations.length, 101);
+
+  // Claude Code appends the resumed turn; the file's mtime moves, so the cursor re-reads it.
+  const tail = (await readFixture(resumedPastTheSample)).split("\n").slice(202).join("\n");
+  await appendFile(sessionFile, tail);
+  await utimes(sessionFile, new Date(), new Date(Date.now() + 60_000));
+
+  assert.throws(
+    () => adapter.readSince(first.cursor),
+    (error) => error instanceof SnackError && error.reason === "source_schema_unsupported",
+  );
+});
+
+test("a family appended past the sample of a subagent transcript refuses the read", async () => {
+  const projectsDirectory = await createFixtureProjects("subagent-parent.jsonl", {
+    subagents: { f1f1f1f1f1f1f1f1: resumedPastTheSample },
+  });
+  const adapter = createClaudeAdapter({ projectsDirectory });
+
+  assert.throws(
+    () => adapter.readAll(),
+    (error) => error instanceof SnackError && error.reason === "source_schema_unsupported",
+  );
+});
+
+test("doctor's fingerprint sees a family appended past the sample", async () => {
+  const projectsDirectory = await createFixtureProjects(resumedPastTheSample);
+  const adapter = createClaudeAdapter({ projectsDirectory });
+
+  // `doctor` and setup answer the question `sync --full` would: a history `read()` refuses is not a
+  // supported one, wherever in a file the refusing record sits.
+  assert.deepEqual(adapter.fingerprint(), {
+    adapter: "claude-jsonl",
+    fingerprint_version: 1,
+    family: null,
+    supported: false,
+  });
+  assert.deepEqual(adapter.health(), {
+    status: "incompatible",
+    accessible: true,
+    fingerprint: { family: null, supported: false },
+  });
+});
+
 /**
  * Build a throwaway Claude projects directory from a JSONL fixture.
  *
