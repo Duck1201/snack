@@ -419,6 +419,28 @@ test("the recorded 1.18.15 sequence routes from the user message chat.message ca
   );
 });
 
+test("a title call never routes a prompt whose chat.message named no agent", async () => {
+  // With an agent on the prompt, the title call's `agent` differs from it and that alone keeps it
+  // out. A host that names no agent on `chat.message` leaves only the auxiliary-agent filter.
+  const { hooks, directories } = await boundPlugin();
+  const [input, output] = recordedChatMessage("msg-1", { model: false });
+  const message = /** @type {Record<string, unknown>} */ (output.message);
+  await hooks["chat.message"](input, { ...output, message: { ...message, agent: undefined } });
+  await hooks["chat.params"](recordedChatParams("title", "other", "small", "msg-1"));
+  await hooks["chat.params"](recordedChatParams("build", "fake", "big", "msg-1"));
+  await hooks.event(hostEvent("session.idle"));
+  await hooks.dispose();
+
+  assert.deepEqual(await readEvents(directories.other), []);
+  assert.deepEqual(
+    (await readEvents(directories.fake)).map((event) => [event.provider, event.model]),
+    [
+      ["fake", "big"],
+      ["fake", "big"],
+    ],
+  );
+});
+
 test("compaction, summary and another prompt's chat.params never route a prompt", async () => {
   const { hooks, directories } = await boundPlugin();
   await hooks["chat.message"](...recordedChatMessage("msg-1", { model: false }));
