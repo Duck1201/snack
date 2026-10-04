@@ -176,7 +176,9 @@ export async function run(argv, options = {}) {
 
   program
     .name("snack")
-    .description("Know before you feed the model.")
+    .description(
+      "Estimate the chance your next AI prompt goes through without hitting a provider rate or usage limit, from usage metadata only.",
+    )
     .version(packageJson.version)
     .option("--json", "emit one versioned JSON document")
     .exitOverride()
