@@ -2,10 +2,14 @@
 
 **Saiba antes de alimentar o modelo.**
 
+O SNACK estima a chance de o seu próximo prompt passar sem que o provedor o recuse por um limite de
+requisições ou de uso. Trabalha só com metadados de uso, e nunca guarda nem julga o que os seus
+prompts dizem.
+
 SNACK é o Statistical Next-prompt Assessment & Calibration Kit: uma CLI local que descreve o uso
-observado das suas ferramentas de IA e estima se o próximo prompt tende a passar. Roda inteiramente
-na sua máquina, não guarda conteúdo de prompt nem de resposta, e nunca afirma conhecer a quota real
-do provedor.
+observado das suas ferramentas de IA e o transforma nessa estimativa. Roda inteiramente na sua
+máquina, não guarda conteúdo de prompt nem de resposta, e nunca afirma conhecer a quota real do
+provedor.
 
 In English: [README.md](./README.md).
 

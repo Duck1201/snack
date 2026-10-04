@@ -2,10 +2,13 @@
 
 **Know before you feed the model.**
 
+SNACK estimates the chance that your next prompt goes through without the provider refusing it for a
+rate or usage limit. It works from usage metadata alone, and never stores or judges what your
+prompts say.
+
 SNACK is the Statistical Next-prompt Assessment & Calibration Kit: a local-first CLI that describes
-your observed AI-tool usage and estimates whether the next prompt is likely to go through. It runs
-entirely on your machine, stores no prompt or response content, and never claims to know a
-provider's real quota.
+your observed AI-tool usage and turns it into that estimate. It runs entirely on your machine,
+stores no prompt or response content, and never claims to know a provider's real quota.
 
 Em português: [README.pt-BR.md](./README.pt-BR.md).
 
