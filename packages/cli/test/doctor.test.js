@@ -134,6 +134,97 @@ test("a Claude-only installation is not told about the OpenCode plugin", async (
   assert.equal(document.status, "ok");
 });
 
+test("a Claude family appended past the fingerprint sample is refused by sync and failed by doctor", async () => {
+  // A session resumed by a later Claude Code gains that client's records at its tail. The head is
+  // read first, the session is then resumed in a shape SNACK does not read, past the 200 records
+  // the per-sync check samples: `sync` has to refuse it rather than store a prompt with null
+  // tokens, and `doctor` has to say so rather than pass on the head of the file.
+  const fixtureName = "resumed-2-1-220-by-drifted-usage.jsonl";
+  const fixtureText = await readFile(
+    new URL(`./fixtures/claude/${fixtureName}`, import.meta.url),
+    "utf8",
+  );
+  const lines = fixtureText.split("\n");
+  const fixture = await makeRunFixture("snack-doctor-claude-resumed-");
+  const configDir = await createClaudeHistory(fixture.root, fixtureName);
+  const sessionFile = join(
+    configDir,
+    "projects",
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  );
+  await writeFile(sessionFile, `${lines.slice(0, 202).join("\n")}\n`, { mode: 0o600 });
+  fixture.options.env.CLAUDE_CONFIG_DIR = configDir;
+  const setup = await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+  assert.equal(setup, 0, fixture.stderr.value);
+  assert.equal(await run(["node", "snack", "sync", "--full"], fixture.options), 0);
+  const countPrompts = async () => {
+    const { default: Database } = await import("better-sqlite3");
+    const database = new Database(fixture.paths.databaseFile, { readonly: true });
+    try {
+      return /** @type {{total: number}} */ (
+        database.prepare("SELECT COUNT(*) AS total FROM prompt_execution").get()
+      ).total;
+    } finally {
+      database.close();
+    }
+  };
+  // Guard against a vacuous pass: the head of the session really was read.
+  assert.equal(await countPrompts(), 101);
+
+  await writeFile(sessionFile, fixtureText, { mode: 0o600 });
+  const canaries = JSON.parse(
+    await readFile(new URL("./fixtures/privacy-canaries.json", import.meta.url), "utf8"),
+  );
+  for (const argv of [
+    ["sync", "--json"],
+    ["sync", "--full", "--json"],
+  ]) {
+    fixture.stdout.value = "";
+    fixture.stderr.value = "";
+    await run(["node", "snack", ...argv], fixture.options);
+    // A source that refuses is a degraded sync, as drift at the head of a file is: the other
+    // sources still synchronize, and this one writes nothing.
+    const document = JSON.parse(fixture.stdout.value);
+    assert.equal(document.status, "degraded", fixture.stdout.value);
+    assert.equal(document.data.sources[0].failed, 1);
+    assert.equal(document.data.sources[0].inserted + document.data.sources[0].updated, 0);
+    assert.equal(document.warnings[0].code, "source_sync_failed");
+    for (const canary of Object.values(canaries)) {
+      assert.doesNotMatch(fixture.stdout.value + fixture.stderr.value, new RegExp(canary, "u"));
+    }
+  }
+  assert.equal(await countPrompts(), 101);
+  const database = await readFile(fixture.paths.databaseFile, "latin1");
+  for (const canary of Object.values(canaries)) {
+    assert.doesNotMatch(database, new RegExp(canary, "u"));
+  }
+
+  fixture.stdout.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const check = JSON.parse(fixture.stdout.value).data.checks.find(
+    (/** @type {{id: string}} */ entry) => entry.id === "source_fingerprint:claude:claude",
+  );
+  assert.equal(check?.status, "fail");
+});
+
 test("doctor refuses a capacity source that is not configured", async () => {
   // Every other command rejects an unknown alias with exit 4. Doctor answered a typo with a clean
   // bill of health -- the per-source checks simply selected nothing, so what remained all passed.
