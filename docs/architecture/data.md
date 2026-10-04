@@ -156,6 +156,19 @@ observation silently. The refusal is gated on the installation differing, never 
 domain, because one installation legitimately reports the same prompt through both the spool and the
 backfill and those must keep merging.
 
+A prompt re-read at its stored revision, in the same revision domain and by the same parser version,
+claims nothing changed (§9, rule 2). When its content differs anyway, that is a reader reading the
+same bytes differently far more often than a client rewriting history — the shape of the `1.3.0`
+Codex P1, where the update path replaced 3 slices and 435 tokens with 1 and 11 and `sync` called it
+an ordinary update. Since `1.6.1` ingestion keeps the stored prompt, counts the observation in
+`sync`'s `rejected_invalid`, and records a `same_revision_content_conflict` ingestion issue that
+`doctor` reports under `source_ingestion:<alias>`. A changed `parser_version` is the declared way
+to read unchanged bytes differently and still updates. Where a revision is only a clock over rows
+updated in place — OpenCode's database, whose revision is a millisecond `time_updated` — a write in
+the millisecond already read legitimately changes a prompt at the same revision, so there only a
+reading that would drop a usage slice already stored is refused. Each adapter declares which kind of
+revision it has (`revisionIdentifiesContent`).
+
 Backfill categorization processes prompt executions in `(started_at, stable source order)` order. It derives each category before adding that prompt to the baseline, guaranteeing that later history cannot leak into earlier categories.
 
 Every instant a client supplies — the start and end timestamps, a restriction's `observed_at`, a statement's stated-at and reset times — is stored in the canonical UTC spelling `Date#toISOString` writes, millisecond precision (1.6.1+). Storage compares and orders instants as text, in the stated-band restate, the purge and export windows and the selection of a prompt's capacity period, and text order is time order only in that one spelling: the Claude Code backfill reads timestamps as the client wrote them and the spool accepts an offset and any fraction. A finer fraction is truncated to the millisecond; an instant that does not parse refuses the observation as invalid. `observation_hash` is taken over the observation as the source delivered it, so re-reading a prompt in its original spelling is unchanged. Migration `020` rewrote the instants stored before 1.6.1 with the same function, and marks the stated-band projection of every source it moved for whole-period recomputation; a database whose instants were already canonical is left byte for byte as it was.

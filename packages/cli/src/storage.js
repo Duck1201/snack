@@ -435,7 +435,12 @@ export function readSpoolIssueCount(databaseFile, sourceAlias) {
  *   cursor, and its counts are returned only when the batch carried it, so a batch from a client
  *   that states nothing reports exactly the counts it always has.
  * @param {Date} now
- * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null}} [options]
+ * @param {{mappedProviders?: Set<string>, providerMappingCounts?: Map<string, number>, path?: "backfill" | "spool", spoolCursors?: {segment: string, byte_offset: number}[], rejected?: {segment: string, line_offset: number}[], planProfile?: {id: string, version: string} | null, revisionIdentifiesContent?: boolean}} [options]
+ *   `revisionIdentifiesContent` says whether the reader's revisions name content (an append-only
+ *   source, or a spool event) or only a clock over rows updated in place. It defaults to `true`,
+ *   which is the closed answer: a prompt re-read at its stored revision by the same parser with
+ *   different content is refused and counted. With `false` that is refused only when the reading
+ *   would lose a usage slice already stored.
  */
 export function storeObservations(databaseFile, source, batch, now, options = {}) {
   const database = new Database(databaseFile);
@@ -620,7 +625,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const existing = database
           .prepare(
             `SELECT id, source_revision, observation_hash, completion, revision_domain,
-                    installation_id, started_at
+                    installation_id, started_at, parser_version
               FROM prompt_execution
              WHERE source_alias = ? AND source_prompt_id = ?`,
           )
@@ -793,6 +798,47 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           existing.observation_hash === observationHash
         ) {
           counts.unchanged += 1;
+          continue;
+        }
+        if (
+          storedRow !== null &&
+          typeof storedRow.id === "number" &&
+          storedRow.revision_domain === observation.revision_domain &&
+          storedRow.source_revision === observation.revision &&
+          storedRow.parser_version === observation.parser_version &&
+          ((options.revisionIdentifiesContent ?? true) ||
+            losesStoredSlice(database, storedRow.id, observation))
+        ) {
+          // The same revision, read by the same parser, with different content. A source that
+          // re-emits a revision claims nothing changed (docs/architecture/data.md §9, rule 2), so
+          // content that differs under that claim is either a client rewriting history without
+          // moving its revision or -- far more likely -- a reader interpreting the same bytes
+          // differently than it did last time. That was the Codex P1 of 1.3.0: unchanged turns came
+          // back with fewer slices at an unchanged revision, and the update path below replaced 3
+          // slices and 435 tokens with 1 and 11, reported as an ordinary `updated` prompt.
+          //
+          // Fail closed on data: keep the row already stored, which a regressed reader cannot be
+          // trusted to improve on, and record the refusal where `doctor` reads it. A changed parser
+          // version is the declared way to read unchanged bytes differently, so it falls through
+          // to the update; so does a differing revision domain, whose revisions are not comparable.
+          //
+          // Where a revision is only a clock over rows updated in place (OpenCode's database), a
+          // write in the millisecond already read legitimately changes a prompt at the same
+          // revision, so only the Codex signature is refused there: a reading that drops a usage
+          // slice already stored. Rows are never deleted by such a write, and a deletion that
+          // lowers the revision is already kept as `unchanged` above.
+          //
+          // Restrictions and spool provenance were already unioned above, as for any re-read
+          // revision. One row per occurrence, as the collision guard records them; the issue holds
+          // a reason and a path, never the prompt's identity.
+          database
+            .prepare(
+              `INSERT INTO ingestion_issue
+                 (source_alias, path, reason, segment, line_offset, first_seen_at, last_seen_at, occurrences)
+               VALUES (?, ?, 'same_revision_content_conflict', NULL, NULL, ?, ?, 1)`,
+            )
+            .run(source.alias, options.path ?? "backfill", timestamp, timestamp);
+          counts.rejected_invalid += 1;
           continue;
         }
 
@@ -2370,6 +2416,27 @@ function withCanonicalInstants(observation) {
 /** @param {Observation} observation */
 function hashObservation(observation) {
   return createHash("sha256").update(JSON.stringify(observation)).digest("hex");
+}
+
+/**
+ * Whether storing `observation` over the stored prompt would delete a usage slice it holds.
+ *
+ * @param {Database.Database} database
+ * @param {number} promptId
+ * @param {Observation} observation
+ */
+function losesStoredSlice(database, promptId, observation) {
+  const incoming = new Set(observation.usage_slices.map((slice) => slice.source_slice_id));
+  return database
+    .prepare("SELECT source_slice_id FROM prompt_usage_slice WHERE prompt_execution_id = ?")
+    .all(promptId)
+    .some(
+      (row) =>
+        typeof row === "object" &&
+        row !== null &&
+        "source_slice_id" in row &&
+        !incoming.has(/** @type {string} */ (row.source_slice_id)),
+    );
 }
 
 /** @param {string} left @param {string} right */

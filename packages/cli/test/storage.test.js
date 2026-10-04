@@ -1721,3 +1721,208 @@ test("a stated figure holds no content: every column is a key, a time, a number 
     database.close();
   }
 });
+
+/**
+ * @param {number} n
+ * @param {number} tokens
+ * @param {number} [outputTokens]
+ */
+function usageSlice(n, tokens, outputTokens = 0) {
+  return {
+    source_slice_id: `slice-${n}`,
+    provider: "anthropic",
+    model: "claude-sonnet",
+    input_tokens: tokens,
+    output_tokens: outputTokens,
+    reasoning_tokens: null,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    cost_decimal: null,
+    currency: null,
+  };
+}
+
+/**
+ * The prompt the Codex P1 destroyed: three usage slices, 435 tokens, at revision `5`.
+ *
+ * @param {Partial<import("../src/storage.js").Observation>} [overrides]
+ * @returns {import("../src/storage.js").Observation}
+ */
+function slicedObservation(overrides = {}) {
+  return {
+    ...observation(1, "2026-01-02T01:00:00.000Z"),
+    revision: "5",
+    usage_slices: [usageSlice(1, 100), usageSlice(2, 200), usageSlice(3, 135)],
+    ...overrides,
+  };
+}
+
+/** The same prompt as a regressed reader would see it: one slice, 11 tokens. */
+function regressedSlices() {
+  return [usageSlice(1, 11)];
+}
+
+/** Every slice kept, one count moved: what a later write in the same millisecond can do. */
+function recountedSlices() {
+  return [usageSlice(1, 100, 7), usageSlice(2, 200, 7), usageSlice(3, 135, 7)];
+}
+
+/** @param {string} databaseFile */
+function readStoredUsage(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    const row = /** @type {{slices: number, tokens: number | null, revision: string}} */ (
+      database
+        .prepare(
+          `SELECT COUNT(prompt_usage_slice.source_slice_id) AS slices,
+                  SUM(prompt_usage_slice.input_tokens) AS tokens,
+                  prompt_execution.source_revision AS revision
+             FROM prompt_execution
+             LEFT JOIN prompt_usage_slice
+               ON prompt_usage_slice.prompt_execution_id = prompt_execution.id
+            WHERE prompt_execution.source_prompt_id = 'prompt-1'
+            GROUP BY prompt_execution.id`,
+        )
+        .get()
+    );
+    return { slices: row.slices, tokens: row.tokens, revision: row.revision };
+  } finally {
+    database.close();
+  }
+}
+
+/** @param {string} databaseFile */
+function readIssueReasons(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return database
+      .prepare("SELECT reason, path, segment, line_offset FROM ingestion_issue ORDER BY id")
+      .all();
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * @param {import("../src/storage.js").Observation} replacement
+ * @param {{revisionIdentifiesContent?: boolean}} [options]
+ */
+async function storeThenReplace(replacement, options = {}) {
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  const cursor = cursorAt(2000);
+  storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [slicedObservation()], cursor },
+    now,
+    options,
+  );
+  const result = storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [replacement], cursor },
+    now,
+    options,
+  );
+  return { databaseFile: paths.databaseFile, alias: source.alias, result };
+}
+
+test("a prompt re-read at the same revision with different content keeps what was stored", async () => {
+  // The signature of the Codex P1: the reader read unchanged turns differently, the revision did
+  // not move, and the update path replaced 3 slices and 435 tokens with 1 and 11, reported as one
+  // ordinary `updated` prompt. A source re-emitting a revision claims nothing changed; content that
+  // differs under that claim is a reader regression far more often than a rewritten history, so
+  // the stored row is kept and the conflict is counted where `doctor` reads it.
+  const { databaseFile, alias, result } = await storeThenReplace(
+    slicedObservation({ usage_slices: regressedSlices() }),
+  );
+
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 3, tokens: 435, revision: "5" });
+  assert.equal(result.updated, 0);
+  assert.equal(result.unchanged, 0);
+  assert.equal(result.rejected_invalid, 1);
+  // Content-free: a reason and a path, never the prompt's identity or a location on disk.
+  assert.deepEqual(readIssueReasons(databaseFile), [
+    {
+      reason: "same_revision_content_conflict",
+      path: "backfill",
+      segment: null,
+      line_offset: null,
+    },
+  ]);
+  assert.equal(readSpoolIssueCount(databaseFile, alias), 1);
+});
+
+test("a later revision of a stored prompt still replaces it, and records no conflict", async () => {
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({ revision: "6", usage_slices: regressedSlices() }),
+  );
+
+  assert.equal(result.updated, 1);
+  assert.equal(result.rejected_invalid, 0);
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 1, tokens: 11, revision: "6" });
+  assert.deepEqual(readIssueReasons(databaseFile), []);
+});
+
+test("a changed parser version re-reads a prompt at the same revision deliberately", async () => {
+  // A new parser version is the declared way to read unchanged bytes differently, so it must still
+  // update -- otherwise a reader fix could never reach a prompt it had already stored.
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({ parser_version: "opencode-session-v2", usage_slices: regressedSlices() }),
+  );
+
+  assert.equal(result.updated, 1);
+  assert.equal(result.rejected_invalid, 0);
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 1, tokens: 11, revision: "5" });
+  assert.deepEqual(readIssueReasons(databaseFile), []);
+});
+
+test("where a revision is a clock, the same revision may carry a later write, but never lose usage", async () => {
+  // OpenCode updates rows in place and its revision is the newest `time_updated`, a millisecond
+  // clock: a write landing in the millisecond already read changes the prompt without moving the
+  // revision, and must still be stored. Losing a stored slice is never such a write.
+  const filled = slicedObservation({ usage_slices: recountedSlices() });
+  const later = await storeThenReplace(filled, { revisionIdentifiesContent: false });
+  assert.equal(later.result.updated, 1);
+  assert.equal(later.result.rejected_invalid, 0);
+  assert.deepEqual(readIssueReasons(later.databaseFile), []);
+
+  const lossy = await storeThenReplace(slicedObservation({ usage_slices: regressedSlices() }), {
+    revisionIdentifiesContent: false,
+  });
+  assert.equal(lossy.result.updated, 0);
+  assert.equal(lossy.result.rejected_invalid, 1);
+  assert.deepEqual(readStoredUsage(lossy.databaseFile), { slices: 3, tokens: 435, revision: "5" });
+  assert.deepEqual(
+    readIssueReasons(lossy.databaseFile).map((row) => /** @type {{reason: string}} */ (row).reason),
+    ["same_revision_content_conflict"],
+  );
+});
+
+test("where a revision names content, any different reading at it is refused, not only a lossy one", async () => {
+  // Every slice survives here and only a count moved. An append-only source cannot have written
+  // that without moving its revision, so it is a reader disagreeing with itself.
+  const recounted = slicedObservation({ usage_slices: recountedSlices() });
+  const { databaseFile, result } = await storeThenReplace(recounted);
+
+  assert.equal(result.updated, 0);
+  assert.equal(result.rejected_invalid, 1);
+  assert.deepEqual(
+    readIssueReasons(databaseFile).map((row) => /** @type {{reason: string}} */ (row).reason),
+    ["same_revision_content_conflict"],
+  );
+});
+
+test("the same revision string in another revision domain is not the same revision", async () => {
+  // Revisions are comparable only within a domain (docs/architecture/data.md §9, rule 3), so two
+  // domains agreeing on a string say nothing about content; the cross-domain merge decides.
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({ revision_domain: "opencode-plugin-v1", usage_slices: regressedSlices() }),
+  );
+
+  assert.equal(result.rejected_invalid, 0);
+  assert.deepEqual(readIssueReasons(databaseFile), []);
+});

@@ -3346,6 +3346,75 @@ test("a prompt id one client reuses from another is reported instead of overwrit
   assert.equal(ingestion.message, "1 observation(s) were refused on ingestion.");
 });
 
+test("a prompt that reads differently at the same revision keeps its usage and says so", async () => {
+  const fixture = await makeRunFixture("snack-same-revision-");
+  fixture.options.env.CLAUDE_CONFIG_DIR = await createClaudeHistory(
+    fixture.root,
+    "subagent-parent.jsonl",
+  );
+  const subagents = join(
+    fixture.options.env.CLAUDE_CONFIG_DIR,
+    "projects",
+    "-fixture-project",
+    "aaaaaaaa-0000-4000-8000-000000000001",
+    "subagents",
+  );
+  await mkdir(subagents, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(subagents, "agent-f1f1f1f1f1f1f1f1.jsonl"),
+    await readFile(new URL("./fixtures/claude/subagent-child.jsonl", import.meta.url), "utf8"),
+    { mode: 0o600 },
+  );
+  await run(
+    [
+      "node",
+      "snack",
+      "setup",
+      "claude",
+      "--non-interactive",
+      "--source",
+      "claude",
+      "--provider",
+      "anthropic",
+      "--profile",
+      "default",
+      "--plan",
+      "pro",
+    ],
+    fixture.options,
+  );
+  await run(["node", "snack", "sync", "--full"], fixture.options);
+  const exportSlices = async () => {
+    fixture.stdout.value = "";
+    await run(["node", "snack", "export", "--format", "json", "--output", "-"], fixture.options);
+    return JSON.parse(fixture.stdout.value).data.tables.usage_slices.length;
+  };
+  assert.equal(await exportSlices(), 3);
+
+  // The subagent's transcript is gone, so the same turn now reads with one slice where three were
+  // stored -- at the same revision, because the session's newest record did not move. Until 1.6.1
+  // the update path replaced the three with the one and `sync` called it an ordinary update: the
+  // Codex P1's signature, in another reader.
+  await rm(join(subagents, "agent-f1f1f1f1f1f1f1f1.jsonl"));
+  fixture.stdout.value = "";
+  await run(["node", "snack", "sync", "--full", "--json"], fixture.options);
+  const synced = JSON.parse(fixture.stdout.value).data.sources[0];
+
+  assert.deepEqual(
+    { updated: synced.updated, rejected_invalid: synced.rejected_invalid },
+    { updated: 0, rejected_invalid: 1 },
+  );
+  assert.equal(await exportSlices(), 3);
+  fixture.stdout.value = "";
+  await run(["node", "snack", "doctor", "--json"], fixture.options);
+  const doctor = JSON.parse(fixture.stdout.value);
+  const ingestion = doctor.data.checks.find(
+    (/** @type {{id: string}} */ check) => check.id === "source_ingestion:claude",
+  );
+  assert.equal(ingestion?.status, "warn", JSON.stringify(doctor.data.checks));
+  assert.equal(ingestion.message, "1 observation(s) were refused on ingestion.");
+});
+
 test("a refusal one client saw survives another client succeeding on the same source", async () => {
   const fixture = await makeRunFixture("snack-shared-restriction-");
   fixture.options.env.OPENCODE_DB = await createOpenCodeDatabase(fixture.root);

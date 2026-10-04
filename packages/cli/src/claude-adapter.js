@@ -68,6 +68,9 @@ export function resolveClaudeProjectsDirectory(options = {}) {
  */
 export function createClaudeAdapter(options) {
   return {
+    // Claude Code only appends, and a revision names a turn's newest record, so the same revision
+    // read again is the same turn: storage keeps what it stored when the content differs.
+    revisionIdentifiesContent: true,
     detect() {
       const versions = new Set();
       for (const sessionFile of listSessionFiles(options.projectsDirectory)) {

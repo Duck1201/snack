@@ -68,7 +68,7 @@ creates every one of these privately and never widens them.
 | `plan_profile:<alias>` | The plan profile named in configuration | **warn** — unusable, so the bundled `generic` profile is used instead. Estimates stay honest but lean harder on a weak prior |
 | `source_mapping:<alias>` | Observations waiting on a provider mapping | **warn** — pending mappings, or the count is unknown. They are not lost; they are not attributed yet |
 | `source_freshness:<alias>` | How old the synchronized usage is | **warn** — nothing synchronized yet, older than 24 hours, or unknown. Run `snack sync` |
-| `source_ingestion:<alias>` | Records ingestion refused | **warn** — some were refused, or the count is unknown. Refused records are counted rather than guessed at, and `sync --json` reports `rejected_invalid` |
+| `source_ingestion:<alias>` | Records ingestion refused | **warn** — some were refused, or the count is unknown. Refused records are counted rather than guessed at, and `sync --json` reports `rejected_invalid`. Since 1.6.1 this includes a prompt that read differently at the revision already stored, by the same parser version: the stored prompt is kept, because a reader disagreeing with itself is the likelier cause. A warning that grows on every `sync` names a reader defect worth reporting |
 
 ## The OpenCode live-capture plugin
 

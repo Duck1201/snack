@@ -1459,6 +1459,7 @@ async function synchronizeSource(options) {
       options.now,
       {
         ...mappings,
+        revisionIdentifiesContent: adapter.revisionIdentifiesContent,
         // Records the adapter could not parse travel with the batch, so a quietly incomplete
         // read is reported rather than looking like a complete one.
         ...("rejected" in backfill ? { rejected: backfill.rejected } : {}),
