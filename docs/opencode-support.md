@@ -45,7 +45,8 @@ warns instead of failing. It stores a content-free `spool-event-v1` stream in SN
 the plugin never opens SQLite or throws capture failures into OpenCode. Unknown future spool schema
 versions are rejected with sanitized diagnostics.
 
-The current plugin contract uses `chat.message`, `chat.params`, `session.error`, and `session.idle`.
+The current plugin contract uses `chat.message`, `chat.params`, `session.error`, `session.idle`, and
+-- from `1.6.1`, for its `type` alone -- `session.status`.
 Its event fixtures use the documented plugin hook surface and the structured `APIError.data.statusCode`
 form already validated by the supported SQLite source family. Unknown event/schema fields are
 rejected without retaining the raw payload.
@@ -55,6 +56,36 @@ does not send it on `1.18.10`. Routing a spool segment needs the provider, and a
 `_pending` is never attributed and never revisited — so a prompt whose provider is not yet known is
 held until `chat.params`, which carries it on the same turn and is not optional. A prompt whose
 provider never arrives is released to `_pending` at its terminal event.
+
+### What OpenCode `1.18.15` changed under live capture
+
+Observed by driving a real `opencode serve` `1.18.15` against a local OpenAI-compatible stub, and
+fixed in the plugin shipped with SNACK `1.6.1`:
+
+- **`chat.message` still omits `model`, but its output names it.** The input carries `agent` and
+  `model` keys whose values are undefined; the user message on the hook's output carries `agent`
+  and `model: {providerID, modelID}`. The plugin routes from there first.
+- **The title call comes first.** On the first prompt of every session OpenCode names the session
+  with `small_model`, and that `chat.params` (agent `title`) arrives before the `build` one. Until
+  `1.6.1` the plugin routed on the first `chat.params` it saw, so a `small_model` on another
+  provider filed every session's first prompt under that provider, as a success. `chat.params`
+  now routes a prompt only when its agent is the prompt's and its `message.id` is the prompt's;
+  `title`, `compaction` and `summary` never route one.
+- **`chat.params` names the model `id`, not `modelID`.** The `model` there is the provider's model
+  record, so `model` was `null` on every live event before `1.6.1`.
+- **A 429 is retried by OpenCode and never reaches `session.error`.** OpenCode reports each retry
+  only as `session.status {type: "retry", attempt, message, next}`; `message` is the provider's
+  free text and there is no status code. The turn ends in `session.idle` whether a retry then
+  succeeded or the user cancelled it. `spool-event-v1` lets `session_idle` say only `success`, and
+  a restriction needs structured evidence the retry status does not carry, so a turn that saw a
+  retry writes no terminal event: it stays provisional in the spool and backfill, which reads how
+  the turn ended, finalizes it. The retry message is never stored or read beyond its `type`.
+- **A cancelled prompt emits `session.error` (`MessageAbortedError`) and then `session.idle` twice**,
+  and `/shell` and `/summarize` emit further idles after a prompt has finished. The plugin now
+  writes one terminal event per prompt -- `session_error`, `excluded`, for the cancellation -- and
+  ignores later ones. Spools written by earlier plugins carry a `success` after the cancellation;
+  `sync` keeps the exclusion the database records and no longer reports an
+  `incomparable_outcome_conflict` for it.
 
 `snack setup opencode` is guided from `0.6.0`. It discovers the database path, its schema
 fingerprint, and the provider identifiers already present in it, then asks only for what OpenCode
