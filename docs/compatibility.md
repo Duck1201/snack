@@ -412,6 +412,15 @@ their numbers. Absent for a source no Codex installation feeds.
 default panel, the overview and `--sequence` without `--verbose` never show it. `stats --verbose`
 adds a `by method` block. Human formatting is not a frozen surface.
 
+**A second fix: a long command no longer exits `1` after finishing.** `proper-lockfile` 4.1.2
+refreshes a held storage lock on a timer whose `stat` does not check whether the lock was released
+while it was in flight. An operation that holds the event loop past the 10-second refresh — a
+100,000-prompt backfill on a slower machine — left that refresh overdue, so it fired as the
+operation released the lock, met the directory the release had just removed, and the library's
+default handler threw from a timer: the command had printed `ok` and still exited `1`. Every
+release since the lock was introduced could do this; macOS CI caught it on `sync --full`. A lock
+this process is releasing is no longer reported compromised; any other compromise still throws.
+
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`; the shadow names its own policies. No new
 flag, exit code, configuration key or reason. `status.schema.json` and `stats.schema.json` declare
