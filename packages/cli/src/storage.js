@@ -863,15 +863,39 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             existingOutcome !== null &&
             "outcome" in existingOutcome &&
             existingOutcome.outcome === "restricted";
+          const storedOutcome =
+            typeof existingOutcome === "object" &&
+            existingOutcome !== null &&
+            "outcome" in existingOutcome &&
+            typeof existingOutcome.outcome === "string"
+              ? existingOutcome.outcome
+              : null;
+          // The plugin's `success` is its reading of `session.idle`, and OpenCode 1.18.x emits that
+          // after a cancelled prompt, an error, or a 429 it retried itself, as well as after a
+          // success: it is not evidence against the database recording that the turn ended without
+          // one. Up to `@snack-ai/opencode` 1.0.4 every cancelled prompt arrived as such a
+          // `success`, and each raised an `incomparable_outcome_conflict` on every sync. The
+          // recorded exclusion stands in either arrival order; it is what the conflict resolved to
+          // as well, so only the false warning goes.
+          const pluginIdleBeforeRecordedEnd =
+            (options.path ?? "backfill") === "backfill"
+              ? existingRevisionDomain === "opencode-plugin-v1" &&
+                storedOutcome === "success" &&
+                observation.outcome === "excluded" &&
+                observation.completion === "completed"
+              : observation.revision_domain === "opencode-plugin-v1" &&
+                observation.outcome === "success" &&
+                storedOutcome === "excluded" &&
+                existingRecord?.completion === "completed";
           const compatibleBackfill =
             (options.path ?? "backfill") === "backfill" &&
             (existingIsRestricted ||
-              (typeof existingOutcome === "object" &&
-                existingOutcome !== null &&
-                "outcome" in existingOutcome &&
-                existingOutcome.outcome === observation.outcome));
+              storedOutcome === observation.outcome ||
+              pluginIdleBeforeRecordedEnd);
           if (compatibleBackfill) {
             // Backfill supplies finalized boundaries and usage; live restrictions remain dominant.
+          } else if (pluginIdleBeforeRecordedEnd) {
+            counts.unchanged += 1;
           } else if (
             observation.restrictions.length > 0 &&
             existingRecord !== null &&
