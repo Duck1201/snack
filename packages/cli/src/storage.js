@@ -142,6 +142,12 @@ export async function initializeDatabase(paths, options = {}) {
     database = opened;
     opened.pragma("foreign_keys = ON");
     opened.pragma("busy_timeout = 5000");
+    // Migration 020 rewrites stored instants with the same function the ingestion stores them
+    // with, so an upgraded row and a newly read one can never disagree by a rounding rule. A value
+    // that does not parse is returned as it is: a migration keeps a row it cannot interpret.
+    opened.function("snack_canonical_instant", { deterministic: true }, (value) =>
+      typeof value === "string" ? (canonicalInstant(value) ?? value) : value,
+    );
     await chmod(paths.databaseFile, 0o600);
 
     const applied = readAppliedMigrations(opened);
@@ -514,7 +520,15 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
         const normalized = Number.isNaN(ms) ? "" : new Date(ms).toISOString();
         if (staleFrom === null || normalized < staleFrom) staleFrom = normalized;
       };
-      for (const observation of batch.observations) {
+      for (const delivered of batch.observations) {
+        // Stored in the canonical spelling, so text order is time order everywhere storage
+        // compares instants; hashed as delivered, so a prompt read again in the spelling it was
+        // first read in -- and every row stored before 1.6.1 -- is unchanged.
+        const observation = withCanonicalInstants(delivered);
+        if (observation === null) {
+          counts.rejected_invalid += 1;
+          continue;
+        }
         if (
           tombstones.length > 0 &&
           observation.started_at !== null &&
@@ -551,7 +565,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.source_prompt_id,
               observation.provider,
               observation.revision,
-              JSON.stringify(observation),
+              JSON.stringify(delivered),
               timestamp,
             );
           }
@@ -591,7 +605,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
               observation.source_prompt_id,
               observation.provider ?? "unknown",
               observation.revision,
-              JSON.stringify(observation),
+              JSON.stringify(delivered),
               timestamp,
             );
           }
@@ -602,7 +616,7 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           counts.rejected_invalid += 1;
           continue;
         }
-        const observationHash = hashObservation(observation);
+        const observationHash = hashObservation(delivered);
         const existing = database
           .prepare(
             `SELECT id, source_revision, observation_hash, completion, revision_domain,
@@ -1202,7 +1216,10 @@ function storeReportedCapacity(
       counts.pending_mapping += 1;
       continue;
     }
-    if (tombstones.length > 0 && isTombstoned(tombstones, snapshot.observed_at)) {
+    // Validated as UTC with an optional millisecond fraction, and stored always with one, so
+    // `12:00:00Z` does not sort after `12:00:00.500Z`.
+    const observedAt = /** @type {string} */ (canonicalInstant(snapshot.observed_at));
+    if (tombstones.length > 0 && isTombstoned(tombstones, observedAt)) {
       counts.tombstoned += 1;
       continue;
     }
@@ -1213,12 +1230,12 @@ function storeReportedCapacity(
         source.alias,
         source.installation_id,
         snapshot.observation_key,
-        snapshot.observed_at,
+        observedAt,
         snapshot.limit_id,
         snapshot.plan_type,
         window.window_minutes,
         window.used_percent,
-        window.resets_at,
+        window.resets_at === null ? null : canonicalInstant(window.resets_at),
         snapshot.parser_version,
         timestamp,
       );
@@ -1233,11 +1250,11 @@ function storeReportedCapacity(
         source.installation_id,
         snapshot.limit_id ?? "",
         snapshot.observation_key,
-        snapshot.observed_at,
+        observedAt,
         newestRow,
       );
       counts.inserted += 1;
-      stale?.(snapshot.observed_at);
+      stale?.(observedAt);
     } else counts.unchanged += 1;
   }
   return counts;
@@ -2306,6 +2323,48 @@ function legacyCursorField(cursor, field, expected) {
 /** @param {string} value */
 function hashOpaque(value) {
   return createHash("sha256").update(`${SESSION_FINGERPRINT_SALT}\0${value}`).digest("hex");
+}
+
+/**
+ * The canonical spelling of an instant -- `Date#toISOString`, UTC, milliseconds -- or null when it
+ * does not parse. Storage compares and orders instants as text, which is time order only in one
+ * spelling: an offset (`01:30:00-03:00` is 04:30 UTC) or a fraction of another length sorts out of
+ * it. A finer fraction is truncated to the millisecond, as `Date.parse` reads it.
+ *
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function canonicalInstant(value) {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/**
+ * An observation with every instant storage keeps in the canonical spelling, or null when one of
+ * them does not parse: refused as invalid rather than stored as something that is not a time.
+ *
+ * @param {Observation} observation
+ * @returns {Observation | null}
+ */
+function withCanonicalInstants(observation) {
+  const startedAt = canonicalInstant(observation.started_at);
+  const completed = observation.completed_at;
+  const completedAt =
+    completed === null || completed === undefined ? completed : canonicalInstant(completed);
+  if (
+    startedAt === null ||
+    (completed !== null && completed !== undefined && completedAt === null)
+  ) {
+    return null;
+  }
+  const restrictions = [];
+  for (const restriction of observation.restrictions) {
+    const observedAt = canonicalInstant(restriction.observed_at);
+    if (observedAt === null) return null;
+    restrictions.push({ ...restriction, observed_at: observedAt });
+  }
+  return { ...observation, started_at: startedAt, completed_at: completedAt, restrictions };
 }
 
 /** @param {Observation} observation */

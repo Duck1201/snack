@@ -1,7 +1,7 @@
 # 01 — `started_at` ordered and filtered as text
 
-Status: `needs-triage` Severity: **P3** Owner: unassigned Found in: `1.5.0` review of migration
-`018` — beside the frontier normalization Target: unscheduled
+Status: `fixed` in `1.6.1`, commit 072809e Severity: **P3** Owner: unassigned Found in: `1.5.0`
+review of migration `018` — beside the frontier normalization Target: `1.6.1`
 
 ## What happens
 
@@ -51,3 +51,43 @@ at once, rather than parsing at each read.
   the next backfill read every Claude Code prompt as changed.
 - Is a migration that rewrites `prompt_execution.started_at` within the `1.x` compatibility promise,
   given `export` publishes the column?
+
+## Comments
+
+Fixed in `1.6.1` (commit 072809e) by normalizing at ingestion and rewriting what was already stored.
+
+- **Ingestion.** `storeObservations` stores `started_at`, `completed_at` and every restriction's
+  `observed_at` in the `Date#toISOString` spelling (UTC, milliseconds; a finer fraction truncated as
+  `Date.parse` reads it) and refuses an observation whose instant does not parse as
+  `rejected_invalid`. A stated figure's `observed_at` and `resets_at` are stored with their
+  millisecond fraction too: the reported pattern accepted `12:00:00Z`, which sorts after
+  `12:00:00.500Z`. Text order is now time order in every read that compares instants, with no read
+  changed.
+- **The open question on hashes.** `observation_hash` is `sha256(JSON.stringify(observation))`, so
+  it does include `started_at` as written. It is now taken over the observation **as delivered**,
+  before normalization: a prompt re-read in the spelling it was first read in hashes as it did in
+  `1.6.0` and is `unchanged`. Hashing the normalized observation would have moved the hash of every
+  non-canonical row stored before `1.6.1`, sent each through the update path on its next read, and
+  tripped the same-revision guard of `ingestion-drift-guards` 02 as a false anomaly. For a canonical
+  spelling the two hashes are identical anyway.
+- **Stored rows.** Migration `020_canonical_instants.sql` rewrites them with the ingestion's own
+  function, registered on the migrating connection (`snack_canonical_instant`), so an upgraded row
+  and the same instant read again agree to the millisecond; a value that does not parse is left as
+  it is. A restriction stated twice in two spellings of one instant becomes one row. Every source
+  whose rows moved has its stated-band frontier set to `''`, recomputing the whole active period.
+  Each `WHERE` matches only a row whose spelling moves, so a canonical database is left byte for
+  byte as it was; it costs the pre-migration backup. 100,000 canonical prompts: 425 ms including the
+  backup; 100,000 offset-bearing ones: 1,067 ms.
+- **The open question on export.** `export` publishes `started_at`, `completed_at` and a
+  restriction's `observed_at`. The export schema leaves those values unconstrained and every frozen
+  corpus is canonical, so no document changes for canonical data; for a history that held another
+  spelling, the exported value is the same instant in the canonical spelling. That is a spelling,
+  not a contract change.
+- **Real data.** On a copy of a real Claude Code history (1,065 prompts, 1,031 completions, 7
+  restrictions stored; 178,279 `timestamp` fields in the JSONL) not one instant was non-`Z` or
+  without millisecond precision. Codex and OpenCode adapters and the OpenCode plugin already wrote
+  `toISOString()`. The defect needed a spool line or a client writing another spelling, which is why
+  it stayed latent.
+
+Covered by `packages/cli/test/instants.test.js`, written first and red before the fix, and
+mutation-checked: 16 mutants of the ingestion and the migration, all killed.

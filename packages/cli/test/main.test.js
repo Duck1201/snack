@@ -41,7 +41,7 @@ test("config set initializes storage before returning a stable JSON envelope", a
   assert.equal(document.data.value, true);
   assert.deepEqual(
     document.data.storage.applied,
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
   );
   // Every other payload SNACK publishes is snake_case. This one carried the storage layer's own
   // JavaScript names straight into the document, so a consumer had to know which command it was
