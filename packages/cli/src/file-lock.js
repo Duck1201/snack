@@ -1,4 +1,5 @@
 import { chmod } from "node:fs/promises";
+import { getSystemErrorName } from "node:util";
 
 import lockfile from "proper-lockfile";
 
@@ -16,15 +17,42 @@ import lockfile from "proper-lockfile";
  * this throws whatever proper-lockfile threw.
  *
  * @param {string} target
+ * @param {{ update?: number, fs?: object }} [testing] a shorter refresh interval and an fs, for tests only
  * @returns {Promise<() => Promise<void>>}
  */
-export async function acquirePrivateLock(target) {
+export async function acquirePrivateLock(target, testing = {}) {
+  const state = { releasing: false };
   const release = await lockfile.lock(target, {
     realpath: false,
     stale: 120_000,
-    update: 10_000,
+    update: testing.update ?? 10_000,
+    ...(testing.fs ? { fs: testing.fs } : {}),
     retries: { retries: 20, minTimeout: 50, maxTimeout: 250 },
+    // proper-lockfile 4.1.2 refreshes the lock on a timer whose `stat` does not check whether the
+    // lock was released while it was in flight. After a long synchronous operation that timer is
+    // overdue and fires as the operation releases, so the `stat` meets the directory `release`
+    // removed and the library reports the lock compromised. Only that report — the refresh's `stat`
+    // finding no directory while this process releases — is ignored; a lock another process took
+    // while this one held it still throws, as the library's default does.
+    onCompromised: (error) => {
+      const raced = /** @type {NodeJS.ErrnoException} */ (error);
+      if (state.releasing && raced.syscall === "stat" && isEnoent(raced.errno)) return;
+      throw error;
+    },
   });
   await chmod(`${target}.lock`, 0o700);
-  return release;
+  return async () => {
+    state.releasing = true;
+    await release();
+  };
+}
+
+/** @param {number | undefined} errno */
+function isEnoent(errno) {
+  if (typeof errno !== "number") return false;
+  try {
+    return getSystemErrorName(errno) === "ENOENT";
+  } catch {
+    return false;
+  }
 }
