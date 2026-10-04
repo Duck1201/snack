@@ -89,7 +89,11 @@ count of refused records surfaces in `snack sync` as `rejected_invalid` rather t
 
 Each append takes a writer lock for the milliseconds it lasts. A lock older than two minutes was
 abandoned, so the plugin and `snack sync` take it over whatever process id it names, and
-`snack doctor` warns with `spool_lock:<alias>` while one is there.
+`snack doctor` warns with `spool_lock:<alias>` while one is there. The takeover is atomic: two
+writers that judge the same lock abandoned at once never both hold it, and a failed append is
+truncated back only by a writer that still holds the lock. Age is read from the wall clock, so a
+clock jump of more than two minutes, or a laptop resumed mid-append, can take over a lock still
+held; that costs at most the event being written.
 
 Segments are removed only after **every configured source has committed past them**. A cursor that
 advanced without its transaction committing would silently drop history, so cursors move only inside

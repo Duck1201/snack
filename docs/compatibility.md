@@ -597,7 +597,28 @@ refused and counted instead of replacing what was stored.** Ingestion refusing d
 reconcile is the documented fail-closed rule (`docs/architecture/data.md` §9, rule 2). The refused
 observation is counted in `sync`'s existing `rejected_invalid` and reported by `doctor`'s existing
 `source_ingestion:<alias>` warning; no field, reason code or exit code is added, and a sync with no
-such observation is byte-identical. A changed `parser_version` still re-reads deliberately.
+such observation is byte-identical. A changed `parser_version` still re-reads deliberately. The
+refusal is decided before anything of the observation is applied: a refused reading adds no
+restriction and cannot move the stored outcome to `restricted`, and contributes only provenance —
+which installation reported the prompt, filled only where none was recorded, and that the spool saw
+it. An identical reading at the stored revision still unions its restrictions, which re-inserts rows
+already stored.
+
+**A Claude Code revision moves with every record appended to a turn.** A Claude revision names a
+turn's newest record — its millisecond, then its uuid — and broke a tie inside one millisecond by
+uuid alone, so a record Claude Code appended in that millisecond under a uuid that sorts lower (a
+usage slice, or the terminal) added content without moving the revision, and the guard above
+refused the turn until a later record arrived. A real history held 42 such same-millisecond pairs.
+The tie is now broken by append order: the revision still names the highest uuid of the newest
+millisecond, followed by `+NNNNNN`, the number of that millisecond's records appended after it (a
+record in a subagent transcript counts as after). Where nothing was appended after it the revision
+is byte for byte what earlier releases wrote, so no `parser_version` moves — a bump would have
+re-read every stored Claude prompt as an update. On a real history (1,079 turns), 18 turns take a
+suffixed revision and are counted `updated` once, with identical slices, tokens, restrictions and
+outcomes, on the next `sync --full` or the next write to their file; nothing is refused. The
+revision is internal: no envelope, payload or export column carries it. A session copied whole into
+another file under a new `sessionId` keeps its uuids and times, and so its revision: it is stored
+once, from the file listed first, and the copy is refused as above on each read that reaches it.
 
 **Client instants are stored in one canonical spelling.** `1.6.1` adds migration
 `020_canonical_instants` — data only, no schema change — which rewrites the instants a client
@@ -607,7 +628,12 @@ and restriction `observed_at` are byte-identical for canonical data, which is ev
 by a supported client; a history that held another spelling exports the same instant in the
 canonical spelling. The observation hash is taken over the observation as delivered, so the
 migration produces no false `updated` on the next `sync`. An instant that does not parse is now
-refused as `rejected_invalid`, a count `sync` already reported.
+refused as `rejected_invalid`, a count `sync` already reported — and so is one that names no zone:
+storage holds an instant to the rule the spool contract's `date-time` already states, RFC 3339 with
+`Z` or an offset, where `Date.parse` read a date-time without one in the machine's local time zone.
+Every timestamp in a real Claude Code (181,649) and Codex (23,383) history names its zone, and the
+Codex and OpenCode adapters and the plugin write `toISOString`. Migration `020` leaves such a stored
+value as it is, as it does any value that does not parse.
 
 **The error envelope's `command` names the command after a leading `--json`.** `--json` is a
 program-level option, and Commander accepts it on either side of the command. Since `0.9`, every
@@ -636,8 +662,11 @@ status code; `spool-event-v1` lets `session_idle` say only `success`, and a rest
 structured evidence the retry does not carry. So the turn stays provisional in the spool and
 backfill, which reads how it ended, finalizes it; a person who runs live capture without backfill
 keeps such a turn provisional. Only the status `type` is read, never its message. Appends start on
-a fresh line when the segment ends mid-line and a failed write is truncated back, so a broken line
-no longer swallows the next event.
+a fresh line when the segment ends mid-line and a failed write is truncated back — only while the
+writer still holds its lock, so a writer whose lock was taken over never cuts off the line its
+successor wrote — so a broken line no longer swallows the next event. The writer now lives in
+`src/spool-writer.js` beside `src/plugin.js`, inside the package's `files`; the package's exports
+are unchanged.
 
 **`sync` keeps a recorded exclusion over the plugin's idle `success` without reporting a
 conflict.** Plugins up to `1.0.4` wrote OpenCode's `session.idle` after a cancelled prompt as
@@ -653,10 +682,18 @@ to, so only the false issue goes. Any other outcome disagreement is still record
 holds `.writer.lock` for the milliseconds one append takes. A lock whose process id still answered
 `kill(pid, 0)` — reused, or another user's — used to block `sync` from closing the open segment
 indefinitely, silently. A lock older than two minutes (`STALE_SPOOL_LOCK_MS`) is now removed whatever
-process id it names, by the plugin and by `sync`, and the lock is taken in the same call. `doctor`
-reports the new check id `spool_lock:<alias>`, a `warn`, only while such a lock is present; check
-ids are an open set in `doctor.schema.json`, as they were when `sqlite_driver` and the Codex checks
-were added, and no existing check changes its verdict.
+process id it names, by the plugin and by `sync`, and the lock is taken in the same call. Two
+writers can judge one lock abandoned at once, so the takeover is atomic: the lock is renamed to a
+name of the taker's own, only a taker that moved the very lock it judged (same inode, mtime and
+token) proceeds, and one that moved a lock another writer had just taken puts it back with `link`,
+which never replaces a lock created since. Age is read against the wall clock, so a clock jump of
+more than two minutes, or a machine resumed from suspend in the middle of an append, can take over a
+lock still held; locks are held for milliseconds, so that is accepted, and the takeover above keeps
+it from leaving two holders. `doctor` reports the new check id `spool_lock:<alias>`, a `warn`, only
+while such a lock is present, and `spool_lock:_pending` for the directory that holds events bound to
+no source, which `sync` reads and takes over the same way; check ids are an open set in
+`doctor.schema.json`, as they were when `sqlite_driver` and the Codex checks were added, and no
+existing check changes its verdict.
 
 **The spool contract does not move.** `spool-event-v1` is unchanged, and
 `packages/cli/schemas/spool-event.schema.json` and `packages/opencode/schemas/spool-event.schema.json`
@@ -670,7 +707,7 @@ it.
 
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`. No flag, exit code, reason code or
-configuration key is added; `doctor` gains the one check id above. `npm run upgrade:smoke` upgrades
+configuration key is added; `doctor` gains the one check id family above. `npm run upgrade:smoke` upgrades
 a database the published `1.6.0` wrote, applying `020`.
 
 ## Upgrading from 0.6+

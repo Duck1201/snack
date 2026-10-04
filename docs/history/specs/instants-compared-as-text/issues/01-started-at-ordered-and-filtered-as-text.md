@@ -91,3 +91,15 @@ Fixed in `1.6.1` (commit 072809e) by normalizing at ingestion and rewriting what
 
 Covered by `packages/cli/test/instants.test.js`, written first and red before the fix, and
 mutation-checked: 16 mutants of the ingestion and the migration, all killed.
+
+**Review follow-up, before release: an instant must name its zone.** `canonicalInstant` used
+`Date.parse` alone, which reads a date-time without an offset (`2026-01-02T04:00:00`) in the
+machine's local time zone and accepts spellings no client writes (`2026-01-02`, RFC 2822 prose), so
+the same line could be stored as different instants on two machines. It now accepts only an RFC 3339
+date-time with `Z` or an offset — the rule the spool contract's `date-time` format already states —
+and refuses anything else as `rejected_invalid`. Checked against real data first: all 181,649
+`timestamp` fields of a 1.1 GB Claude Code history and all 23,383 of a Codex history are
+`YYYY-MM-DDTHH:MM:SS.sssZ`; the Codex and OpenCode adapters and the plugin write `toISOString`.
+Migration `020` leaves a stored value without a zone as it is, as it does any value that does not
+parse. Test: `instants.test.js` ("an instant that names no offset is refused, not read in the local
+time zone"); mutation-checked by restoring the lenient parse and by making the zone optional.

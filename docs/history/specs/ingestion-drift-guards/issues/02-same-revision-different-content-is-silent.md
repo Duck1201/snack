@@ -84,3 +84,57 @@ revisions accept a later write but refuse a lossy one; any different reading ref
 revision names content; another domain is not the same revision) and `main.test.js` (a Claude turn
 whose subagent transcript disappears keeps its 3 slices through `sync --full`, and `doctor` warns).
 Seven guard mutations were each killed by at least one test.
+
+### Review of the fix (`1.6.1`, before release)
+
+Two defects in the fix, both fixed before `1.6.1` shipped.
+
+**A refused reading still applied its restrictions.** The guard ran after the union of
+restrictions and spool provenance, so an observation it refused could add a `rate_limit`
+restriction and flip the stored outcome to `restricted` — the heaviest signal the forecast reads,
+from a reading SNACK had just declined to trust. The guard is now decided before anything of the
+observation is applied. A refused reading contributes provenance only: the installation that
+reported it, filled only where none was recorded, and the spool's `seen_spool` flag (0 → 1) with
+SNACK's own clock. None of that is something the observation says about the prompt, and none moves
+a count, a slice or an outcome. The equal-hash path still unions: nothing in that reading differs
+from what is stored, so the union re-inserts rows already there (`INSERT OR IGNORE`) and sets an
+outcome that is already `restricted`. Tests: `storage.test.js` ("a refused same-revision reading
+applies none of its restrictions", "an identical reading at the stored revision still unions its
+restrictions").
+
+**A Claude Code turn written in one millisecond could be refused for good.** The Claude revision is
+`<ms>:<uuid>` of the turn's newest record, a tie inside one millisecond broken by uuid
+`localeCompare`. A record appended later in that millisecond under a uuid that sorts lower — a usage
+slice, or the terminal — added content without moving the revision, so the next `sync` refused the
+turn as `same_revision_content_conflict` and kept the stale row until another record arrived. The
+real history holds 42 same-millisecond pairs written in that order. The tie is now broken by append
+order: the revision still names the highest uuid of the newest millisecond and appends `+NNNNNN`,
+the number of that millisecond's records written after it in the same file (a record in a subagent
+transcript, which has no order against the session file, counts as after). A higher uuid in the
+millisecond renames the revision and sorts later; a lower one grows the suffix. Storage compares the
+tail with `localeCompare`, under which `<uuid>+000001` sorts after `<uuid>`, so every append moves
+the revision forward.
+
+*No `parser_version` bump.* Where nothing was appended after the named record — every turn without
+a tie, and every tie written in uuid order — the revision is byte for byte what `1.6.0` wrote, so
+the stored hash still matches and the turn is `unchanged`. A bump would have sent every stored
+Claude prompt through the update path once. Proof on a real history (1,079 turns, 1,066 prompts):
+a database written by the pre-fix tree, then synced by the fixed one, reads `updated 0` on an
+incremental `sync` (no file moved), `updated 18, unchanged 1,061, rejected_invalid 0` on the next
+`sync --full` — the 18 turns whose revision gains a suffix, with slice count (76,053), token total,
+restrictions (7) and outcomes identical before and after — and `unchanged 1,079` on the one after.
+
+*A session copied whole into another file under a new `sessionId`* keeps its uuids and times, and
+so its revision, while its observation hash differs. It is one prompt: stored once, from the file
+listed first, its usage counted once; the copy is refused as `same_revision_content_conflict` on
+each read that reaches it and moves nothing. Claude Code's own copies on a real history (7 prompt ids
+read from more than one file) all carry different revisions, so none is refused there.
+
+Tests: `claude-adapter.test.js` ("a Claude revision is the one earlier releases wrote unless a record
+was appended after it in its millisecond", "a subagent record written in the turn's newest
+millisecond moves the revision") and `main.test.js` ("the terminal / a usage slice written in the
+same millisecond under a smaller uuid advances a Claude turn", "a Claude session copied into another
+file under a new session id is stored once"). Mutation-checked: restoring the uuid-only tie, naming
+the last-appended record without a suffix, an unpadded or unconditional suffix, ignoring line order
+or cross-file records, applying the union before the guard, and skipping the union on the equal-hash
+path are each killed.

@@ -590,9 +590,13 @@ Four defects, none observed on a real history, all closing specs that `1.3.0`, `
   a real 1.1 GB history — under no PLAN budget ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 01);
 - a prompt re-read at its stored revision, by the same parser version, with different content is
   refused and counted in `rejected_invalid` instead of replacing the stored usage — the storage half
-  of the `1.3.0` Codex P1 ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 02);
+  of the `1.3.0` Codex P1 ([ingestion-drift-guards](./specs/ingestion-drift-guards/spec.md) 02). A
+  refused reading applies none of its restrictions, and a Claude Code revision breaks a
+  same-millisecond tie by append order, so a record appended in the newest millisecond under a lower
+  uuid moves it instead of being refused;
 - client instants are stored in the canonical UTC spelling, and migration `020` rewrites those
-  already stored, so no window or frontier compared as text sorts them out of time order
+  already stored, so no window or frontier compared as text sorts them out of time order; an instant
+  that names no zone is refused rather than read in local time
   ([instants-compared-as-text](./specs/instants-compared-as-text/spec.md));
 - the error envelope's `command` names the command after a leading `--json` instead of `snack`
   ([envelope-command-after-leading-flag](./specs/envelope-command-after-leading-flag/spec.md)). The
@@ -616,7 +620,8 @@ from the user message `chat.message` carries or from its own `chat.params` only.
   previous one's buffered start, an out-of-range host timestamp no longer writes an unreadable line,
   and `null` plugin options no longer throw at initialization;
 - a spool writer lock older than two minutes is taken over by the plugin and by `sync` whatever
-  process id it names, and `doctor` reports one with `spool_lock:<alias>`;
+  process id it names, atomically, so two takers never both hold it, and `doctor` reports one with
+  `spool_lock:<alias>` or `spool_lock:_pending`;
 - `sync` keeps the exclusion OpenCode's database records over a plugin `success` for the same turn
   without recording an `incomparable_outcome_conflict`, which every cancellation captured by a plugin
   up to `1.0.4` raised on every `sync`.

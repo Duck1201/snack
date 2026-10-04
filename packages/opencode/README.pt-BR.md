@@ -90,7 +90,12 @@ sumir.
 
 Cada acréscimo segura um lock de escrita pelos milissegundos que dura. Um lock com mais de dois
 minutos foi abandonado, então o plugin e o `snack sync` o assumem seja qual for o id de processo que
-ele nomeia, e o `snack doctor` avisa com `spool_lock:<alias>` enquanto houver um.
+ele nomeia, e o `snack doctor` avisa com `spool_lock:<alias>` enquanto houver um. A tomada é
+atômica: dois escritores que julgam o mesmo lock abandonado ao mesmo tempo nunca o seguram juntos, e
+um acréscimo que falhou só é truncado de volta por um escritor que ainda segura o lock. A idade é
+lida no relógio de parede, então um salto de relógio de mais de dois minutos, ou um notebook que
+volta da suspensão no meio de um acréscimo, pode tomar um lock ainda em uso; isso custa no máximo o
+evento sendo escrito.
 
 Segmentos só são removidos depois que **toda fonte configurada commitou além deles**. Um cursor que
 avançasse sem sua transação commitar descartaria histórico em silêncio, então cursores só se movem
