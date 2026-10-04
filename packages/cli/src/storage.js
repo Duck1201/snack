@@ -747,7 +747,45 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             )
             .run(timestamp, existing.id);
         }
+        // Whether this reading is refused is decided before anything of it is applied. The guard
+        // below used to run after the union of restrictions, so a reading it refused could still
+        // add a rate-limit refusal and flip the stored outcome to `restricted` -- the heaviest
+        // signal there is, from a reading SNACK had just declined to trust. A refused reading now
+        // contributes only the provenance recorded above: which installation it came from, filled
+        // only where none was recorded, and that the prompt was seen through the spool, and when
+        // -- a flag that only goes from 0 to 1, stamped with SNACK's own clock. None of it is
+        // something the observation says about the prompt, and none moves a count, slice or
+        // outcome. The equal-hash reading still unions: nothing in it differs from what is stored,
+        // so the union re-inserts rows already there.
+        const keptAsOlder =
+          typeof existing === "object" &&
+          existing !== null &&
+          "source_revision" in existing &&
+          typeof existing.source_revision === "string" &&
+          "completion" in existing &&
+          ((existing.completion === "completed" && observation.completion === "provisional") ||
+            (existingRevisionDomain === observation.revision_domain &&
+              existing.completion === observation.completion &&
+              compareRevision(observation.revision, existing.source_revision) < 0));
+        const unchangedReading =
+          typeof existing === "object" &&
+          existing !== null &&
+          "source_revision" in existing &&
+          existing.source_revision === observation.revision &&
+          "observation_hash" in existing &&
+          existing.observation_hash === observationHash;
+        const sameRevisionConflict =
+          !keptAsOlder &&
+          !unchangedReading &&
+          storedRow !== null &&
+          typeof storedRow.id === "number" &&
+          storedRow.revision_domain === observation.revision_domain &&
+          storedRow.source_revision === observation.revision &&
+          storedRow.parser_version === observation.parser_version &&
+          ((options.revisionIdentifiesContent ?? true) ||
+            losesStoredSlice(database, storedRow.id, observation));
         if (
+          !sameRevisionConflict &&
           observation.restrictions.length > 0 &&
           typeof existing === "object" &&
           existing !== null &&
@@ -775,40 +813,15 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
             )
             .run(existing.id);
         }
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          "source_revision" in existing &&
-          typeof existing.source_revision === "string" &&
-          "completion" in existing &&
-          ((existing.completion === "completed" && observation.completion === "provisional") ||
-            (existingRevisionDomain === observation.revision_domain &&
-              existing.completion === observation.completion &&
-              compareRevision(observation.revision, existing.source_revision) < 0))
-        ) {
+        if (keptAsOlder) {
           counts.unchanged += 1;
           continue;
         }
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          "source_revision" in existing &&
-          existing.source_revision === observation.revision &&
-          "observation_hash" in existing &&
-          existing.observation_hash === observationHash
-        ) {
+        if (unchangedReading) {
           counts.unchanged += 1;
           continue;
         }
-        if (
-          storedRow !== null &&
-          typeof storedRow.id === "number" &&
-          storedRow.revision_domain === observation.revision_domain &&
-          storedRow.source_revision === observation.revision &&
-          storedRow.parser_version === observation.parser_version &&
-          ((options.revisionIdentifiesContent ?? true) ||
-            losesStoredSlice(database, storedRow.id, observation))
-        ) {
+        if (sameRevisionConflict) {
           // The same revision, read by the same parser, with different content. A source that
           // re-emits a revision claims nothing changed (docs/architecture/data.md §9, rule 2), so
           // content that differs under that claim is either a client rewriting history without
@@ -828,9 +841,9 @@ export function storeObservations(databaseFile, source, batch, now, options = {}
           // slice already stored. Rows are never deleted by such a write, and a deletion that
           // lowers the revision is already kept as `unchanged` above.
           //
-          // Restrictions and spool provenance were already unioned above, as for any re-read
-          // revision. One row per occurrence, as the collision guard records them; the issue holds
-          // a reason and a path, never the prompt's identity.
+          // Only provenance was recorded above; the restrictions of a refused reading are not
+          // applied (see `sameRevisionConflict`). One row per occurrence, as the collision guard
+          // records them; the issue holds a reason and a path, never the prompt's identity.
           database
             .prepare(
               `INSERT INTO ingestion_issue

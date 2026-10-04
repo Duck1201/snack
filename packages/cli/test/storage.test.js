@@ -1856,6 +1856,78 @@ test("a prompt re-read at the same revision with different content keeps what wa
   assert.equal(readSpoolIssueCount(databaseFile, alias), 1);
 });
 
+test("a refused same-revision reading applies none of its restrictions", async () => {
+  // The guard used to run after restrictions were unioned onto the stored prompt, so an observation
+  // it refused could still add a rate-limit refusal and flip the stored outcome to `restricted` --
+  // the heaviest signal the forecast reads, from a reading SNACK had just declined to trust.
+  const { databaseFile, result } = await storeThenReplace(
+    slicedObservation({
+      usage_slices: regressedSlices(),
+      outcome: "restricted",
+      restrictions: [
+        {
+          class: "rate_limit",
+          source_code: "http_429",
+          observed_at: "2026-01-02T01:00:01.000Z",
+          classifier_version: "opencode-error-v1",
+          provenance: "backfill",
+        },
+      ],
+    }),
+  );
+
+  assert.equal(result.rejected_invalid, 1);
+  assert.equal(readOutcome(databaseFile), "success");
+  assert.equal(readRestrictionCount(databaseFile), 0);
+  assert.deepEqual(readStoredUsage(databaseFile), { slices: 3, tokens: 435, revision: "5" });
+});
+
+test("an identical reading at the stored revision still unions its restrictions", async () => {
+  // Nothing differs on the equal-hash path, so the union there can only re-insert what the first
+  // reading stored: the restriction stays one row and the outcome stays `restricted`.
+  const restricted = slicedObservation({
+    outcome: "restricted",
+    restrictions: [
+      {
+        class: "rate_limit",
+        source_code: "http_429",
+        observed_at: "2026-01-02T01:00:01.000Z",
+        classifier_version: "opencode-error-v1",
+        provenance: "backfill",
+      },
+    ],
+  });
+  const { paths } = await makeStorage();
+  await initializeDatabase(paths, { applicationVersion: "1.6.0", now });
+  seedSource(paths.databaseFile);
+  const source = configuredSource(paths.databaseFile);
+  const cursor = cursorAt(2000);
+  storeObservations(paths.databaseFile, source, { observations: [restricted], cursor }, now);
+  const result = storeObservations(
+    paths.databaseFile,
+    source,
+    { observations: [restricted], cursor },
+    now,
+  );
+
+  assert.equal(result.unchanged, 1);
+  assert.equal(result.rejected_invalid, 0);
+  assert.equal(readOutcome(paths.databaseFile), "restricted");
+  assert.equal(readRestrictionCount(paths.databaseFile), 1);
+});
+
+/** @param {string} databaseFile */
+function readRestrictionCount(databaseFile) {
+  const database = new Database(databaseFile, { readonly: true });
+  try {
+    return /** @type {{count: number}} */ (
+      database.prepare("SELECT COUNT(*) AS count FROM restriction_observation").get()
+    ).count;
+  } finally {
+    database.close();
+  }
+}
+
 test("a later revision of a stored prompt still replaces it, and records no conflict", async () => {
   const { databaseFile, result } = await storeThenReplace(
     slicedObservation({ revision: "6", usage_slices: regressedSlices() }),
