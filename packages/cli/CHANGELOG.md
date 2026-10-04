@@ -2,15 +2,6 @@
 
 ## 1.6.0
 
-### Patch Changes
-
-- A long command no longer exits `1` after it has finished. `proper-lockfile` refreshes a held
-  storage lock on a timer, and an operation that held the event loop past that refresh — a large
-  backfill on a slower machine — let the overdue refresh fire as the lock was being released; the
-  library then called the lock compromised and threw from a timer, so `sync --full` printed `ok` and
-  still exited `1`. Every earlier release could do this; macOS CI caught it. A lock this process is
-  releasing is no longer treated as compromised.
-
 ### Minor Changes
 
 - 14a87bc: `snack dash`: every capacity source on one live, full-screen view, and two longer recency
@@ -111,6 +102,15 @@
   100,000-prompt histories written by `1.5.0` the first `sync` after upgrading took 1.2-1.4 s,
   backup included, and the database grew 8 KB. `npm run upgrade:smoke` now upgrades a database
   written by the published `1.5.0` as well.
+
+### Patch Changes
+
+- A long command no longer exits `1` after it has finished. `proper-lockfile` refreshes a held
+  storage lock on a timer, and an operation that held the event loop past that refresh — a large
+  backfill on a slower machine — let the overdue refresh fire as the lock was being released; the
+  library then called the lock compromised and threw from a timer, so `sync --full` printed `ok` and
+  still exited `1`. Every earlier release could do this; macOS CI caught it. A lock this process is
+  releasing is no longer treated as compromised.
 
 ## 1.5.0
 
