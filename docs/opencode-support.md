@@ -12,6 +12,16 @@ and a `0.1.x` plugin still writes a spool this CLI reads.
 | `1.18.1` | `oc-sqlite-msgpart-v1` | Supported | Backfill only |
 | `1.18.9` | `oc-sqlite-msgpart-v1` | Supported | Backfill only |
 | `1.18.10` | `oc-sqlite-msgpart-v1` | Supported | Supported by `spool-event-v1` |
+| `1.18.15` | `oc-sqlite-msgpart-v1` | Supported | Supported by `spool-event-v1`, with the plugin SNACK `1.6.1` ships (`1.0.5`) |
+
+The `1.18.15` row rests on two observations made for SNACK `1.6.1`, not on a new fixture: the family
+is the one the other rows name, so the fingerprint and its fixtures are unchanged. **Backfill:** the
+maintainer's real OpenCode `1.18.15` database (1.3 GB) was read by that release's tree — whose
+OpenCode adapter is byte-identical to the one shipped — with fingerprint `oc-sqlite-msgpart-v1`
+supported, `sync` reporting 234 read and 0 rejected, and `doctor` passing. **Live capture:** a real
+`opencode serve` `1.18.15` was driven against a local OpenAI-compatible stub with the plugin loaded;
+the defects it found are the subject of the section below, and plugins before `1.0.5` mis-route and
+mis-finalize on this host as it describes.
 
 Support is determined by a structural fingerprint, not by the version string. The fingerprint
 checks the required `session`, `message`, and `part` tables, columns, foreign keys, read indexes,
@@ -46,16 +56,17 @@ the plugin never opens SQLite or throws capture failures into OpenCode. Unknown 
 versions are rejected with sanitized diagnostics.
 
 The current plugin contract uses `chat.message`, `chat.params`, `session.error`, `session.idle`, and
--- from `1.6.1`, for its `type` alone -- `session.status`.
+— from `1.6.1`, for its `type` alone — `session.status`.
 Its event fixtures use the documented plugin hook surface and the structured `APIError.data.statusCode`
 form already validated by the supported SQLite source family. Unknown event/schema fields are
 rejected without retaining the raw payload.
 
 `chat.params` is read for one reason: OpenCode declares `model` **optional** on `chat.message` and
-does not send it on `1.18.10`. Routing a spool segment needs the provider, and a segment written to
-`_pending` is never attributed and never revisited — so a prompt whose provider is not yet known is
-held until `chat.params`, which carries it on the same turn and is not optional. A prompt whose
-provider never arrives is released to `_pending` at its terminal event.
+does not send it on `1.18.10` or `1.18.15`. Routing a spool segment needs the provider, and a segment
+written to `_pending` is never attributed and never revisited — so a prompt whose provider is not yet
+known is held until the prompt's own `chat.params`, which carries it on the same turn and is not
+optional. A prompt whose provider never arrives is released to `_pending` at its terminal event, or
+when the next prompt of its session replaces it.
 
 ### What OpenCode `1.18.15` changed under live capture
 
@@ -69,7 +80,7 @@ fixed in the plugin shipped with SNACK `1.6.1`:
   with `small_model`, and that `chat.params` (agent `title`) arrives before the `build` one. Until
   `1.6.1` the plugin routed on the first `chat.params` it saw, so a `small_model` on another
   provider filed every session's first prompt under that provider, as a success. `chat.params`
-  now routes a prompt only when its agent is the prompt's and its `message.id` is the prompt's;
+  no longer routes a prompt when it names another agent or another `message.id` than the prompt's;
   `title`, `compaction` and `summary` never route one.
 - **`chat.params` names the model `id`, not `modelID`.** The `model` there is the provider's model
   record, so `model` was `null` on every live event before `1.6.1`.
@@ -82,7 +93,7 @@ fixed in the plugin shipped with SNACK `1.6.1`:
   the turn ended, finalizes it. The retry message is never stored or read beyond its `type`.
 - **A cancelled prompt emits `session.error` (`MessageAbortedError`) and then `session.idle` twice**,
   and `/shell` and `/summarize` emit further idles after a prompt has finished. The plugin now
-  writes one terminal event per prompt -- `session_error`, `excluded`, for the cancellation -- and
+  writes one terminal event per prompt — `session_error`, `excluded`, for the cancellation — and
   ignores later ones. Spools written by earlier plugins carry a `success` after the cancellation;
   `sync` keeps the exclusion the database records and no longer reports an
   `incomparable_outcome_conflict` for it.

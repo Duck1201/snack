@@ -576,9 +576,11 @@ validator. `storage.test.js` upgrades every published schema level, `1.5.0`'s in
 
 ## What 1.6.1 fixes, and why it is a patch
 
-Four defect fixes, none of which removes, renames, or changes the meaning of anything documented.
-Three are ingestion guards found by the `1.3.0` and `1.5.0` reviews and by the `1.6.0` build; the
-fourth corrects a value of the frozen envelope that was never inside its documented meaning.
+Defect fixes, none of which removes, renames, or changes the meaning of anything documented. Three
+are ingestion guards found by the `1.3.0` and `1.5.0` reviews and by the `1.6.0` build; one corrects
+a value of the frozen envelope that was never inside its documented meaning; the rest come from a
+bug hunt against a real OpenCode `1.18.15` and fix live capture — in the plugin, which moves to
+`1.0.5`, and in how the CLI reads its spool.
 
 **The Claude Code reader holds every record to its family, not only the first 200 of each file.**
 `1.6.1` tightens the reader's fail-closed rule: drift anywhere in a transcript yields
@@ -619,10 +621,57 @@ rejected positional argument. The schema constrains `command` only to a non-empt
 routing skips error documents, so every frozen corpus still validates unchanged. The `1.6.0`
 section's parenthetical about `command: "snack"` describes behaviour this release removes.
 
+**The capture plugin moves to `1.0.5`, and its live capture changes what it states on OpenCode
+`1.18.15`.** The plugin's spool is a contract both packages read, so what it now writes is recorded
+here; the full account of the host's behaviour is in
+[opencode-support.md](./opencode-support.md#what-opencode-11815-changed-under-live-capture).
+A prompt is routed from the user message `chat.message` carries, or from its own `chat.params`;
+the `title`, `compaction` and `summary` calls never route one, so a session's first prompt is no
+longer filed under the provider of `small_model`. Live events carry the model name instead of
+`null`. Each prompt gets at most one terminal event: a cancellation is one `session_error` with
+outcome `excluded`, and the idles OpenCode emits after it, or after `/shell` and `/summarize`, write
+nothing. **A turn OpenCode retried writes no terminal event at all.** OpenCode `1.18.15` retries a
+429 itself and reports it only as `session.status` `retry`, with the provider's free text and no
+status code; `spool-event-v1` lets `session_idle` say only `success`, and a restriction needs the
+structured evidence the retry does not carry. So the turn stays provisional in the spool and
+backfill, which reads how it ended, finalizes it; a person who runs live capture without backfill
+keeps such a turn provisional. Only the status `type` is read, never its message. Appends start on
+a fresh line when the segment ends mid-line and a failed write is truncated back, so a broken line
+no longer swallows the next event.
+
+**`sync` keeps a recorded exclusion over the plugin's idle `success` without reporting a
+conflict.** Plugins up to `1.0.4` wrote OpenCode's `session.idle` after a cancelled prompt as
+`success`, and every such prompt raised an `incomparable_outcome_conflict` on every `sync`, with a
+`doctor` warning. A plugin `success` on the `opencode-plugin-v1` revision domain, met by an
+`excluded` and `completed` turn from the database, now resolves to the exclusion in either arrival
+order: backfill arriving second finalizes the record as it finalizes any live one, and a plugin
+`success` arriving second is counted `unchanged`. The exclusion is what the conflict already resolved
+to, so only the false issue goes. Any other outcome disagreement is still recorded. No reason code moves:
+`incomparable_outcome_conflict` keeps its meaning and is simply no longer raised for this pair.
+
+**An abandoned spool writer lock is taken over, and `doctor` says so while it is there.** A writer
+holds `.writer.lock` for the milliseconds one append takes. A lock whose process id still answered
+`kill(pid, 0)` — reused, or another user's — used to block `sync` from closing the open segment
+indefinitely, silently. A lock older than two minutes (`STALE_SPOOL_LOCK_MS`) is now removed whatever
+process id it names, by the plugin and by `sync`, and the lock is taken in the same call. `doctor`
+reports the new check id `spool_lock:<alias>`, a `warn`, only while such a lock is present; check
+ids are an open set in `doctor.schema.json`, as they were when `sqlite_driver` and the Codex checks
+were added, and no existing check changes its verdict.
+
+**The spool contract does not move.** `spool-event-v1` is unchanged, and
+`packages/cli/schemas/spool-event.schema.json` and `packages/opencode/schemas/spool-event.schema.json`
+are unchanged and still byte-identical: every event `1.0.5` writes is one `1.0.4` could have
+written, so a `1.0.4` plugin and a `1.6.1` CLI, or a `1.0.5` plugin and an earlier CLI, interoperate
+in both directions. The plugin's source changed and a published version is immutable, so it takes
+`1.0.5`; `scripts/sync-plugin-pin.mjs`, run by `npm run release:prepare`, moves the CLI's
+`setup opencode --install-plugin` pin with it. `doctor` reports a registration still pinned at
+`1.0.4` as outdated, not incompatible, and re-running `snack setup opencode --install-plugin` moves
+it.
+
 **No version moves.** Envelope `schema_version` 2, export 2, configuration 1, spool 1.
 `PREDICTION_POLICY.version` stays `stage5-prediction-v2`. No flag, exit code, reason code or
-configuration key is added. `npm run upgrade:smoke` upgrades a database the published `1.6.0` wrote,
-applying `020`.
+configuration key is added; `doctor` gains the one check id above. `npm run upgrade:smoke` upgrades
+a database the published `1.6.0` wrote, applying `020`.
 
 ## Upgrading from 0.6+
 
@@ -636,8 +685,9 @@ npm install -g --allow-scripts=better-sqlite3 @snack-ai/cli
 ```
 
 The flag lets npm 12 build the SQLite driver; without it the install succeeds and the driver is
-missing. If the OpenCode live-capture plugin is installed, take it too. Its behaviour has not changed since
-`0.1.2`; `0.1.3` republishes the corrected spool schema described below.
+missing. If the OpenCode live-capture plugin is installed, take it too. Its behaviour did not change from
+`0.1.2` until `1.0.5`, which SNACK `1.6.1` ships ([1.6.1](#what-161-fixes-and-why-it-is-a-patch));
+`0.1.3` republishes the corrected spool schema described below.
 
 ```bash
 npm install -g @snack-ai/opencode

@@ -344,6 +344,8 @@ Hybrid ingestion depends on deterministic field ownership and revision handling:
 
 For incomparable observations, an unknown field may be filled and byte-for-byte-equivalent approved values may be accepted. Explicit restrictions are unioned. Any other material conflict becomes unknown/excluded for the affected metric or outcome and creates a sanitized ingestion issue; SNACK never chooses by arrival time, path preference alone, `max`, or addition.
 
+One pair is not a material conflict (from `1.6.1`): an outcome of `success` from the OpenCode plugin (revision domain `opencode-plugin-v1`) against an `excluded`, `completed` outcome read from OpenCode's database. OpenCode emits `session.idle` after a cancelled prompt, an error or a 429 it retried, as well as after a success, and plugins up to `1.0.4` wrote every idle as `success`; that reading is not evidence against the database recording that the turn ended without one. The pair resolves to `excluded` in either arrival order — what the conflict rule would give — and records no ingestion issue. Every other outcome disagreement still does.
+
 Field-level merge policy:
 
 | Field group | Plugin contribution | Backfill contribution | Conflict rule |
