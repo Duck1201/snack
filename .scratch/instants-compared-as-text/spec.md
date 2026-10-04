@@ -1,7 +1,8 @@
 # Instants compared as text — what the 018 review left in the stated-band reads
 
-Status: **open.** One follow-up deferred from the `1.5.0` review of migration `018`. Not observed on
-a real history; found by reading the code while fixing its sibling.
+Status: **fixed in `1.6.1`** — its one issue is `fixed`; archive the directory to
+`docs/history/specs/` with the release. One follow-up deferred from the `1.5.0` review of migration
+`018`. Not observed on a real history; found by reading the code while fixing its sibling.
 
 The `1.5.0` review (`docs/history/specs/reported-capacity-method/spec.md` §13.3, "Second review of
 `018`") found that the stated-band frontier was compared as text, while the Claude Code backfill
