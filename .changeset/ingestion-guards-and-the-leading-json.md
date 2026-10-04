@@ -2,7 +2,8 @@
 "@snack-ai/cli": patch
 ---
 
-Three ingestion guards, and an error envelope that names its command after a leading `--json`.
+Three ingestion guards, an error envelope that names its command after a leading `--json`, and the
+CLI's half of live capture on OpenCode `1.18.15`.
 
 - Claude Code: every `user`/`assistant` record SNACK reads is now held to the `cc-jsonl-turntree-v1`
   shape, not only the first 200 records of each file. A session resumed by a later Claude Code that
@@ -31,8 +32,16 @@ Three ingestion guards, and an error envelope that names its command after a lea
 - An error envelope names its command when `--json` comes before it: `snack --json status` (and
   `stats`, `sync`, `dash`, …) reported `command: "snack"` on failure and now reports `status`, as
   `snack status --json` always did.
+- `sync` no longer records an `incomparable_outcome_conflict` (and `doctor` no longer warns) for
+  every prompt cancelled in OpenCode when the live plugin reported it as a success; the exclusion
+  OpenCode's database records is kept.
+- `sync` takes over a spool writer lock abandoned for more than two minutes, whatever process id it
+  names, instead of skipping the live segment indefinitely.
+- `doctor` reports `spool_lock:<alias>` (warn) while such an abandoned lock is present (check ids
+  are an open set).
 - The npm description, the README openings, `snack --help` and `man snack` say what SNACK estimates
   — the chance your next prompt goes through without the provider refusing it for a rate or usage
   limit, from usage metadata alone.
 
-No schema version, export column, exit code or flag changes.
+No schema version, export column, exit code or flag changes; `doctor` gains one check id,
+`spool_lock:<alias>`, in its open set.
