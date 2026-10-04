@@ -506,7 +506,9 @@ other byte unchanged.
 program-level option Commander accepts on either side of it — is refused with exit `2` and the
 reason `dash_json_unsupported`, as one error envelope with `command: "dash"` and `data: null`
 (`command: "snack"` when `--json` comes first, as every command's error envelope has said after a
-leading flag since `0.9`; `.scratch/envelope-command-after-leading-flag/`); a
+leading flag since `0.9`; `docs/history/specs/envelope-command-after-leading-flag/` — *note of
+`1.6.1`: that release removes this behaviour, and `snack --json dash` names `dash`; see
+[1.6.1](#what-161-fixes-and-why-it-is-a-patch)*); a
 standard output or input that is not a terminal, or `TERM` unset, empty or `dumb`, is refused with
 exit `2` and `dash_requires_terminal`. Both are new values of the open `errors[].code` under an
 existing exit code, the shape `sequence_length_invalid` took; no exit code moves, and no payload

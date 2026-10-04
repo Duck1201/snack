@@ -1,6 +1,6 @@
 # 02 — A prompt re-read at the same revision with different content is replaced silently
 
-Status: `fixed` in `1.6.1`, commit e368ea3 Severity: **P2** Owner: unassigned Found in: `1.3.0`
+Status: `fixed` in `1.6.1`, commit `699dcc9` Severity: **P2** Owner: unassigned Found in: `1.3.0`
 review — the signature of the Codex P1 Target: `1.6.1`
 
 ## What happens
@@ -45,7 +45,7 @@ Treat "same revision, different content" as a counted anomaly rather than an upd
 
 ## Comments
 
-### Resolution (`1.6.1`, commit e368ea3)
+### Resolution (`1.6.1`, commit `699dcc9`)
 
 **Refused, not applied-and-counted.** "Fail closed on data" and `docs/architecture/data.md` §9 rule
 2 ("a duplicate revision is a no-op except for adding provenance") both say the stored row wins: a
